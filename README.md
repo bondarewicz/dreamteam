@@ -32,6 +32,93 @@ Each agent has restricted tool access based on its role:
 
 Agents with `memory: user` (kobe, magic) learn across sessions — remembering review patterns, failure modes, and past decisions.
 
+## When to use each agent
+
+### `/mj` — "Is this correct?"
+
+Use MJ when you need to validate business logic or define what "right" looks like before writing code.
+
+- "Are these pricing rules correct?"
+- "What are the business rules for refund eligibility?"
+- "Define acceptance criteria for the checkout flow"
+- "What's the business impact of changing the order lifecycle?"
+- "Who are the stakeholders affected by this migration?"
+
+### `/bird` — "How should this be built?"
+
+Use Bird when you need architecture decisions, system design, or health diagnostics on existing code.
+
+- "Should we use event sourcing or CRUD for orders?"
+- "Design the component boundaries for the notification system"
+- "Our API response times are degrading — what should we investigate?"
+- "Review the current architecture for technical debt"
+- "What are the trade-offs between these two approaches?"
+
+### `/shaq` — "Build it."
+
+Use Shaq when you have a clear spec and need code written. He implements features, writes tests, and follows existing patterns.
+
+- "Implement this API endpoint per the spec"
+- "Add pagination to the user list"
+- "Write tests for the discount calculation"
+- "Refactor this service to use the repository pattern"
+- "Create the database migration for the new schema"
+
+### `/kobe` — "Is this safe to ship?"
+
+Use Kobe when code is written and you need a ruthless quality review before deploying. He also checks production readiness and can fix critical bugs directly.
+
+- "Review this PR for edge cases and race conditions"
+- "This handles money — find every way it could break"
+- "Is this ready to deploy? Check everything."
+- "Review the error handling in the payment service"
+- "Check if this migration is safe to run in production"
+
+### `/pippen` — "Will this hold up in production?"
+
+Use Pippen when you need to verify operational readiness — monitoring, observability, resilience, and integration between components.
+
+- "Do we have enough logging to debug this at 3am?"
+- "Check if the new service has proper health checks and metrics"
+- "Review the retry/timeout configuration"
+- "Can we roll this back safely?"
+- "How do these three services interact under failure conditions?"
+
+### `/magic` — "Summarize everything."
+
+Use Magic when you need to synthesize multiple perspectives into clear documentation, ADRs, or handoff notes.
+
+- "Summarize all the analysis and implementation work"
+- "Document why we chose event sourcing over CRUD"
+- "Create an ADR for the authentication redesign"
+- "Write handoff notes for the next team"
+- "What decisions were made and what's still open?"
+
+### `/team` — "Get the whole squad on it."
+
+Use `/team` when the task is too big for one agent. Coach K coordinates the full Dream Team — from domain analysis through implementation, review, and synthesis.
+
+- **Quick Fix** (subagents): Bug fixes, small features, focused changes
+- **Full Team** (agent teams): New features, architecture changes, complex multi-file work
+
+```
+/team Add pagination to the user list           # Quick Fix territory
+/team Build a real-time notification system      # Full Team territory
+/team Fix the race condition in checkout         # Quick Fix territory
+```
+
+### Decision tree
+
+```
+Need to understand the business rules?         → /mj
+Need to design the system?                     → /bird
+Need to write the code?                        → /shaq
+Need to review the code?                       → /kobe
+Need to check production readiness?            → /pippen
+Need to document or synthesize?                → /magic
+Need the full pipeline (analyze → build → review → document)?  → /team
+```
+
 ## /team — Coach K Orchestration
 
 The `/team` command launches Coach K, who coordinates the Dream Team. You choose the mode:
@@ -76,23 +163,6 @@ Phase 2: Implementation & Review
 ### Git Safety
 
 No agent ever commits or pushes. The user controls all git operations.
-
-## Usage
-
-```bash
-# Use any agent directly via its command
-/mj                         # Domain analysis & business impact
-/bird                       # Architecture design & health diagnostics
-/shaq                       # Code implementation
-/kobe                       # Quality review & production readiness
-/pippen                     # Stability & integration review
-/magic                      # Synthesis & documentation
-
-# Use the full Dream Team via /team
-/team Add pagination to the user list      # Coach K asks: Quick Fix or Full Team?
-/team Build a real-time notification system
-/team Fix the race condition in checkout
-```
 
 ## Installation
 
@@ -206,15 +276,12 @@ Every agent has a `maxTurns` cap to prevent runaway sessions:
 
 Claude Code automatically caches system prompts and long conversations. No configuration needed — you get reduced input costs on repeated content (agent definitions, large file reads, prior context) automatically.
 
-### Tracking costs
+### Tracking usage
 
-Use the built-in `/cost` command during any session to see token usage and estimated cost:
+- **API users**: `/cost` shows token counts, cache hits, and estimated cost for the current session
+- **Claude Max/Pro subscribers**: `/stats` shows usage patterns, session history, and model preferences
 
-```
-/cost
-```
-
-This shows input tokens, output tokens, cache hits, and total estimated cost for the current session. Run it after a `/team` session to see the full cost breakdown.
+Run either after a `/team` session to understand the resource consumption.
 
 ## Built-in Tension (by design)
 
