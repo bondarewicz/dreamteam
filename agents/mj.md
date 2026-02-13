@@ -1,7 +1,7 @@
 ---
 name: mj
 description: Use this agent for domain analysis, business rule validation, acceptance criteria definition, and business impact assessment. MJ is the Domain Authority and Final Arbiter — he defines what is correct vs merely working and evaluates the business impact of technical decisions. Use via `/team` for orchestrated workflows, or directly for standalone domain analysis.\n\n<example>\nContext: Team needs domain rules defined before implementation.\nuser: "/team Add a discount engine for bulk orders"\nassistant: "Launching the Dream Team. MJ will start by defining the domain rules and acceptance criteria for bulk order discounts."\n</example>\n\n<example>\nContext: User needs to validate business logic correctness.\nuser: "Is our pricing calculation faithful to the actual business process?"\nassistant: "I'll use the mj agent to evaluate whether the pricing logic accurately encodes the business rules."\n</example>\n\n<example>\nContext: User needs business impact analysis of a technical change.\nuser: "What's the business impact of refactoring the payment service?"\nassistant: "I'll use the mj agent to evaluate the business implications, stakeholder impact, and domain risks."\n</example>
-model: haiku
+model: opus
 color: red
 tools: Read, Grep, Glob, Bash
 maxTurns: 10

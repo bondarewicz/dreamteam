@@ -8,14 +8,12 @@ Source of truth for all Claude Code agents and commands. Install once, use every
 
 | Agent | Command | Persona | Role | Model | Max Turns |
 |-------|---------|---------|------|-------|-----------|
-| **mj** | `/mj` | Michael Jordan | Domain Authority & Final Arbiter | haiku | 10 |
-| **bird** | `/bird` | Larry Bird | Strategic Systems Architect | haiku | 12 |
-| **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | **sonnet** | 30 |
-| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | haiku | 15 |
-| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | haiku | 10 |
-| **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | haiku | 8 |
-
-Only Shaq runs on Sonnet (he writes production code). All other agents use Haiku for fast, low-cost analysis and review.
+| **mj** | `/mj` | Michael Jordan | Domain Authority & Final Arbiter | **opus** | 10 |
+| **bird** | `/bird` | Larry Bird | Strategic Systems Architect | **opus** | 12 |
+| **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | **opusplan** | 30 |
+| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | **opus** | 15 |
+| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | sonnet | 10 |
+| **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | sonnet | 8 |
 
 ### Agent capabilities
 
@@ -246,18 +244,40 @@ All agents live in `agents/` as Markdown files with YAML frontmatter. Edit them 
 
 After editing, run `./install.sh` to deploy changes.
 
-## Costs
+## Models & Usage
 
 ### Model strategy
 
-The Dream Team is optimized for cost: only the agent that writes code (Shaq) runs on Sonnet. All analysis, review, and synthesis agents run on Haiku, which is significantly cheaper and faster.
+The Dream Team is configured quality-first, with each agent on the model that best matches its reasoning demands.
 
-| Model | Agents | Input (per MTok) | Output (per MTok) |
-|-------|--------|------------------|--------------------|
-| Haiku | mj, bird, kobe, pippen, magic | $0.80 | $4.00 |
-| Sonnet | shaq | $3.00 | $15.00 |
+| Model | Agents | What it does | Why |
+|-------|--------|-------------|-----|
+| **opus** | mj, bird, kobe | Deepest reasoning | Domain analysis, architecture design, and bug-hunting need the most nuanced thinking |
+| **opusplan** | shaq | Opus for planning, sonnet for execution | Deep reasoning when understanding specs, fast code generation when writing |
+| **sonnet** | pippen, magic | Balanced reasoning + speed | Structured reviews and synthesis don't need opus depth |
 
-To upgrade an agent's model (e.g., for more complex analysis), edit its `model:` field in the agent file and re-run `./install.sh`.
+### Available models
+
+| Model | Reasoning | Speed | Code Gen | Context | Best for |
+|-------|-----------|-------|----------|---------|----------|
+| `opus` | Deepest | Moderate | Excellent | 200K | Complex analysis, subtle bugs, architecture |
+| `opusplan` | Opus (plan) + Sonnet (execute) | Hybrid | Excellent | 200K | Implementation with smart planning |
+| `sonnet` | Strong | Fast | Excellent | 200K | Daily coding, structured reviews |
+| `haiku` | Good | Fastest | Very good | 200K | Simple tasks, high-volume operations |
+
+### Model tuning guide
+
+Start quality-first, then dial down where results are equivalent:
+
+| If you notice... | Try... |
+|-----------------|--------|
+| Pippen's reviews are shallow | Upgrade pippen to `opus` |
+| Magic's synthesis is fine but slow | Downgrade magic to `haiku` |
+| Hitting rate limits on Full Team | Downgrade mj, bird to `sonnet` |
+| Kobe's findings are obvious/shallow | Keep on `opus` — this is where depth matters most |
+| Shaq's code quality is great | Could downgrade to `sonnet` (saves opus planning cost) |
+
+To change a model: edit the `model:` field in `agents/<name>.md`, run `./install.sh`.
 
 ### Turn limits
 
@@ -272,16 +292,21 @@ Every agent has a `maxTurns` cap to prevent runaway sessions:
 | pippen | 10 | Stability review is focused |
 | magic | 8 | Synthesis is the shortest task |
 
+### Usage monitoring
+
+Coach K includes a **Lineup Card** at the end of every `/team` run showing which agents ran on which models.
+
+**Built-in commands you can run anytime:**
+- `/usage` — rate limit status (Claude Max/Pro)
+- `/cost` — token counts and estimated cost (API users)
+- `/stats` — usage patterns and session history
+- `/context` — how much of the context window is filled
+
+Run `/usage` before and after a `/team` session to see the rate limit impact, then adjust agent models accordingly.
+
 ### Prompt caching
 
-Claude Code automatically caches system prompts and long conversations. No configuration needed — you get reduced input costs on repeated content (agent definitions, large file reads, prior context) automatically.
-
-### Tracking usage
-
-- **API users**: `/cost` shows token counts, cache hits, and estimated cost for the current session
-- **Claude Max/Pro subscribers**: `/stats` shows usage patterns, session history, and model preferences
-
-Run either after a `/team` session to understand the resource consumption.
+Claude Code automatically caches system prompts and long conversations. No configuration needed — repeated content (agent definitions, large file reads, prior context) gets cached at 90% savings on input tokens.
 
 ## Built-in Tension (by design)
 

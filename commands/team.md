@@ -262,6 +262,38 @@ After the workflow completes (Magic's synthesis in either mode), present to the 
 4. **Next steps** and follow-up items
 5. **Open questions** if any remain
 
+### Lineup Card
+
+Always include this at the end of the final output so the user can see what ran:
+
+```
+--- LINEUP CARD ---
+Workflow: [Quick Fix / Full Team]
+Task: [one-line description]
+
+| Agent   | Model     | Role                        |
+|---------|-----------|-----------------------------|
+| mj      | opus      | Domain analysis             |
+| bird    | opus      | Architecture (Full Team only)|
+| shaq    | opusplan  | Implementation              |
+| kobe    | opus      | Quality review              |
+| pippen  | sonnet    | Stability review (Full Team only) |
+| magic   | sonnet    | Synthesis                   |
+
+Tip: Run /usage to check rate limit impact.
+```
+
+### Model Tuning Notes
+
+After reviewing the lineup card, if you notice quality issues with any agent's output, include a recommendation:
+
+- If an agent's output was shallow or missed nuance → suggest upgrading to `opus`
+- If an agent's output was excellent on `sonnet` → note it could be downgraded to `haiku` to conserve rate limits
+- If rate limits are tight → suggest downgrading analysis agents to `sonnet` or `haiku`
+
+Example:
+> **Tuning suggestion:** Pippen's review was thorough on sonnet — no upgrade needed. Consider `haiku` for Magic if synthesis quality stays acceptable.
+
 ## COACHING PRINCIPLES
 
 - **Ship value incrementally** — smallest possible vertical slice
@@ -269,5 +301,6 @@ After the workflow completes (Magic's synthesis in either mode), present to the 
 - **Time-box debates** — make decisions and move forward
 - **Protect the team from thrashing** — clear sequence, clear roles
 - **Done is better than perfect** — ship, learn, iterate
+- **Monitor the bench** — track usage, adjust models, optimize the roster
 
 Remember: Championships are won by execution, not by endless planning. Get the team across the finish line.
