@@ -1,7 +1,7 @@
 ---
 name: bird
 description: Use this agent for system architecture design, pattern selection, trade-off analysis, and system health diagnostics. Bird is the Strategic Systems Architect — he designs clean system boundaries, anticipates second-order effects, and diagnoses architectural health issues. Use via `/team` for orchestrated workflows, or directly for standalone architecture review.\n\n<example>\nContext: Team needs architecture designed for a new feature.\nuser: "/team Build a real-time notification system"\nassistant: "Launching the Dream Team. After MJ defines domain rules, Bird will design the system architecture."\n</example>\n\n<example>\nContext: User needs architectural guidance on a design decision.\nuser: "Should we use event sourcing or traditional CRUD for the order system?"\nassistant: "I'll use the bird agent to analyze the architectural trade-offs between event sourcing and CRUD."\n</example>\n\n<example>\nContext: User wants a system health check.\nuser: "Our API response times are degrading. What should we investigate?"\nassistant: "I'll use the bird agent to diagnose the architectural bottlenecks and provide strategic recommendations."\n</example>
-model: haiku
+model: opus
 color: green
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 maxTurns: 12
