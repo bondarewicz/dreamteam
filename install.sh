@@ -25,19 +25,13 @@ if [ -d "$AGENTS_DST" ] || [ -d "$COMMANDS_DST" ]; then
     echo ""
 fi
 
-# --- Step 2: Remove old agent files that are being replaced ---
-OLD_AGENTS=("penny.md")
-for old in "${OLD_AGENTS[@]}"; do
+# --- Step 2: Remove old files from previous installations ---
+OLD_FILES=("penny.md" "guardian.md" "architect.md" "analyst.md" "frontend.md")
+for old in "${OLD_FILES[@]}"; do
     if [ -f "$AGENTS_DST/$old" ]; then
         echo "Removing old agent: $old"
         rm -f "$AGENTS_DST/$old"
     fi
-done
-
-# Remove old commands that conflict with Dream Team agent names
-# (mj, magic, shaq are now agents, not standalone commands)
-OLD_COMMANDS=("penny.md" "mj.md" "magic.md" "shaq.md")
-for old in "${OLD_COMMANDS[@]}"; do
     if [ -f "$COMMANDS_DST/$old" ]; then
         echo "Removing old command: $old"
         rm -f "$COMMANDS_DST/$old"
@@ -79,13 +73,7 @@ echo ""
 # --- Summary ---
 echo "=== Installation Complete ==="
 echo ""
-echo "Standalone agents (project-specific):"
-echo "  guardian  — Production readiness reviewer"
-echo "  architect — System health & technical strategy"
-echo "  analyst   — Business impact & requirements"
-echo "  frontend  — UI architecture & React specialist"
-echo ""
-echo "Dream Team agents (general-purpose):"
+echo "Dream Team agents:"
 echo "  mj      — Domain Authority & Final Arbiter"
 echo "  bird    — Strategic Systems Architect"
 echo "  shaq    — Primary Code Executor"
@@ -94,10 +82,12 @@ echo "  pippen  — Stability, Integration & Defense"
 echo "  magic   — Context Synthesizer & Team Glue"
 echo ""
 echo "Commands:"
-echo "  /guardian  — Launch production readiness review"
-echo "  /architect — Launch system health analysis"
-echo "  /analyst   — Launch business impact analysis"
-echo "  /frontend  — Launch frontend architecture review"
-echo "  /team      — Launch Dream Team orchestration (Coach K)"
+echo "  /mj      — Domain analysis & business impact"
+echo "  /bird    — Architecture design & health diagnostics"
+echo "  /shaq    — Code implementation"
+echo "  /kobe    — Quality review & production readiness"
+echo "  /pippen  — Stability & integration review"
+echo "  /magic   — Synthesis & documentation"
+echo "  /team    — Full Dream Team orchestration (Coach K)"
 echo ""
 echo "Start a new Claude Code session to use the agents."
