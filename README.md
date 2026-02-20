@@ -246,9 +246,6 @@ dreamteam/
 │   ├── pippen.md              # /pippen
 │   ├── magic.md               # /magic
 │   └── team.md                # /team (Coach K orchestrator)
-├── backup/                    # Pre-rename backups of original agents
-│   └── pre-rename/
-├── dream_team_ai_agents.md    # Original Dream Team specification
 ├── install.sh                 # Installer script
 └── README.md
 ```
