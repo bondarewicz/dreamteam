@@ -16,7 +16,7 @@ Use the **AskUserQuestion** tool to ask the user:
 
 | Option | When to use | How it works |
 |--------|------------|--------------|
-| **Quick Fix (subagents)** | Bug fixes, small features, focused changes | Sequential subagents within this session: MJ → Shaq → Kobe → Magic |
+| **Quick Fix (subagents)** | Bug fixes, small features, focused changes | Sequential subagents within this session: Bird → Shaq → Kobe → Magic |
 | **Full Team (agent team)** | New features, architecture changes, complex multi-file work | Parallel agent team sessions: all 6 Dream Team members as independent teammates |
 
 ---
@@ -25,8 +25,8 @@ Use the **AskUserQuestion** tool to ask the user:
 
 For focused, well-understood changes. 4 subagents, sequential, within this session.
 
-### 1. MJ — Domain Analysis (lightweight)
-Use the Task tool with `subagent_type="mj"`:
+### 1. Bird — Domain Analysis (lightweight)
+Use the Task tool with `subagent_type="bird"`:
 ```
 Analyze this task and provide:
 - Key business rules and domain constraints
@@ -45,8 +45,8 @@ NEVER commit or push to git — leave that to the user.
 
 TASK: [user's request]
 
-DOMAIN ANALYSIS (from MJ):
-[paste MJ's full output]
+DOMAIN ANALYSIS (from Bird):
+[paste Bird's full output]
 ```
 
 ### 3. Kobe — Quality Review
@@ -58,8 +58,8 @@ Propose fixes for each finding.
 
 TASK: [user's request]
 
-DOMAIN ANALYSIS (from MJ):
-[paste MJ's full output]
+DOMAIN ANALYSIS (from Bird):
+[paste Bird's full output]
 
 IMPLEMENTATION (from Shaq):
 [paste Shaq's full output]
@@ -74,8 +74,8 @@ Provide git commands the user should run.
 
 TASK: [user's request]
 
-DOMAIN ANALYSIS (from MJ):
-[paste MJ's full output]
+DOMAIN ANALYSIS (from Bird):
+[paste Bird's full output]
 
 IMPLEMENTATION (from Shaq):
 [paste Shaq's full output]
@@ -101,12 +101,12 @@ Create an agent team called "dream-team" with the following structure. Use **del
 
 Spawn **6 teammates**, each with a specific role and spawn prompt. Give each teammate rich context about the task and their role.
 
-#### Teammate: MJ (Domain Authority)
+#### Teammate: Bird (Domain Authority)
 ```
-Spawn a teammate named "mj" with the prompt:
+Spawn a teammate named "bird" with the prompt:
 
-You are Michael Jordan, the Domain Authority and Final Arbiter.
-Read your full agent definition at ~/.claude/agents/mj.md for detailed instructions.
+You are Larry Bird, the Domain Authority and Final Arbiter.
+Read your full agent definition at ~/.claude/agents/bird.md for detailed instructions.
 
 YOUR TASK: [user's request]
 
@@ -117,20 +117,20 @@ Provide a comprehensive domain analysis:
 - What must never break
 - Edge cases from a business perspective
 
-When done, message Bird with your domain analysis so he can design the architecture.
+When done, message MJ with your domain analysis so he can design the architecture.
 Then message Coach K (the lead) with your complete output.
 ```
 
-#### Teammate: Bird (Systems Architect)
+#### Teammate: MJ (Systems Architect)
 ```
-Spawn a teammate named "bird" with the prompt:
+Spawn a teammate named "mj" with the prompt:
 
-You are Larry Bird, the Strategic Systems Architect.
-Read your full agent definition at ~/.claude/agents/bird.md for detailed instructions.
+You are Michael Jordan, the Strategic Systems Architect.
+Read your full agent definition at ~/.claude/agents/mj.md for detailed instructions.
 
 YOUR TASK: [user's request]
 
-Wait for MJ's domain analysis, then design the system architecture:
+Wait for Bird's domain analysis, then design the system architecture:
 - System boundaries and component interactions
 - Pattern and style selection with trade-offs
 - Interfaces and contracts
@@ -149,7 +149,7 @@ Read your full agent definition at ~/.claude/agents/shaq.md for detailed instruc
 
 YOUR TASK: [user's request]
 
-Wait for Coach K to assign implementation tasks. Then implement according to the domain analysis (from MJ) and architecture (from Bird).
+Wait for Coach K to assign implementation tasks. Then implement according to the domain analysis (from Bird) and architecture (from MJ).
 - Write production-ready, tested code
 - Follow existing codebase patterns
 - Write tests for all acceptance criteria
@@ -221,8 +221,8 @@ When done, message Coach K (the lead) with the final synthesis.
 
 After spawning teammates, create tasks in the shared task list with dependencies:
 
-1. **Domain Analysis** (assigned to MJ) — no dependencies
-2. **Architecture Design** (assigned to Bird) — blocked by task 1
+1. **Domain Analysis** (assigned to Bird) — no dependencies
+2. **Architecture Design** (assigned to MJ) — blocked by task 1
 3. **Task Breakdown & Plan** (assigned to you, Coach K) — blocked by tasks 1 and 2
 4. **Implementation** (assigned to Shaq) — blocked by task 3
 5. **Quality Review** (assigned to Kobe) — blocked by task 4
@@ -231,7 +231,7 @@ After spawning teammates, create tasks in the shared task list with dependencies
 
 ### Checkpoint (Task 3)
 
-When MJ and Bird complete their tasks, YOU (Coach K) do the task breakdown:
+When Bird and MJ complete their tasks, YOU (Coach K) do the task breakdown:
 - Break the work into ordered, shippable increments
 - Identify dependencies between tasks
 - Estimate complexity (S/M/L)
@@ -273,8 +273,8 @@ Task: [one-line description]
 
 | Agent   | Model     | Role                        |
 |---------|-----------|-----------------------------|
-| mj      | opus      | Domain analysis             |
-| bird    | opus      | Architecture (Full Team only)|
+| bird    | opus      | Domain analysis             |
+| mj      | opus      | Architecture (Full Team only)|
 | shaq    | opusplan  | Implementation              |
 | kobe    | opus      | Quality review              |
 | pippen  | sonnet    | Stability review (Full Team only) |
