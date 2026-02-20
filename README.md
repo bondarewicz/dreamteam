@@ -8,12 +8,12 @@ Source of truth for all Claude Code agents and commands. Install once, use every
 
 | Agent | Command | Persona | Role | Model | Max Turns |
 |-------|---------|---------|------|-------|-----------|
-| **mj** | `/mj` | Michael Jordan | Domain Authority & Final Arbiter | **opus** | 10 |
-| **bird** | `/bird` | Larry Bird | Strategic Systems Architect | **opus** | 12 |
-| **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | **opusplan** | 30 |
-| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | **opus** | 15 |
-| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | sonnet | 10 |
-| **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | sonnet | 8 |
+| **bird** | `/bird` | Larry Bird | Domain Authority & Final Arbiter | **opus** | 50 |
+| **mj** | `/mj` | Michael Jordan | Strategic Systems Architect | **opus** | 50 |
+| **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | **opusplan** | 100 |
+| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | **opus** | 50 |
+| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | sonnet | 50 |
+| **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | sonnet | 50 |
 
 ### Agent capabilities
 
@@ -21,8 +21,8 @@ Each agent has restricted tool access based on its role:
 
 | Agent | Tools | Why |
 |-------|-------|-----|
-| mj | Read, Grep, Glob, Bash | Domain analysis + business impact assessment |
-| bird | Read, Grep, Glob, Bash, WebFetch, WebSearch | Architecture + external research + health diagnostics |
+| bird | Read, Grep, Glob, Bash | Domain analysis + business impact assessment |
+| mj | Read, Grep, Glob, Bash, WebFetch, WebSearch | Architecture + external research + health diagnostics |
 | shaq | All except Task | Full implementer — writes code |
 | kobe | Read, Grep, Glob, Bash, Edit | Quality review + can fix critical bugs directly |
 | pippen | Read, Grep, Glob, Bash | Stability review — checks runtime |
@@ -32,9 +32,9 @@ Agents with `memory: user` (kobe, magic) learn across sessions — remembering r
 
 ## When to use each agent
 
-### `/mj` — "Is this correct?"
+### `/bird` — "Is this correct?"
 
-Use MJ when you need to validate business logic or define what "right" looks like before writing code.
+Use Bird when you need to validate business logic or define what "right" looks like before writing code.
 
 - "Are these pricing rules correct?"
 - "What are the business rules for refund eligibility?"
@@ -42,9 +42,9 @@ Use MJ when you need to validate business logic or define what "right" looks lik
 - "What's the business impact of changing the order lifecycle?"
 - "Who are the stakeholders affected by this migration?"
 
-### `/bird` — "How should this be built?"
+### `/mj` — "How should this be built?"
 
-Use Bird when you need architecture decisions, system design, or health diagnostics on existing code.
+Use MJ when you need architecture decisions, system design, or health diagnostics on existing code.
 
 - "Should we use event sourcing or CRUD for orders?"
 - "Design the component boundaries for the notification system"
@@ -108,8 +108,8 @@ Use `/team` when the task is too big for one agent. Coach K coordinates the full
 ### Decision tree
 
 ```
-Need to understand the business rules?         → /mj
-Need to design the system?                     → /bird
+Need to understand the business rules?         → /bird
+Need to design the system?                     → /mj
 Need to write the code?                        → /shaq
 Need to review the code?                       → /kobe
 Need to check production readiness?            → /pippen
@@ -126,10 +126,10 @@ The `/team` command launches Coach K, who coordinates the Dream Team. You choose
 For bug fixes, small features, and focused changes. Sequential subagents, lower token cost.
 
 ```
-User ──→ Coach K ──→ MJ (domain) ──→ Shaq (implement) ──→ Kobe (review) ──→ Magic (synthesize)
+User ──→ Coach K ──→ Bird (domain) ──→ Shaq (implement) ──→ Kobe (review) ──→ Magic (synthesize)
 ```
 
-1. **MJ** defines business rules and acceptance criteria
+1. **Bird** defines business rules and acceptance criteria
 2. **Shaq** implements the code with tests
 3. **Kobe** reviews for critical risks (max 3 findings)
 4. **Magic** synthesizes everything into a summary
@@ -140,14 +140,14 @@ For new features, architecture changes, and complex multi-file work. Uses the ex
 
 ```
 Phase 1: Analysis & Design
-  MJ (domain) ──→ Bird (architecture) ──→ Coach K (task breakdown) ──→ User approval
+  Bird (domain) ──→ MJ (architecture) ──→ Coach K (task breakdown) ──→ User approval
 
 Phase 2: Implementation & Review
   Shaq (implement) ──→ Kobe + Pippen (parallel review) ──→ Magic (synthesize)
 ```
 
-1. **MJ** provides full domain analysis, messages Bird when done
-2. **Bird** designs system architecture based on MJ's analysis
+1. **Bird** provides full domain analysis, messages MJ when done
+2. **MJ** designs system architecture based on Bird's analysis
 3. **Coach K** breaks work into tasks, presents plan for user approval
 4. **Shaq** implements the full feature
 5. **Kobe** + **Pippen** review in parallel (quality + stability)
@@ -205,8 +205,8 @@ Edit agent/command files in this repo, then run `./install.sh` again. Previous f
 ```
 dreamteam/
 ├── agents/                    # Agent definitions (6 files)
-│   ├── mj.md                  # Domain authority & business impact
-│   ├── bird.md                # Systems architect & health diagnostics
+│   ├── bird.md                # Domain authority & business impact
+│   ├── mj.md                  # Systems architect & health diagnostics
 │   ├── shaq.md                # Code executor
 │   ├── kobe.md                # Quality enforcer & production readiness
 │   ├── pippen.md              # Stability & integration
@@ -252,7 +252,7 @@ The Dream Team is configured quality-first, with each agent on the model that be
 
 | Model | Agents | What it does | Why |
 |-------|--------|-------------|-----|
-| **opus** | mj, bird, kobe | Deepest reasoning | Domain analysis, architecture design, and bug-hunting need the most nuanced thinking |
+| **opus** | bird, mj, kobe | Deepest reasoning | Domain analysis, architecture design, and bug-hunting need the most nuanced thinking |
 | **opusplan** | shaq | Opus for planning, sonnet for execution | Deep reasoning when understanding specs, fast code generation when writing |
 | **sonnet** | pippen, magic | Balanced reasoning + speed | Structured reviews and synthesis don't need opus depth |
 
@@ -273,7 +273,7 @@ Start quality-first, then dial down where results are equivalent:
 |-----------------|--------|
 | Pippen's reviews are shallow | Upgrade pippen to `opus` |
 | Magic's synthesis is fine but slow | Downgrade magic to `haiku` |
-| Hitting rate limits on Full Team | Downgrade mj, bird to `sonnet` |
+| Hitting rate limits on Full Team | Downgrade bird, mj to `sonnet` |
 | Kobe's findings are obvious/shallow | Keep on `opus` — this is where depth matters most |
 | Shaq's code quality is great | Could downgrade to `sonnet` (saves opus planning cost) |
 
@@ -285,12 +285,14 @@ Every agent has a `maxTurns` cap to prevent runaway sessions:
 
 | Agent | maxTurns | Rationale |
 |-------|----------|-----------|
-| mj | 10 | Domain analysis is focused |
-| bird | 12 | Architecture needs exploration |
-| shaq | 30 | Implementation requires more turns |
-| kobe | 15 | Quality review with test runs |
-| pippen | 10 | Stability review is focused |
-| magic | 8 | Synthesis is the shortest task |
+| bird | 50 | Domain analysis — hypothesis-driven, finishes in ~26 turns |
+| mj | 50 | Architecture — hypothesis-driven, finishes in ~28 turns |
+| shaq | 100 | Implementation — writes code, runs tests, iterates on failures |
+| kobe | 50 | Quality review — hypothesis-driven methodology, finishes in ~36 turns |
+| pippen | 50 | Stability review — matches analysis agent budget |
+| magic | 50 | Synthesis — reads outputs and writes summary |
+
+All agents include a **Turn Budget Management** instruction that enforces hard limits: stop research at ~70% of turns and write output. This prevents agents from spending all turns on research without delivering a final analysis.
 
 ### Usage monitoring
 
@@ -312,7 +314,7 @@ Claude Code automatically caches system prompts and long conversations. No confi
 
 The Dream Team has intentional creative tension:
 
-- **MJ vs Bird** — correctness vs elegance
+- **Bird vs MJ** — correctness vs elegance
 - **Kobe vs Shaq** — quality vs speed
 - **Coach K vs everyone** — shipping vs perfection
 

@@ -41,8 +41,8 @@ Implement features according to specifications. Write production-ready, tested c
 - Choose implementation details within constraints
 - Decide on variable names, internal structure, helpers
 - Do NOT change architecture or requirements
-- Defer to MJ on domain questions
-- Defer to Bird on architectural questions
+- Defer to Bird on domain questions
+- Defer to MJ on architectural questions
 
 ## Guardrails
 
