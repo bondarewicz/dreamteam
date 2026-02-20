@@ -112,14 +112,14 @@ Use `/team` when the task is too big for one agent. Coach K coordinates the full
 ```mermaid
 graph LR
     Q{What do you need?}
-    Q -->|Understand business rules| bird[/bird]
-    Q -->|Design the system| mj[/mj]
-    Q -->|Write the code| shaq[/shaq]
-    Q -->|Review the code| kobe[/kobe]
-    Q -->|Check production readiness| pippen[/pippen]
-    Q -->|Document or synthesize| magic[/magic]
-    Q -->|Multi-perspective PR review| team_pr["/team (PR Review)"]
-    Q -->|Full pipeline| team[/team]
+    Q -->|Understand business rules| bird["`**/bird**`"]
+    Q -->|Design the system| mj["`**/mj**`"]
+    Q -->|Write the code| shaq["`**/shaq**`"]
+    Q -->|Review the code| kobe["`**/kobe**`"]
+    Q -->|Check production readiness| pippen["`**/pippen**`"]
+    Q -->|Document or synthesize| magic["`**/magic**`"]
+    Q -->|Multi-perspective PR review| team_pr["`**/team** PR Review`"]
+    Q -->|Full pipeline| team["`**/team**`"]
 ```
 
 ## /team — Coach K Orchestration
