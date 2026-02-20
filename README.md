@@ -97,10 +97,12 @@ Use Magic when you need to synthesize multiple perspectives into clear documenta
 Use `/team` when the task is too big for one agent. Coach K coordinates the full Dream Team — from domain analysis through implementation, review, and synthesis.
 
 - **Quick Fix** (subagents): Bug fixes, small features, focused changes
+- **PR Review** (subagents): Review a PR or branch — Bird + MJ + Kobe in parallel, output stays local
 - **Full Team** (agent teams): New features, architecture changes, complex multi-file work
 
 ```
 /team Add pagination to the user list           # Quick Fix territory
+/team Review PR #1217                           # PR Review territory
 /team Build a real-time notification system      # Full Team territory
 /team Fix the race condition in checkout         # Quick Fix territory
 ```
@@ -114,6 +116,7 @@ Need to write the code?                        → /shaq
 Need to review the code?                       → /kobe
 Need to check production readiness?            → /pippen
 Need to document or synthesize?                → /magic
+Need a PR reviewed by multiple perspectives?   → /team (PR Review)
 Need the full pipeline (analyze → build → review → document)?  → /team
 ```
 
@@ -133,6 +136,30 @@ User ──→ Coach K ──→ Bird (domain) ──→ Shaq (implement) ──
 2. **Shaq** implements the code with tests
 3. **Kobe** reviews for critical risks (max 3 findings)
 4. **Magic** synthesizes everything into a summary
+
+### PR Review — Subagents (parallel, local output)
+
+For reviewing PRs or branches. 3 agents in parallel, all output stays local.
+
+```
+User ──→ Coach K ──→ ┬── Bird (domain) ────┬──→ Coach K (synthesize) ──→ Local file
+                     ├── MJ (architecture) ─┤
+                     └── Kobe (risk) ────────┘
+```
+
+1. **Coach K** fetches PR data using read-only `gh` commands
+2. **Bird + MJ + Kobe** review the diff in parallel (each gets the diff in their prompt)
+3. **Coach K** synthesizes verdicts and writes to `analysis/PR-<number>-review.md`
+
+**All `gh` commands are READ-ONLY.** Agents NEVER post comments, reviews, or modifications to GitHub. The review stays local — the user decides what to do with it.
+
+**Read-only commands used:**
+```bash
+gh pr view <N> --json title,body,files,commits,statusCheckRollup   # PR metadata
+gh pr diff <N> --patch                                              # Code changes
+gh pr diff <N> --name-only                                          # Changed files list
+gh pr checks <N> --json name,state,bucket                           # CI status
+```
 
 ### Full Team — Agent Team (parallel sessions)
 

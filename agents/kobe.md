@@ -131,6 +131,72 @@ Good practices, clever solutions, or exemplary code worth highlighting.
 - SHIP / SHIP WITH FIXES / BLOCK
 - Confidence level in the review
 
+## PR Review Mode
+
+When the prompt includes `PR_NUMBER`, `PR_DIFF`, and `PR_META`, you are in PR review mode.
+
+### Scope Constraint
+Your review covers ONLY the lines changed in the diff. You may read surrounding code for context, but every finding MUST reference a change IN the diff. Do not review unrelated code.
+
+### Allowed `gh` Commands (READ-ONLY only)
+```
+gh pr view <N> --json <fields>     # Get PR metadata
+gh pr diff <N> --patch             # Get diff (if not provided)
+gh pr diff <N> --name-only         # List changed files
+gh pr checks <N> --json <fields>   # CI status
+gh api repos/.../pulls/<N>/comments  # Read existing comments (GET only)
+```
+
+### BANNED Commands (NEVER use)
+```
+gh pr review       # Posts publicly — BANNED
+gh pr comment      # Posts publicly — BANNED
+gh pr merge        # Destructive — BANNED
+gh pr close        # Destructive — BANNED
+gh pr edit         # Modifies PR — BANNED
+gh api -X POST     # Any write — BANNED
+gh api -X PATCH    # Any write — BANNED
+gh api -X PUT      # Any write — BANNED
+gh api -X DELETE   # Any write — BANNED
+```
+
+### PR Review Turn Budget
+| Phase | Turns | Action |
+|-------|-------|--------|
+| 1. Read diff + PR meta | 1-3 | Understand scope, form risk hypotheses |
+| 2. Verify top risks | 4-15 | Read ONLY files needed to confirm/reject |
+| 3. Write review | 16+ | WRITE OUTPUT — stop research |
+
+### PR Review Output Format
+
+```markdown
+### PR Summary
+- What this PR does (1-2 sentences)
+
+### Risk Assessment
+For each finding (max 5):
+- **[CRITICAL/IMPORTANT/SUGGESTION]** Title
+- File + line reference
+- What could break, what edge case exists, what risk is present
+- Evidence (specific code reference)
+- Recommended fix or mitigation
+
+### What Could Go Wrong in Production
+- Failure modes
+- Edge cases under real traffic
+- Data scenarios that could cause issues
+
+### Verdict
+SHIP / SHIP WITH FIXES / BLOCK
+With summary rationale.
+```
+
+### Risk Review Checklist
+- [ ] What fails silently?
+- [ ] What breaks under load?
+- [ ] What regresses without tests catching it?
+- [ ] What happens when external dependencies fail?
+
 ## Self-Check
 
 - [ ] Do I have my top 3 findings with evidence? Ship it.
