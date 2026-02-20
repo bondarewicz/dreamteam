@@ -109,15 +109,17 @@ Use `/team` when the task is too big for one agent. Coach K coordinates the full
 
 ### Decision tree
 
-```
-Need to understand the business rules?         → /bird
-Need to design the system?                     → /mj
-Need to write the code?                        → /shaq
-Need to review the code?                       → /kobe
-Need to check production readiness?            → /pippen
-Need to document or synthesize?                → /magic
-Need a PR reviewed by multiple perspectives?   → /team (PR Review)
-Need the full pipeline (analyze → build → review → document)?  → /team
+```mermaid
+graph LR
+    Q{What do you need?}
+    Q -->|Understand business rules| bird[/bird]
+    Q -->|Design the system| mj[/mj]
+    Q -->|Write the code| shaq[/shaq]
+    Q -->|Review the code| kobe[/kobe]
+    Q -->|Check production readiness| pippen[/pippen]
+    Q -->|Document or synthesize| magic[/magic]
+    Q -->|Multi-perspective PR review| team_pr["/team (PR Review)"]
+    Q -->|Full pipeline| team[/team]
 ```
 
 ## /team — Coach K Orchestration
@@ -128,8 +130,13 @@ The `/team` command launches Coach K, who coordinates the Dream Team. You choose
 
 For bug fixes, small features, and focused changes. Sequential subagents, lower token cost.
 
-```
-User ──→ Coach K ──→ Bird (domain) ──→ Shaq (implement) ──→ Kobe (review) ──→ Magic (synthesize)
+```mermaid
+graph LR
+    User --> Coach_K[Coach K]
+    Coach_K --> Bird["Bird (domain)"]
+    Bird --> Shaq["Shaq (implement)"]
+    Shaq --> Kobe["Kobe (review)"]
+    Kobe --> Magic["Magic (synthesize)"]
 ```
 
 1. **Bird** defines business rules and acceptance criteria
@@ -141,10 +148,16 @@ User ──→ Coach K ──→ Bird (domain) ──→ Shaq (implement) ──
 
 For reviewing PRs or branches. 3 agents in parallel, all output stays local.
 
-```
-User ──→ Coach K ──→ ┬── Bird (domain) ────┬──→ Coach K (synthesize) ──→ Local file
-                     ├── MJ (architecture) ─┤
-                     └── Kobe (risk) ────────┘
+```mermaid
+graph LR
+    User --> Coach_K[Coach K]
+    Coach_K --> Bird["Bird (domain)"]
+    Coach_K --> MJ["MJ (architecture)"]
+    Coach_K --> Kobe["Kobe (risk)"]
+    Bird --> Synth["Coach K (synthesize)"]
+    MJ --> Synth
+    Kobe --> Synth
+    Synth --> File[Local file]
 ```
 
 1. **Coach K** fetches PR data using read-only `gh` commands
@@ -165,12 +178,20 @@ gh pr checks <N> --json name,state,bucket                           # CI status
 
 For new features, architecture changes, and complex multi-file work. Uses the experimental [agent teams](https://code.claude.com/docs/en/agent-teams) feature — 6 independent Claude Code sessions coordinated by Coach K via shared task list and inter-agent messaging.
 
-```
-Phase 1: Analysis & Design
-  Bird (domain) ──→ MJ (architecture) ──→ Coach K (task breakdown) ──→ User approval
-
-Phase 2: Implementation & Review
-  Shaq (implement) ──→ Kobe + Pippen (parallel review) ──→ Magic (synthesize)
+```mermaid
+graph LR
+    subgraph Phase 1: Analysis & Design
+        Bird["Bird (domain)"] --> MJ["MJ (architecture)"]
+        MJ --> Coach_K["Coach K (task breakdown)"]
+        Coach_K --> Approval[User approval]
+    end
+    subgraph Phase 2: Implementation & Review
+        Shaq["Shaq (implement)"] --> Kobe["Kobe (review)"]
+        Shaq --> Pippen["Pippen (review)"]
+        Kobe --> Magic["Magic (synthesize)"]
+        Pippen --> Magic
+    end
+    Approval --> Shaq
 ```
 
 1. **Bird** provides full domain analysis, messages MJ when done
