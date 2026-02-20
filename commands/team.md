@@ -17,6 +17,7 @@ Use the **AskUserQuestion** tool to ask the user:
 | Option | When to use | How it works |
 |--------|------------|--------------|
 | **Quick Fix (subagents)** | Bug fixes, small features, focused changes | Sequential subagents within this session: Bird → Shaq → Kobe → Magic |
+| **PR Review (subagents)** | Review an open PR or branch | Parallel subagents: Bird + MJ + Kobe analyze the diff, output stays local |
 | **Full Team (agent team)** | New features, architecture changes, complex multi-file work | Parallel agent team sessions: all 6 Dream Team members as independent teammates |
 
 ---
@@ -25,8 +26,8 @@ Use the **AskUserQuestion** tool to ask the user:
 
 For focused, well-understood changes. 4 subagents, sequential, within this session.
 
-### 1. Bird — Domain Analysis (lightweight)
-Use the Task tool with `subagent_type="bird"`:
+### 1. MJ — Domain Analysis (lightweight)
+Use the Task tool with `subagent_type="mj"`:
 ```
 Analyze this task and provide:
 - Key business rules and domain constraints
@@ -45,8 +46,8 @@ NEVER commit or push to git — leave that to the user.
 
 TASK: [user's request]
 
-DOMAIN ANALYSIS (from Bird):
-[paste Bird's full output]
+DOMAIN ANALYSIS (from MJ):
+[paste MJ's full output]
 ```
 
 ### 3. Kobe — Quality Review
@@ -58,8 +59,8 @@ Propose fixes for each finding.
 
 TASK: [user's request]
 
-DOMAIN ANALYSIS (from Bird):
-[paste Bird's full output]
+DOMAIN ANALYSIS (from MJ):
+[paste MJ's full output]
 
 IMPLEMENTATION (from Shaq):
 [paste Shaq's full output]
@@ -74,8 +75,8 @@ Provide git commands the user should run.
 
 TASK: [user's request]
 
-DOMAIN ANALYSIS (from Bird):
-[paste Bird's full output]
+DOMAIN ANALYSIS (from MJ):
+[paste MJ's full output]
 
 IMPLEMENTATION (from Shaq):
 [paste Shaq's full output]
@@ -86,6 +87,125 @@ QUALITY REVIEW (from Kobe):
 
 ### Quick Fix Context Rule
 **Every Task call MUST include ALL prior agent outputs in the prompt.** Each agent sees the full picture, not just their predecessor.
+
+---
+
+## STEP 3C: PR REVIEW — Subagent Workflow
+
+For reviewing an open PR or branch. 3 agents in parallel, output stays local.
+
+### CRITICAL: All `gh` Commands Must Be READ-ONLY
+
+**Allowed:**
+```
+gh pr view <N> --json <fields>     # Get PR metadata
+gh pr diff <N> --patch             # Get diff
+gh pr diff <N> --name-only         # List changed files
+gh pr checks <N> --json <fields>   # CI status
+gh api repos/.../pulls/<N>/comments  # Read comments (GET only)
+```
+
+**BANNED — NEVER USE:**
+```
+gh pr review       # Posts publicly — BANNED
+gh pr comment      # Posts publicly — BANNED
+gh pr merge        # Destructive — BANNED
+gh pr close/edit   # Modifies PR — BANNED
+gh api -X POST/PATCH/PUT/DELETE  # Any write — BANNED
+```
+
+### 1. Coach K — Fetch PR Data (READ-ONLY)
+
+Before launching agents, fetch the PR data yourself:
+
+```bash
+# If user provides a PR number:
+PR_DIFF=$(gh pr diff <N> --patch)
+PR_META=$(gh pr view <N> --json title,body,author,files,additions,deletions,commits,baseRefName,headRefName,statusCheckRollup)
+PR_CHECKS=$(gh pr checks <N> --json name,state,bucket)
+PR_FILES=$(gh pr diff <N> --name-only)
+
+# If user provides a branch name (no PR yet):
+PR_DIFF=$(git diff <base>...<branch>)
+PR_META="Branch: <branch>, Base: <base>"
+PR_FILES=$(git diff <base>...<branch> --name-only)
+```
+
+### 2. Launch Bird, MJ, Kobe in Parallel
+
+Pass `PR_DIFF` and `PR_META` directly in each agent's prompt. This prevents scope drift — agents review ONLY the diff.
+
+**Bird (Domain)** — `subagent_type="bird"`:
+```
+You are in PR Review Mode. Review this PR from a DOMAIN perspective.
+Your review covers ONLY the changes in PR_DIFF below. Do not review unrelated code.
+
+PR_NUMBER: [number or branch]
+PR_META: [paste PR_META]
+PR_DIFF:
+[paste PR_DIFF]
+
+Use your PR Review Output Format from your agent definition.
+```
+
+**MJ (Architecture)** — `subagent_type="mj"`:
+```
+You are in PR Review Mode. Review this PR from an ARCHITECTURE perspective.
+Your review covers ONLY the changes in PR_DIFF below. Do not review unrelated code.
+
+PR_NUMBER: [number or branch]
+PR_META: [paste PR_META]
+PR_DIFF:
+[paste PR_DIFF]
+
+Use your PR Review Output Format from your agent definition.
+```
+
+**Kobe (Quality/Risk)** — `subagent_type="kobe"`:
+```
+You are in PR Review Mode. Review this PR from a QUALITY & RISK perspective.
+Your review covers ONLY the changes in PR_DIFF below. Do not review unrelated code.
+
+PR_NUMBER: [number or branch]
+PR_META: [paste PR_META]
+PR_DIFF:
+[paste PR_DIFF]
+
+Use your PR Review Output Format from your agent definition.
+```
+
+### 3. Synthesize Results (Coach K)
+
+After all three agents complete:
+
+1. **Collect verdicts** from each agent
+2. **Determine overall verdict:**
+   - If ANY agent says REQUEST CHANGES → overall = REQUEST CHANGES
+   - If all say APPROVE → overall = APPROVE
+   - Otherwise → COMMENT
+3. **Write local review file** to `analysis/PR-<number>-review.md`
+4. **Present to user** in conversation with:
+   - Combined findings (deduplicated, prioritized)
+   - Individual agent verdicts
+   - Recommended action items
+5. **NEVER post anything to GitHub** — the user decides what to do with the review
+
+### PR Review Lineup Card
+
+```
+--- LINEUP CARD ---
+Workflow: PR Review
+PR: [number or branch]
+
+| Agent | Model | Role              |
+|-------|-------|-------------------|
+| bird  | opus  | Domain review     |
+| mj    | opus  | Architecture review |
+| kobe  | opus  | Quality/risk review |
+
+Output: LOCAL ONLY (analysis/PR-<number>-review.md)
+Tip: Run /usage to check rate limit impact.
+```
 
 ---
 
@@ -101,12 +221,12 @@ Create an agent team called "dream-team" with the following structure. Use **del
 
 Spawn **6 teammates**, each with a specific role and spawn prompt. Give each teammate rich context about the task and their role.
 
-#### Teammate: Bird (Domain Authority)
+#### Teammate: MJ (Domain Authority)
 ```
-Spawn a teammate named "bird" with the prompt:
+Spawn a teammate named "mj" with the prompt:
 
-You are Larry Bird, the Domain Authority and Final Arbiter.
-Read your full agent definition at ~/.claude/agents/bird.md for detailed instructions.
+You are Michael Jordan, the Domain Authority and Final Arbiter.
+Read your full agent definition at ~/.claude/agents/mj.md for detailed instructions.
 
 YOUR TASK: [user's request]
 
@@ -117,20 +237,20 @@ Provide a comprehensive domain analysis:
 - What must never break
 - Edge cases from a business perspective
 
-When done, message MJ with your domain analysis so he can design the architecture.
+When done, message Bird with your domain analysis so he can design the architecture.
 Then message Coach K (the lead) with your complete output.
 ```
 
-#### Teammate: MJ (Systems Architect)
+#### Teammate: Bird (Systems Architect)
 ```
-Spawn a teammate named "mj" with the prompt:
+Spawn a teammate named "bird" with the prompt:
 
-You are Michael Jordan, the Strategic Systems Architect.
-Read your full agent definition at ~/.claude/agents/mj.md for detailed instructions.
+You are Larry Bird, the Strategic Systems Architect.
+Read your full agent definition at ~/.claude/agents/bird.md for detailed instructions.
 
 YOUR TASK: [user's request]
 
-Wait for Bird's domain analysis, then design the system architecture:
+Wait for MJ's domain analysis, then design the system architecture:
 - System boundaries and component interactions
 - Pattern and style selection with trade-offs
 - Interfaces and contracts
@@ -149,7 +269,7 @@ Read your full agent definition at ~/.claude/agents/shaq.md for detailed instruc
 
 YOUR TASK: [user's request]
 
-Wait for Coach K to assign implementation tasks. Then implement according to the domain analysis (from Bird) and architecture (from MJ).
+Wait for Coach K to assign implementation tasks. Then implement according to the domain analysis (from MJ) and architecture (from Bird).
 - Write production-ready, tested code
 - Follow existing codebase patterns
 - Write tests for all acceptance criteria
@@ -221,8 +341,8 @@ When done, message Coach K (the lead) with the final synthesis.
 
 After spawning teammates, create tasks in the shared task list with dependencies:
 
-1. **Domain Analysis** (assigned to Bird) — no dependencies
-2. **Architecture Design** (assigned to MJ) — blocked by task 1
+1. **Domain Analysis** (assigned to MJ) — no dependencies
+2. **Architecture Design** (assigned to Bird) — blocked by task 1
 3. **Task Breakdown & Plan** (assigned to you, Coach K) — blocked by tasks 1 and 2
 4. **Implementation** (assigned to Shaq) — blocked by task 3
 5. **Quality Review** (assigned to Kobe) — blocked by task 4
@@ -231,7 +351,7 @@ After spawning teammates, create tasks in the shared task list with dependencies
 
 ### Checkpoint (Task 3)
 
-When Bird and MJ complete their tasks, YOU (Coach K) do the task breakdown:
+When MJ and Bird complete their tasks, YOU (Coach K) do the task breakdown:
 - Break the work into ordered, shippable increments
 - Identify dependencies between tasks
 - Estimate complexity (S/M/L)
@@ -273,8 +393,8 @@ Task: [one-line description]
 
 | Agent   | Model     | Role                        |
 |---------|-----------|-----------------------------|
-| bird    | opus      | Domain analysis             |
-| mj      | opus      | Architecture (Full Team only)|
+| mj      | opus      | Domain analysis             |
+| bird    | opus      | Architecture (Full Team only)|
 | shaq    | opusplan  | Implementation              |
 | kobe    | opus      | Quality review              |
 | pippen  | sonnet    | Stability review (Full Team only) |
