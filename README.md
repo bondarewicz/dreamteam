@@ -179,13 +179,15 @@ gh pr checks <N> --json name,state,bucket                           # CI status
 For new features, architecture changes, and complex multi-file work. Uses the experimental [agent teams](https://code.claude.com/docs/en/agent-teams) feature — 6 independent Claude Code sessions coordinated by Coach K via shared task list and inter-agent messaging.
 
 ```mermaid
-graph LR
+graph TD
     subgraph Phase 1: Analysis & Design
+        direction LR
         Bird["Bird (domain)"] --> MJ["MJ (architecture)"]
         MJ --> Coach_K["Coach K (task breakdown)"]
         Coach_K --> Approval[User approval]
     end
     subgraph Phase 2: Implementation & Review
+        direction LR
         Shaq["Shaq (implement)"] --> Kobe["Kobe (review)"]
         Shaq --> Pippen["Pippen (review)"]
         Kobe --> Magic["Magic (synthesize)"]
