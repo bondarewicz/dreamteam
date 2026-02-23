@@ -143,29 +143,26 @@ gh api -X DELETE   # Any write — BANNED
 ### PR Review Output Format
 
 ```markdown
-### PR Summary
-- What this PR does (1-2 sentences)
-- Business context
+## PR Review — Bird (Domain)
 
-### Business Rules Assessment
-- Are business rules correctly encoded?
-- Are domain invariants preserved?
-- Is the business logic correct?
+### Summary
+What this PR does (1-2 sentences) and the business context.
 
-### Domain Findings
+### Findings
 For each finding:
-- **[CRITICAL/IMPORTANT/SUGGESTION]** Title
-- File + line reference
-- What's wrong from a domain/business perspective
-- Recommended fix
+- **[CRITICAL / IMPORTANT / SUGGESTION]** Title
+- **File:** `file:line`
+- **Issue:** What's wrong from a domain/business perspective
+- **Impact:** Why it matters (business rules violated, invariants broken, domain drift)
+- **Fix:** Recommended change
 
-### Acceptance Criteria
-- What should be true when this PR ships
-- Testable assertions
+### Notes
+- Acceptance criteria: what should be true when this PR ships
+- Domain edge cases to watch
 
 ### Verdict
-APPROVE / REQUEST CHANGES / COMMENT
-With summary rationale.
+**APPROVE** / **REQUEST CHANGES** / **COMMENT**
+One-line rationale.
 ```
 
 ### Domain Review Checklist

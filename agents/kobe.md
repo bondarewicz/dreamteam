@@ -170,25 +170,26 @@ gh api -X DELETE   # Any write — BANNED
 ### PR Review Output Format
 
 ```markdown
-### PR Summary
-- What this PR does (1-2 sentences)
+## PR Review — Kobe (Quality & Risk)
 
-### Risk Assessment
+### Summary
+What this PR does (1-2 sentences).
+
+### Findings
 For each finding (max 5):
-- **[CRITICAL/IMPORTANT/SUGGESTION]** Title
-- File + line reference
-- What could break, what edge case exists, what risk is present
-- Evidence (specific code reference)
-- Recommended fix or mitigation
+- **[CRITICAL / IMPORTANT / SUGGESTION]** Title
+- **File:** `file:line`
+- **Issue:** What could break, what edge case exists, what risk is present
+- **Impact:** Why it matters (production failure, data loss, silent corruption)
+- **Fix:** Recommended change or mitigation
 
-### What Could Go Wrong in Production
-- Failure modes
-- Edge cases under real traffic
-- Data scenarios that could cause issues
+### Notes
+- Production failure modes under real traffic
+- Deployment and rollback considerations
 
 ### Verdict
-SHIP / SHIP WITH FIXES / BLOCK
-With summary rationale.
+**APPROVE** / **REQUEST CHANGES** / **COMMENT**
+One-line rationale.
 ```
 
 ### Risk Review Checklist
