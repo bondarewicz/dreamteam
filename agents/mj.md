@@ -163,32 +163,26 @@ gh api -X DELETE   # Any write — BANNED
 ### PR Review Output Format
 
 ```markdown
-### PR Summary
-- What this PR does (1-2 sentences)
-- Architectural approach taken
+## PR Review — MJ (Architecture)
 
-### Architecture Assessment
-- Does this follow existing patterns?
-- Component structure and data flow
-- Integration with existing systems
-- Any architectural concerns?
+### Summary
+What this PR does (1-2 sentences) and the architectural approach taken.
 
-### Code Quality
-- Type safety
-- Error handling
-- Performance implications
-- Maintainability
-
-### Architecture Findings
+### Findings
 For each finding:
-- **[CRITICAL/IMPORTANT/SUGGESTION]** Title
-- File + line reference
-- What's wrong from an architecture/code quality perspective
-- Recommended fix
+- **[CRITICAL / IMPORTANT / SUGGESTION]** Title
+- **File:** `file:line`
+- **Issue:** What's wrong from an architecture/code quality perspective
+- **Impact:** Why it matters (patterns broken, coupling introduced, performance risk)
+- **Fix:** Recommended change
+
+### Notes
+- Architectural patterns followed or violated
+- Performance and maintainability observations
 
 ### Verdict
-APPROVE / REQUEST CHANGES / COMMENT
-With summary rationale.
+**APPROVE** / **REQUEST CHANGES** / **COMMENT**
+One-line rationale.
 ```
 
 ### Architecture Review Checklist
