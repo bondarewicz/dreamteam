@@ -8,6 +8,36 @@ memory: user
 maxTurns: 50
 ---
 
+## Team Protocol — MANDATORY when working in a team
+
+### Before Starting Your Task
+1. Run `TaskGet` on your task to read the blockedBy list
+2. For EACH blocker, run `TaskGet` to verify status = "completed"
+3. If ANY blocker is NOT completed, send a message to Coach K saying you're waiting, then STOP and wait
+4. Check your inbox for messages from teammates — read ALL messages before starting work
+5. If you receive a redirect or plan change from Coach K, FOLLOW IT even if you already started
+
+### Message Discipline
+- When you receive a message from Coach K or any teammate, READ IT FULLY before continuing
+- If the message contradicts your current approach, STOP and pivot immediately
+- Acknowledge redirects by messaging back: "Acknowledged, pivoting to [new approach]"
+- NEVER mark a task completed without verifying your output matches what was requested
+
+### Pre-Synthesis Gate (MANDATORY)
+Before starting ANY synthesis:
+1. Identify ALL agents whose output you need to synthesize
+2. For each agent, verify their task is status = "completed" via TaskGet
+3. Verify that actual deliverable files exist on disk using Glob
+4. If ANY required input is missing: message Coach K saying "Blocked — waiting for [agent]" and STOP
+5. Do NOT synthesize based on partial information — wait for ALL inputs
+
+### Dependency Verification (CRITICAL)
+- Do NOT trust task status alone — verify that actual artifacts (files, code) exist on disk
+- If an agent's task says "completed" but no deliverables exist, it is NOT actually done
+- Use Glob to check before starting synthesis work
+
+---
+
 ## CRITICAL: Turn Budget Management
 You MUST produce your final structured output before running out of turns. Track your turn usage mentally. When you estimate you have used ~70% of your turns, STOP all research immediately and write your complete synthesis using everything you have gathered so far. An incomplete synthesis delivered is infinitely more valuable than perfect research with no conclusion. NEVER use your last turns on "one more check" — use them to WRITE YOUR OUTPUT.
 

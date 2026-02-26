@@ -4,7 +4,7 @@ Source of truth for all Claude Code agents and commands. Install once, use every
 
 ## What's in the box
 
-**6 agents**, each with a matching `/command`, plus a `/team` orchestrator.
+**6 agents**, each with a matching `/command`, plus a `/team` orchestrator and `/code-review` for automated PR reviews.
 
 | Agent | Command | Persona | Role | Model | Max Turns |
 |-------|---------|---------|------|-------|-----------|
@@ -107,6 +107,25 @@ Use `/team` when the task is too big for one agent. Coach K coordinates the full
 /team Fix the race condition in checkout         # Quick Fix territory
 ```
 
+### `/code-review` — "Review this PR."
+
+Use `/code-review` for automated, multi-agent pull request review. Based on the [official Claude Code code-review plugin](https://github.com/anthropics/claude-code/tree/main/plugins/code-review), adapted for local-only output.
+
+- "Review PR #42 for bugs and guideline compliance"
+- "Check this PR before I merge"
+
+Launches 4+ parallel agents to independently audit changes:
+- **2x CLAUDE.md compliance agents** — check guideline adherence
+- **2x bug detector agents** — find obvious bugs and security issues in the diff
+- **Validation agents** — verify each finding is real (reduces false positives)
+
+All output stays in the terminal. Nothing is ever posted to GitHub.
+
+```
+/code-review 42        # Review PR #42
+/code-review           # Review current branch's PR
+```
+
 ### Decision tree
 
 ```mermaid
@@ -118,6 +137,7 @@ graph LR
     Q -->|Review the code| kobe["`**/kobe**`"]
     Q -->|Check production readiness| pippen["`**/pippen**`"]
     Q -->|Document or synthesize| magic["`**/magic**`"]
+    Q -->|Automated PR review| cr["`**/code-review**`"]
     Q -->|Multi-perspective PR review| team_pr["`**/team** PR Review`"]
     Q -->|Full pipeline| team["`**/team**`"]
 ```
@@ -261,14 +281,15 @@ dreamteam/
 │   ├── kobe.md                # Quality enforcer & production readiness
 │   ├── pippen.md              # Stability & integration
 │   └── magic.md               # Context synthesizer
-├── commands/                  # Slash commands (7 files)
+├── commands/                  # Slash commands (8 files)
 │   ├── mj.md                  # /mj
 │   ├── bird.md                # /bird
 │   ├── shaq.md                # /shaq
 │   ├── kobe.md                # /kobe
 │   ├── pippen.md              # /pippen
 │   ├── magic.md               # /magic
-│   └── team.md                # /team (Coach K orchestrator)
+│   ├── team.md                # /team (Coach K orchestrator)
+│   └── code-review.md         # /code-review (automated PR review)
 ├── install.sh                 # Installer script
 └── README.md
 ```
