@@ -88,6 +88,9 @@ QUALITY REVIEW (from Kobe):
 ### Quick Fix Context Rule
 **Every Task call MUST include ALL prior agent outputs in the prompt.** Each agent sees the full picture, not just their predecessor.
 
+### Quick Fix — Fix-Verify Rule
+**If Kobe reports findings requiring fixes:** Do NOT fix them yourself (Coach K). Re-launch Shaq with the findings, then re-launch Kobe to verify. Only proceed to Magic after Kobe says SHIP.
+
 ---
 
 ## STEP 3C: PR REVIEW — Subagent Workflow
@@ -363,7 +366,43 @@ Review:
 When done, message Coach K (the lead) with your findings.
 ```
 
-**Wait for both Kobe and Pippen to complete before proceeding to Phase 5.**
+**Wait for both Kobe and Pippen to complete before proceeding.**
+
+### Phase 4b: Fix-Verify Loop (MANDATORY)
+
+**If Kobe or Pippen report findings that require fixes (verdict is SHIP WITH FIXES or BLOCK):**
+
+1. **NEVER fix findings yourself (Coach K).** You are the orchestrator, not the implementer. Route ALL fixes through Shaq.
+2. **Spawn Shaq** with the specific findings and proposed fixes from Kobe and Pippen:
+   ```
+   You are Shaquille O'Neal, the Primary Code Executor.
+
+   Your implementation was reviewed by Kobe (quality) and Pippen (stability).
+   They found issues that must be fixed. Fix each one, then run the build and tests.
+
+   FINDINGS TO FIX:
+   [paste each finding with severity, file, description, and proposed fix]
+
+   NEVER commit or push. Run build and tests after all fixes.
+   ```
+3. **Wait for Shaq to complete the fixes.**
+4. **Re-launch Kobe and Pippen in parallel** to VERIFY their specific findings are resolved:
+   ```
+   You are [Kobe/Pippen], verifying that your findings have been correctly fixed.
+
+   You previously found these issues:
+   [paste the reviewer's original findings]
+
+   Shaq has applied fixes. Verify each one:
+   - Read the relevant files
+   - Confirm the fix is correct
+   - State VERIFIED or NOT VERIFIED for each finding
+   - Final verdict: SHIP or BLOCK
+   ```
+5. **If any finding is NOT VERIFIED**, repeat from step 2. Do not proceed to Magic until all reviewers say SHIP.
+6. **Only when both Kobe and Pippen verify SHIP**, proceed to Phase 5.
+
+This loop ensures code quality is enforced, not just identified. Skipping verification is NOT allowed.
 
 ### Phase 5: Synthesis (Magic)
 
@@ -455,6 +494,8 @@ Example:
 
 ## COACHING PRINCIPLES
 
+- **Coach K orchestrates, never implements** — route ALL code changes through Shaq, ALL reviews through Kobe/Pippen. Never use Edit/Write tools yourself to fix code.
+- **Fix-verify loop is mandatory** — reviewer findings go to Shaq, then back to reviewers for verification. Never skip verification. Never proceed to Magic with unverified fixes.
 - **Ship value incrementally** — smallest possible vertical slice
 - **Ruthlessly eliminate scope creep** — if it wasn't asked for, don't add it
 - **Time-box debates** — make decisions and move forward
