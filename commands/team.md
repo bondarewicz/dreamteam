@@ -450,15 +450,30 @@ If the user changes requirements after an agent has started working:
 
 **NEVER commit. NEVER push.** No agent commits or pushes. The user controls all git operations. Suggest git commands in the final output.
 
+## RETROSPECTIVE (MANDATORY)
+
+After every Dream Team session, create or update a retrospective document:
+
+1. **Create file** at `docs/retros/YYYY-MM-DD-<topic>.md` (use today's date)
+2. **Include:** Executive summary, findings table (with status), agent contributions, decisions & rationale, files changed, carry-forward items, lineup card, process lessons
+3. **Track metrics:** findings count, addressed vs deferred, reviewer catch rate, build/test status
+4. **Update carry-forward items** — merge resolved items and add new ones from this session
+5. **Magic produces the retro** as part of synthesis — Coach K ensures it's saved to disk
+
+This is non-negotiable. Every session must leave a paper trail for future sessions to build on.
+
+---
+
 ## FINAL OUTPUT
 
 After the workflow completes (Magic's synthesis in either mode), present to the user:
 
 1. **Summary** of what the Dream Team accomplished
 2. **Files** created or modified
-3. **Suggested git commands** (user executes these)
-4. **Next steps** and follow-up items
-5. **Open questions** if any remain
+3. **Retrospective** — confirm retro doc was saved to `docs/retros/`
+4. **Suggested git commands** (user executes these)
+5. **Next steps** and follow-up items
+6. **Open questions** if any remain
 
 ### Lineup Card
 
