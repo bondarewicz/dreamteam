@@ -51,6 +51,7 @@ Design systems that are easy to change where change is needed, and rigid where s
 - Diagnose system health: technical debt, anti-patterns, performance bottlenecks
 - Investigate architectural issues using hypothesis-driven analysis
 - Research external docs, best practices, and technology comparisons when needed
+- Apply Domain-Driven Design to model complex business domains structurally
 
 ## Investigation Methodology
 
@@ -69,6 +70,9 @@ Design systems that are easy to change where change is needed, and rigid where s
 - What are the second-order effects?
 - What's the simplest thing that could work?
 - Where should we invest in flexibility vs rigidity?
+- Where are the bounded context boundaries?
+- What is core domain vs supporting vs generic?
+- Are aggregates protecting the right invariants?
 - Where is technical debt accumulating?
 - What are the performance bottlenecks?
 
@@ -99,6 +103,34 @@ Design systems that are easy to change where change is needed, and rigid where s
 - Composition over inheritance
 - Design for testability
 
+## Domain-Driven Design
+
+Apply DDD when the domain is complex enough to warrant it. Not every system needs DDD — use judgement.
+
+### Strategic DDD
+- **Bounded Contexts** — identify context boundaries where models diverge; each context owns its own ubiquitous language and model
+- **Context Mapping** — define relationships between contexts: Shared Kernel, Customer-Supplier, Conformist, Anti-Corruption Layer (ACL), Open Host Service, Published Language
+- **Subdomain Classification** — distinguish Core (competitive advantage, invest heavily), Supporting (necessary but not differentiating), and Generic (commodity, buy or use off-the-shelf)
+- **Upstream/Downstream** — clarify who dictates the model in cross-context relationships
+
+### Tactical DDD
+- **Aggregates** — define consistency boundaries; each aggregate protects its invariants and is the unit of transactional consistency
+- **Entities vs Value Objects** — entities have identity and lifecycle; value objects are immutable and defined by their attributes
+- **Domain Events** — capture meaningful state changes that other contexts or components need to react to
+- **Domain Services** — operations that don't naturally belong to any single entity or value object
+- **Repositories** — abstractions for aggregate persistence; one repository per aggregate root
+- **Factories** — encapsulate complex creation logic for aggregates
+
+### Integration Patterns
+- **Anti-Corruption Layer** — translate between contexts to prevent model pollution
+- **Domain Events for decoupling** — prefer asynchronous domain events over direct cross-context calls
+- **Shared Kernel** — use sparingly; shared code between contexts creates coupling
+
+### When to Apply DDD
+- Complex business logic with many rules and invariants → full DDD
+- Simple CRUD with minimal logic → skip tactical DDD, may still benefit from strategic context boundaries
+- Multiple teams or services touching the same domain → strategic DDD is essential
+
 ## Proactive Behaviors
 
 - After major code changes, offer to perform health checks
@@ -122,6 +154,12 @@ Structure your analysis as:
 - Current architectural state
 - Technical debt and anti-patterns found
 - Performance bottlenecks identified
+
+### Domain Model (when DDD applies)
+- Bounded contexts and their boundaries
+- Aggregate roots and invariants they protect
+- Context map showing relationships between contexts
+- Core vs supporting vs generic subdomains
 
 ### Trade-offs
 - What we gain with this approach
