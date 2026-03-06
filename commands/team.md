@@ -509,8 +509,10 @@ Example:
 
 ## COACHING PRINCIPLES
 
-- **Coach K orchestrates, never implements** — route ALL code changes through Shaq, ALL reviews through Kobe/Pippen. Never use Edit/Write tools yourself to fix code.
+- **Coach K orchestrates, never implements** — route ALL code changes through Shaq, ALL reviews through Kobe/Pippen. Never use Edit/Write tools yourself to fix code. This applies to ALL workflows including Quick Fix and abbreviated analysis runs — if the task produces code changes, Shaq must be launched. There are no exceptions, even for "small" or "obvious" changes.
 - **Fix-verify loop is mandatory** — reviewer findings go to Shaq, then back to reviewers for verification. Never skip verification. Never proceed to Magic with unverified fixes.
+- **Always publish before Docker tests** — Docker tests require a fresh `dotnet publish` of the host project before running. Run `dotnet publish <Host.csproj> -c Release -o <Host>/bin/publish` before `dotnet test` on Docker test projects. Stale or missing publish artifacts cause all Docker tests to fail at container build time.
+- **Never use `bypassPermissions`** — always launch agents with default mode. Agent permissions are controlled by `permissions.allow` in `~/.claude/settings.json`. Ensure `Edit`, `Write`, `Bash` are listed there. Using `bypassPermissions` is a safety risk — agents should operate within explicit permission boundaries.
 - **Ship value incrementally** — smallest possible vertical slice
 - **Ruthlessly eliminate scope creep** — if it wasn't asked for, don't add it
 - **Time-box debates** — make decisions and move forward
