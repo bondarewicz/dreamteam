@@ -153,9 +153,22 @@ resilience_assessment:
 operational_readiness:
   deployment_ready: boolean
   rollback_capable: boolean
+  rollback_plan: string                # Specific steps to undo the deployment
   monitoring_coverage: string
   on_call_documentation: string
-  verdict: string                  # READY / READY WITH CAVEATS / NOT READY
+  new_infrastructure_required:         # CRITICAL — flags for Coach K's Production Safety Gate
+    new_env_vars: [string]             # Any new required environment variables
+    new_services: [string]             # Any new external service dependencies
+    new_queues_topics: [string]        # Any new message queues or topics
+    config_changes: [string]           # Any config format changes
+    infra_provisioning: [string]       # Any infrastructure that must be provisioned before deploy
+  database_safety:
+    has_migrations: boolean
+    reversible: boolean                # Can the migration be rolled back without data loss?
+    data_preserving: boolean           # Does the migration preserve all existing data?
+    large_table_impact: boolean        # Does it ALTER a table with >1M rows? (lock risk)
+    details: string
+  verdict: string                      # READY / READY WITH CAVEATS / NOT READY
 
 escalations:                       # Issues punted to Coach K
   - issue: string
@@ -192,9 +205,11 @@ Structure your review following the Output Schema above:
 
 ### Operational Readiness
 - Deployment readiness
-- Rollback capability
+- Rollback capability + specific rollback plan
 - Monitoring and alerting
 - On-call documentation
+- **New infrastructure required** — new env vars, services, queues, config changes, provisioning needed
+- **Database safety** — has migrations? reversible? data-preserving? large table lock risk?
 - Verdict: READY / READY WITH CAVEATS / NOT READY
 
 ### Escalations
