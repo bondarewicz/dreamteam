@@ -174,12 +174,23 @@ graph TD
 - Enable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` in settings.json or environment
 - If not enabled, Coach K falls back to Quick Fix subagent workflow
 
+### Session Recordings
+
+Every `/team` session (all modes) is recorded as an [asciicast v3](https://docs.asciinema.org/manual/asciicast/v3/) file with navigable markers at key moments:
+
+- Phase transitions, agent spawns/completions, human decisions, escalations, fix-verify loops
+- Uploaded to asciinema (unlisted) at session end — link saved to the retro
+- Local file saved to `docs/recordings/YYYY-MM-DD-<topic>.cast`
+
+The recording is constructed programmatically via `scripts/cast.sh` — it captures the team workflow narrative, not raw terminal output.
+
 ### Retrospectives
 
 After every `/team` session, Magic produces a mandatory retrospective saved to `docs/retros/YYYY-MM-DD-<topic>.md`:
 
 - Executive summary, findings table, agent contributions
 - **Team metrics:** escalation count, confidence levels per agent, finding attribution, fix-verify loop count, contradictions detected
+- **Session recording** link (asciinema URL or local path)
 - Carry-forward items and process lessons
 
 ### Git Safety
@@ -209,7 +220,7 @@ All output stays in the terminal. Nothing is ever posted to GitHub.
 ```bash
 git clone <this-repo> ~/Github/Bondarewicz/dreamteam
 cd ~/Github/Bondarewicz/dreamteam
-./install.sh
+./scripts/install.sh
 ```
 
 The installer backs up existing files, then copies all agents to `~/.claude/agents/` and commands to `~/.claude/commands/`.
@@ -228,7 +239,7 @@ Add to `~/.claude/settings.json`:
 
 ### 3. Restart Claude Code
 
-Start a new session to pick up changes. After any edit, run `./install.sh` again.
+Start a new session to pick up changes. After any edit, run `./scripts/install.sh` again.
 
 ## Repository Structure
 
@@ -245,11 +256,14 @@ dreamteam/
 │   ├── bird.md, mj.md, shaq.md, kobe.md, pippen.md, magic.md
 │   ├── team.md                # /team (Coach K orchestrator)
 │   └── code-review.md         # /code-review (automated PR review)
+├── scripts/
+│   ├── install.sh             # Installer script
+│   └── cast.sh                # Asciicast v3 recording helper
 ├── docs/
 │   ├── team-improvement-analysis.md  # Gap analysis with sources
 │   ├── claude-skillz-analysis.md     # Transferable patterns analysis
+│   ├── recordings/                   # Session recordings (.cast files)
 │   └── retros/                       # Session retrospectives
-├── install.sh                 # Installer script
 └── README.md
 ```
 
@@ -275,7 +289,7 @@ Quality-first, with each agent on the model matching its reasoning demands.
 | Pippen's reviews are excellent | Could downgrade to `sonnet` to save rate limits |
 | Shaq's code quality is great | Could downgrade to `sonnet` (saves opus planning cost) |
 
-To change a model: edit `model:` in `agents/<name>.md`, run `./install.sh`.
+To change a model: edit `model:` in `agents/<name>.md`, run `./scripts/install.sh`.
 
 ### Turn limits
 

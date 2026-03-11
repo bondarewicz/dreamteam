@@ -5,9 +5,10 @@ set -euo pipefail
 # Installs Claude Code agents and commands from this repo to ~/.claude/
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLAUDE_DIR="$HOME/.claude"
-AGENTS_SRC="$SCRIPT_DIR/agents"
-COMMANDS_SRC="$SCRIPT_DIR/commands"
+AGENTS_SRC="$REPO_DIR/agents"
+COMMANDS_SRC="$REPO_DIR/commands"
 AGENTS_DST="$CLAUDE_DIR/agents"
 COMMANDS_DST="$CLAUDE_DIR/commands"
 BACKUP_DIR="$CLAUDE_DIR/backup-$(date +%Y%m%d-%H%M%S)"
@@ -69,6 +70,10 @@ for cmd_file in "$COMMANDS_SRC"/*.md; do
 done
 echo "  $cmd_count commands installed."
 echo ""
+
+# --- Step 6: Ensure recording directories exist ---
+mkdir -p "$REPO_DIR/docs/recordings"
+mkdir -p "$REPO_DIR/docs/retros"
 
 # --- Summary ---
 echo "=== Installation Complete ==="
