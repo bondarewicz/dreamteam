@@ -713,15 +713,113 @@ CAST_FILE="docs/recordings/$(date +%Y-%m-%d)-${TOPIC}-cont.cast"
 "$CAST_SCRIPT" init "$CAST_FILE" "Dream Team (cont): <task description>"
 ```
 
+### Production Safety Gate (MANDATORY — before suggesting git commands)
+
+**NEVER suggest the user push to production without completing this gate.** This is the single most important checkpoint in the entire workflow. A shipped bug costs 100x more than a caught one.
+
+Coach K MUST assess and present the following before ANY git commands are suggested:
+
+#### 1. Deployment Risk Classification
+
+Classify every session's changes into one of these levels:
+
+| Level | Criteria | Required before push |
+|-------|----------|---------------------|
+| **🟢 LOW** | No behavior change, cosmetic, docs, tests only | Kobe SHIP verdict |
+| **🟡 MEDIUM** | New feature behind existing paths, additive-only DB changes, new endpoints | Kobe SHIP + Pippen READY + tests pass |
+| **🔴 HIGH** | Breaking API changes, destructive DB migrations, shared library changes, auth/payment/data paths | All of MEDIUM + explicit user confirmation + rollback plan |
+| **⛔ CRITICAL** | Schema migrations on large tables, changes to encryption/hashing, infrastructure changes, data deletion logic | All of HIGH + recommend canary/staged rollout |
+
+#### 2. Pre-Push Checklist
+
+Coach K MUST verify each item and present results to the user:
+
+```
+PRE-PUSH CHECKLIST:
+  [ ] Build passes                — [PASS/FAIL/NOT RUN]
+  [ ] Tests pass                  — [PASS/FAIL/NOT RUN] ([N] tests)
+  [ ] Kobe verdict                — [SHIP/SHIP WITH FIXES/BLOCK]
+  [ ] Pippen verdict              — [READY/READY WITH CAVEATS/NOT READY/N/A]
+  [ ] No unresolved escalations   — [YES/NO] ([list if NO])
+  [ ] Backward compatible         — [YES/NO/N/A] (reason)
+  [ ] Database migration safe     — [YES/NO/N/A] (reversible? data-preserving?)
+  [ ] API contracts preserved     — [YES/NO/N/A] (breaking changes?)
+  [ ] Feature flag recommended    — [YES/NO] (reason)
+  [ ] Rollback plan               — [description or N/A]
+```
+
+**If ANY item is FAIL, BLOCK, NOT READY, or NO — do NOT suggest push commands.** Instead, explain what must be resolved first.
+
+#### 3. Breaking Change Detection
+
+Scan Kobe's and Pippen's outputs for these production risks. If ANY are present, elevate to 🔴 HIGH or ⛔ CRITICAL:
+
+- **API breaking changes**: removed endpoints, changed response shapes, renamed fields, changed status codes
+- **Database destructive changes**: column drops, table drops, non-reversible migrations, type changes that lose data
+- **Shared library changes**: changes to packages/modules consumed by other services
+- **Auth/security changes**: modified authentication flows, changed permission models, encryption changes
+- **Data pipeline changes**: modified ETL logic, changed event schemas, altered message formats
+- **Configuration changes**: new required environment variables, changed config formats, new infrastructure dependencies
+
+#### 4. Database Migration Safety
+
+If the session involves database migrations, apply the **expand/contract pattern** (zero-downtime migrations):
+
+1. **Expand** — add new columns/tables, never remove in the same deployment
+2. **Migrate** — backfill data, update writers to use new schema
+3. **Contract** — remove old columns/tables in a SEPARATE deployment after verification
+
+Red flags that MUST elevate risk to 🔴 HIGH or ⛔ CRITICAL:
+- `DROP COLUMN` or `DROP TABLE` in the same migration as schema additions
+- `ALTER TABLE` on tables with >1M rows (lock risk — check Pippen's `large_table_impact`)
+- Non-reversible type changes (e.g., `VARCHAR` → `INT` with data truncation)
+- Missing `DOWN` migration or rollback script
+
+#### 5. Rollback Plan
+
+Every session with risk level 🟡 MEDIUM or above MUST include a rollback plan:
+
+```
+ROLLBACK PLAN:
+  Strategy: [git revert / feature flag / blue-green swap / database rollback / N/A]
+  Commands: [specific commands to execute]
+  Data impact: [is data reversible? any manual steps?]
+  Estimated recovery time: [seconds / minutes / requires downtime]
+```
+
+#### 6. Post-Deploy Verification (recommend to user)
+
+For 🟡 MEDIUM and above, include a post-deploy verification checklist based on the four golden signals:
+
+```
+POST-DEPLOY VERIFICATION (recommended):
+  [ ] Latency   — response times within normal range
+  [ ] Traffic    — request rate matches expected patterns
+  [ ] Errors     — error rate not elevated vs pre-deploy baseline
+  [ ] Saturation — CPU/memory/disk/queue depth within bounds
+  [ ] Smoke test — critical user paths verified manually or via automated test
+```
+
+#### 7. Final Recommendation
+
+After completing the gate, state ONE of:
+
+- **✅ SAFE TO PUSH** — all checks pass, low/medium risk, rollback plan in place
+- **⚠️ PUSH WITH CAUTION** — checks pass but elevated risk; recommend [specific precaution: feature flag, canary, off-peak deploy]
+- **🛑 DO NOT PUSH** — [specific blocker]. Resolve [X] before pushing.
+
+---
+
 After the workflow completes (Magic's synthesis in either mode), present to the user:
 
 1. **Summary** of what the Dream Team accomplished
 2. **Files** created or modified
-3. **Recording** — asciinema URL (or local path if upload failed)
-4. **Retrospective** — confirm retro doc was saved to `docs/retros/`
-5. **Suggested git commands** (user executes these)
-6. **Next steps** and follow-up items
-7. **Open questions** if any remain
+3. **Production Safety Gate** — risk level, pre-push checklist, rollback plan, final recommendation
+4. **Recording** — asciinema URL (or local path if upload failed)
+5. **Retrospective** — confirm retro doc was saved to `docs/retros/`
+6. **Suggested git commands** — ONLY if Production Safety Gate passes (✅ or ⚠️)
+7. **Next steps** and follow-up items
+8. **Open questions** if any remain
 
 ### Lineup Card
 

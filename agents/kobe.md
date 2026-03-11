@@ -160,8 +160,18 @@ suggestions: [string]
 production_readiness:
   deployment_risks: string
   rollback_capability: string
-  backward_compatibility: string
+  backward_compatibility: string        # YES/NO — are existing consumers unaffected?
   monitoring_coverage: string
+  breaking_changes:                     # CRITICAL — feeds Coach K's Production Safety Gate
+    api_breaking: boolean               # Removed/changed endpoints, response shapes, status codes
+    db_destructive: boolean             # Column/table drops, irreversible migrations, data loss
+    shared_library: boolean             # Changes to packages consumed by other services
+    auth_security: boolean              # Changed auth flows, permissions, encryption
+    data_pipeline: boolean              # Changed event schemas, ETL logic, message formats
+    config_changes: boolean             # New required env vars, changed config formats
+    details: [string]                   # Specifics for any true flags above
+  safe_to_deploy: boolean               # Overall: can this ship without breaking production?
+  rollback_plan: string                 # How to undo if it goes wrong
 
 escalations:                       # Issues punted to Coach K
   - issue: string
@@ -202,8 +212,11 @@ Nice-to-have improvements for code quality and maintainability.
 ### Production Readiness
 - Deployment risks
 - Rollback capability
-- Backward compatibility
+- Backward compatibility (YES/NO with evidence)
 - Monitoring coverage
+- **Breaking changes** — explicitly flag: API breaking, DB destructive, shared library, auth/security, data pipeline, config changes
+- **Safe to deploy** — overall boolean with justification
+- **Rollback plan** — how to undo if it goes wrong
 
 ### Escalations
 Issues punted to Coach K (with reason and who should handle).
