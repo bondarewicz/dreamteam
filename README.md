@@ -12,7 +12,7 @@ Source of truth for all Claude Code agents and commands. Install once, use every
 | **mj** | `/mj` | Michael Jordan | Strategic Systems Architect | **opus** | 50 |
 | **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | **opusplan** | 100 |
 | **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | **opus** | 50 |
-| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | sonnet | 50 |
+| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | **opus** | 50 |
 | **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | sonnet | 50 |
 
 ### Agent capabilities
@@ -26,107 +26,20 @@ Each agent has restricted tool access based on its role:
 | shaq | All except Task | Full implementer — writes code |
 | kobe | Read, Grep, Glob, Bash, Edit | Quality review + can fix critical bugs directly |
 | pippen | Read, Grep, Glob, Bash | Stability review — checks runtime |
-| magic | Read, Grep, Glob | Synthesis only |
+| magic | Read, Grep, Glob, Write, Edit | Synthesis + writes handoff briefs and retros to disk |
 
 Agents with `memory: user` (kobe, magic) learn across sessions — remembering review patterns, failure modes, and past decisions.
 
-## When to use each agent
+### Key agent features
 
-### `/bird` — "Is this correct?"
+Every agent includes these cross-cutting capabilities:
 
-Use Bird when you need to validate business logic or define what "right" looks like before writing code.
+- **Output Schema** — structured required fields that Coach K validates before handoffs. Prevents the #1 multi-agent failure mode: agents talking past each other due to freeform outputs.
+- **Escalation Protocol** — agent-specific rules for when to stop and ask instead of guessing. Each agent knows what kinds of uncertainty warrant escalation to Coach K.
+- **Confidence Assessment** — self-reported confidence level (0-100%), high/low confidence areas, and assumptions. Helps Coach K and downstream agents calibrate trust.
+- **Turn Budget Management** — hard limits: stop research at ~70% of turns and write output. Prevents agents from spending all turns on research without delivering.
 
-- "Are these pricing rules correct?"
-- "What are the business rules for refund eligibility?"
-- "Define acceptance criteria for the checkout flow"
-- "What's the business impact of changing the order lifecycle?"
-- "Who are the stakeholders affected by this migration?"
-
-### `/mj` — "How should this be built?"
-
-Use MJ when you need architecture decisions, system design, or health diagnostics on existing code.
-
-- "Should we use event sourcing or CRUD for orders?"
-- "Design the component boundaries for the notification system"
-- "Our API response times are degrading — what should we investigate?"
-- "Review the current architecture for technical debt"
-- "What are the trade-offs between these two approaches?"
-
-### `/shaq` — "Build it."
-
-Use Shaq when you have a clear spec and need code written. He implements features, writes tests, and follows existing patterns.
-
-- "Implement this API endpoint per the spec"
-- "Add pagination to the user list"
-- "Write tests for the discount calculation"
-- "Refactor this service to use the repository pattern"
-- "Create the database migration for the new schema"
-
-### `/kobe` — "Is this safe to ship?"
-
-Use Kobe when code is written and you need a ruthless quality review before deploying. He also checks production readiness and can fix critical bugs directly.
-
-- "Review this PR for edge cases and race conditions"
-- "This handles money — find every way it could break"
-- "Is this ready to deploy? Check everything."
-- "Review the error handling in the payment service"
-- "Check if this migration is safe to run in production"
-
-### `/pippen` — "Will this hold up in production?"
-
-Use Pippen when you need to verify operational readiness — monitoring, observability, resilience, and integration between components.
-
-- "Do we have enough logging to debug this at 3am?"
-- "Check if the new service has proper health checks and metrics"
-- "Review the retry/timeout configuration"
-- "Can we roll this back safely?"
-- "How do these three services interact under failure conditions?"
-
-### `/magic` — "Summarize everything."
-
-Use Magic when you need to synthesize multiple perspectives into clear documentation, ADRs, or handoff notes.
-
-- "Summarize all the analysis and implementation work"
-- "Document why we chose event sourcing over CRUD"
-- "Create an ADR for the authentication redesign"
-- "Write handoff notes for the next team"
-- "What decisions were made and what's still open?"
-
-### `/team` — "Get the whole squad on it."
-
-Use `/team` when the task is too big for one agent. Coach K coordinates the full Dream Team — from domain analysis through implementation, review, and synthesis.
-
-- **Quick Fix** (subagents): Bug fixes, small features, focused changes
-- **PR Review** (subagents): Review a PR or branch — Bird + MJ + Kobe in parallel, output stays local
-- **Full Team** (agent teams): New features, architecture changes, complex multi-file work
-
-```
-/team Add pagination to the user list           # Quick Fix territory
-/team Review PR #1217                           # PR Review territory
-/team Build a real-time notification system      # Full Team territory
-/team Fix the race condition in checkout         # Quick Fix territory
-```
-
-### `/code-review` — "Review this PR."
-
-Use `/code-review` for automated, multi-agent pull request review. Based on the [official Claude Code code-review plugin](https://github.com/anthropics/claude-code/tree/main/plugins/code-review), adapted for local-only output.
-
-- "Review PR #42 for bugs and guideline compliance"
-- "Check this PR before I merge"
-
-Launches 4+ parallel agents to independently audit changes:
-- **2x CLAUDE.md compliance agents** — check guideline adherence
-- **2x bug detector agents** — find obvious bugs and security issues in the diff
-- **Validation agents** — verify each finding is real (reduces false positives)
-
-All output stays in the terminal. Nothing is ever posted to GitHub.
-
-```
-/code-review 42        # Review PR #42
-/code-review           # Review current branch's PR
-```
-
-### Decision tree
+## When to use what
 
 ```mermaid
 graph LR
@@ -142,9 +55,20 @@ graph LR
     Q -->|Full pipeline| team["`**/team**`"]
 ```
 
+| Command | When to reach for it | Examples |
+|---------|---------------------|----------|
+| `/bird` | Validate business logic or define what "right" looks like | "Are these pricing rules correct?", "Define acceptance criteria for checkout" |
+| `/mj` | Architecture decisions, system design, or health diagnostics | "Should we use event sourcing or CRUD?", "Diagnose our API latency" |
+| `/shaq` | Clear spec, need code written | "Implement this endpoint per the spec", "Write tests for discount calc" |
+| `/kobe` | Code is written, need ruthless quality review | "This handles money — find every way it could break" |
+| `/pippen` | Verify operational readiness | "Do we have enough logging to debug at 3am?" |
+| `/magic` | Synthesize perspectives into docs/ADRs | "Document why we chose event sourcing" |
+| `/team` | Task too big for one agent | "Build a real-time notification system" |
+| `/code-review` | Automated PR review | "/code-review 42" |
+
 ## /team — Coach K Orchestration
 
-The `/team` command launches Coach K, who coordinates the Dream Team. You choose the mode:
+The `/team` command launches Coach K, who coordinates the Dream Team. Three modes:
 
 ### Quick Fix — Subagents (within session)
 
@@ -154,15 +78,20 @@ For bug fixes, small features, and focused changes. Sequential subagents, lower 
 graph LR
     User --> Coach_K[Coach K]
     Coach_K --> Bird["Bird (domain)"]
-    Bird --> Shaq["Shaq (implement)"]
-    Shaq --> Kobe["Kobe (review)"]
+    Bird -->|curated brief| Shaq["Shaq (implement)"]
+    Shaq -->|summary + confidence| Kobe["Kobe (review)"]
     Kobe --> Magic["Magic (synthesize)"]
 ```
 
-1. **Bird** defines business rules and acceptance criteria
-2. **Shaq** implements the code with tests
-3. **Kobe** reviews for critical risks (max 3 findings)
-4. **Magic** synthesizes everything into a summary
+1. **Bird** defines business rules and acceptance criteria (with output schema)
+2. **Coach K** curates a focused brief for Shaq — only the domain rules, acceptance criteria, and terms needed
+3. **Shaq** implements the code with tests, maps back to Bird's acceptance criteria
+4. **Kobe** reviews for critical risks, guided by Shaq's low-confidence areas
+5. **Magic** synthesizes everything with team metrics
+
+Coach K curates context per agent rather than dumping all prior outputs. This prevents context bloat while ensuring each agent has exactly what they need.
+
+**Fix-Verify Loop:** If Kobe reports findings, Coach K re-launches Shaq to fix, then Kobe to verify. No fixes are ever skipped.
 
 ### PR Review — Subagents (parallel, local output)
 
@@ -181,60 +110,101 @@ graph LR
 ```
 
 1. **Coach K** fetches PR data using read-only `gh` commands
-2. **Bird + MJ + Kobe** review the diff in parallel (each gets the diff in their prompt)
+2. **Bird + MJ + Kobe** review the diff in parallel
 3. **Coach K** synthesizes verdicts and writes to `analysis/PR-<number>-review.md`
 
-**All `gh` commands are READ-ONLY.** Agents NEVER post comments, reviews, or modifications to GitHub. The review stays local — the user decides what to do with it.
-
-**Read-only commands used:**
-```bash
-gh pr view <N> --json title,body,files,commits,statusCheckRollup   # PR metadata
-gh pr diff <N> --patch                                              # Code changes
-gh pr diff <N> --name-only                                          # Changed files list
-gh pr checks <N> --json name,state,bucket                           # CI status
-```
+All `gh` commands are **READ-ONLY**. Nothing is ever posted to GitHub.
 
 ### Full Team — Agent Team (parallel sessions)
 
-For new features, architecture changes, and complex multi-file work. Uses the experimental [agent teams](https://code.claude.com/docs/en/agent-teams) feature — 6 independent Claude Code sessions coordinated by Coach K via shared task list and inter-agent messaging.
+For new features, architecture changes, and complex multi-file work. Uses [agent teams](https://code.claude.com/docs/en/agent-teams) — 6 independent sessions coordinated by Coach K.
 
 ```mermaid
 graph TD
-    subgraph Phase 1: Analysis & Design
+    subgraph "Phase 1: Analysis (concurrent)"
         direction LR
-        Bird["Bird (domain)"] --> MJ["MJ (architecture)"]
-        MJ --> Coach_K["Coach K (task breakdown)"]
-        Coach_K --> Approval[User approval]
+        Bird["Bird (domain)"]
+        MJ["MJ (architecture)"]
+        Bird <-->|exchange findings| MJ
     end
-    subgraph Phase 2: Implementation & Review
+    subgraph "Phase 1b: Context Curation"
+        Magic1["Magic (handoff brief)"]
+    end
+    subgraph "Phase 2: Checkpoint"
+        Coach_K["Coach K (task breakdown)"]
+        Approval[User approval]
+        Coach_K --> Approval
+    end
+    subgraph "Phase 3: Implementation"
+        Shaq["Shaq (implement)"]
+    end
+    subgraph "Phase 4: Review (parallel)"
         direction LR
-        Shaq["Shaq (implement)"] --> Kobe["Kobe (review)"]
-        Shaq --> Pippen["Pippen (review)"]
-        Kobe --> Magic["Magic (synthesize)"]
-        Pippen --> Magic
+        Kobe["Kobe (quality)"]
+        Pippen["Pippen (stability)"]
     end
+    subgraph "Phase 5: Synthesis"
+        Magic2["Magic (final synthesis)"]
+    end
+    Bird --> Magic1
+    MJ --> Magic1
+    Magic1 --> Coach_K
     Approval --> Shaq
+    Shaq --> Kobe
+    Shaq --> Pippen
+    Kobe --> Magic2
+    Pippen --> Magic2
 ```
 
-1. **Bird** provides full domain analysis, messages MJ when done
-2. **MJ** designs system architecture based on Bird's analysis
-3. **Coach K** breaks work into tasks, presents plan for user approval
-4. **Shaq** implements the full feature
-5. **Kobe** + **Pippen** review in parallel (quality + stability)
-6. **Magic** synthesizes all outputs into final documentation
+| Phase | Agents | What happens |
+|-------|--------|-------------|
+| **1. Analysis** | Bird + MJ (concurrent) | Bird defines domain rules while MJ designs architecture. They exchange findings via messages and adjust in real-time. |
+| **1b. Context Curation** | Magic | Creates a curated handoff brief for Shaq — resolves terminology mismatches, flags contradictions, distills only what's needed for implementation. |
+| **2. Checkpoint** | Coach K + User | Coach K saves checkpoint to `analysis/checkpoint-<topic>.md`, breaks work into tasks, presents plan. User approves before implementation. |
+| **3. Implementation** | Shaq | Implements from Magic's handoff brief. Must submit plan before writing code (plan mode enforced). Maps implementation back to acceptance criteria. |
+| **4. Review** | Kobe + Pippen (parallel) | Kobe reviews quality/risk, Pippen reviews stability/ops. Both receive curated context, not raw dumps. |
+| **4b. Fix-Verify** | Shaq → Kobe + Pippen | If reviewers find issues, Shaq fixes, then reviewers re-verify. Loop repeats until both say SHIP. |
+| **5. Synthesis** | Magic | Final synthesis with team metrics: escalation count, confidence levels, finding attribution, fix-verify loop count. |
 
-**Requirements for Full Team mode:**
+**Checkpointing:** Phase 1-2 outputs are saved to disk. If Phase 3 fails, earlier work is preserved — no need to re-run analysis.
+
+**Escalation handling:** When any agent escalates (domain ambiguity, spec conflicts, missing context), Coach K routes to the right specialist or asks the user directly. Escalations are tracked in the retro.
+
+**Requirements:**
 - Enable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` in settings.json or environment
-- Higher token cost (6 independent sessions)
-- If not enabled, Coach K falls back to the subagent workflow
+- If not enabled, Coach K falls back to Quick Fix subagent workflow
+
+### Retrospectives
+
+After every `/team` session, Magic produces a mandatory retrospective saved to `docs/retros/YYYY-MM-DD-<topic>.md`:
+
+- Executive summary, findings table, agent contributions
+- **Team metrics:** escalation count, confidence levels per agent, finding attribution, fix-verify loop count, contradictions detected
+- Carry-forward items and process lessons
 
 ### Git Safety
 
-No agent ever commits or pushes. The user controls all git operations.
+No agent ever commits or pushes. The user controls all git operations. Suggested git commands are provided in the final output.
+
+## /code-review — Automated PR Review
+
+Based on the [official Claude Code code-review plugin](https://github.com/anthropics/claude-code/tree/main/plugins/code-review), adapted for local-only output.
+
+Launches 4+ parallel agents:
+- **2x CLAUDE.md compliance agents** — check guideline adherence
+- **2x bug detector agents** — find bugs and security issues in the diff
+- **Validation agents** — verify each finding is real (reduces false positives)
+
+All output stays in the terminal. Nothing is ever posted to GitHub.
+
+```
+/code-review 42        # Review PR #42
+/code-review           # Review current branch's PR
+```
 
 ## Installation
 
-### 1. Clone and install agents
+### 1. Clone and install
 
 ```bash
 git clone <this-repo> ~/Github/Bondarewicz/dreamteam
@@ -242,15 +212,11 @@ cd ~/Github/Bondarewicz/dreamteam
 ./install.sh
 ```
 
-The installer:
-1. Backs up existing `~/.claude/agents/` and `~/.claude/commands/`
-2. Copies all 6 agent files to `~/.claude/agents/`
-3. Copies all 7 command files to `~/.claude/commands/`
-4. Removes old files (penny.md, guardian.md, etc.) if present
+The installer backs up existing files, then copies all agents to `~/.claude/agents/` and commands to `~/.claude/commands/`.
 
-### 2. Enable agent teams (required for Full Team mode)
+### 2. Enable agent teams (optional, for Full Team mode)
 
-Agent teams are an experimental Claude Code feature that lets `/team` spawn 6 parallel sessions. Add this to your `~/.claude/settings.json`:
+Add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -260,15 +226,9 @@ Agent teams are an experimental Claude Code feature that lets `/team` spawn 6 pa
 }
 ```
 
-Without this setting, `/team` still works but falls back to sequential subagents (Quick Fix mode only).
-
 ### 3. Restart Claude Code
 
-Start a new session to pick up the agents, commands, and settings.
-
-### Re-installing after changes
-
-Edit agent/command files in this repo, then run `./install.sh` again. Previous files are backed up automatically.
+Start a new session to pick up changes. After any edit, run `./install.sh` again.
 
 ## Repository Structure
 
@@ -280,103 +240,57 @@ dreamteam/
 │   ├── shaq.md                # Code executor
 │   ├── kobe.md                # Quality enforcer & production readiness
 │   ├── pippen.md              # Stability & integration
-│   └── magic.md               # Context synthesizer
+│   └── magic.md               # Context synthesizer & handoff curator
 ├── commands/                  # Slash commands (8 files)
-│   ├── mj.md                  # /mj
-│   ├── bird.md                # /bird
-│   ├── shaq.md                # /shaq
-│   ├── kobe.md                # /kobe
-│   ├── pippen.md              # /pippen
-│   ├── magic.md               # /magic
+│   ├── bird.md, mj.md, shaq.md, kobe.md, pippen.md, magic.md
 │   ├── team.md                # /team (Coach K orchestrator)
 │   └── code-review.md         # /code-review (automated PR review)
+├── docs/
+│   ├── team-improvement-analysis.md  # Gap analysis with sources
+│   ├── claude-skillz-analysis.md     # Transferable patterns analysis
+│   └── retros/                       # Session retrospectives
 ├── install.sh                 # Installer script
 └── README.md
 ```
 
-## Customization
-
-All agents live in `agents/` as Markdown files with YAML frontmatter. Edit them directly.
-
-**Frontmatter fields:**
-- `name` — Agent identifier (used in `subagent_type` and agent team spawning)
-- `description` — When Claude should use this agent (with examples)
-- `model` — Claude model to use (`sonnet`, `opus`, `haiku`, `inherit`)
-- `color` — Terminal output color
-- `tools` — Allowlist of tools (inherits all if omitted)
-- `disallowedTools` — Denylist of tools
-- `memory` — Persistent memory scope (`user`, `project`, `local`)
-- `maxTurns` — Maximum agentic turns before stopping
-
-**Body:** The agent's system prompt — role, responsibilities, guardrails, output format.
-
-After editing, run `./install.sh` to deploy changes.
-
-## Models & Usage
+## Models & Tuning
 
 ### Model strategy
 
-The Dream Team is configured quality-first, with each agent on the model that best matches its reasoning demands.
+Quality-first, with each agent on the model matching its reasoning demands.
 
-| Model | Agents | What it does | Why |
-|-------|--------|-------------|-----|
-| **opus** | bird, mj, kobe | Deepest reasoning | Domain analysis, architecture design, and bug-hunting need the most nuanced thinking |
-| **opusplan** | shaq | Opus for planning, sonnet for execution | Deep reasoning when understanding specs, fast code generation when writing |
-| **sonnet** | pippen, magic | Balanced reasoning + speed | Structured reviews and synthesis don't need opus depth |
+| Model | Agents | Why |
+|-------|--------|-----|
+| **opus** | bird, mj, kobe, pippen | Domain analysis, architecture, quality review, and stability review all require deep reasoning |
+| **opusplan** | shaq | Opus for planning, sonnet for code generation |
+| **sonnet** | magic | Synthesis is structured and doesn't need opus depth |
 
-### Available models
-
-| Model | Reasoning | Speed | Code Gen | Context | Best for |
-|-------|-----------|-------|----------|---------|----------|
-| `opus` | Deepest | Moderate | Excellent | 200K | Complex analysis, subtle bugs, architecture |
-| `opusplan` | Opus (plan) + Sonnet (execute) | Hybrid | Excellent | 200K | Implementation with smart planning |
-| `sonnet` | Strong | Fast | Excellent | 200K | Daily coding, structured reviews |
-| `haiku` | Good | Fastest | Very good | 200K | Simple tasks, high-volume operations |
-
-### Model tuning guide
-
-Start quality-first, then dial down where results are equivalent:
+### Tuning guide
 
 | If you notice... | Try... |
 |-----------------|--------|
-| Pippen's reviews are shallow | Upgrade pippen to `opus` |
 | Magic's synthesis is fine but slow | Downgrade magic to `haiku` |
 | Hitting rate limits on Full Team | Downgrade bird, mj to `sonnet` |
-| Kobe's findings are obvious/shallow | Keep on `opus` — this is where depth matters most |
+| Kobe's findings are obvious/shallow | Keep on `opus` — quality is where depth matters most |
+| Pippen's reviews are excellent | Could downgrade to `sonnet` to save rate limits |
 | Shaq's code quality is great | Could downgrade to `sonnet` (saves opus planning cost) |
 
-To change a model: edit the `model:` field in `agents/<name>.md`, run `./install.sh`.
+To change a model: edit `model:` in `agents/<name>.md`, run `./install.sh`.
 
 ### Turn limits
 
-Every agent has a `maxTurns` cap to prevent runaway sessions:
-
 | Agent | maxTurns | Rationale |
 |-------|----------|-----------|
-| bird | 50 | Domain analysis — hypothesis-driven, finishes in ~26 turns |
-| mj | 50 | Architecture — hypothesis-driven, finishes in ~28 turns |
-| shaq | 100 | Implementation — writes code, runs tests, iterates on failures |
-| kobe | 50 | Quality review — hypothesis-driven methodology, finishes in ~36 turns |
-| pippen | 50 | Stability review — matches analysis agent budget |
+| bird | 50 | Domain analysis — finishes in ~26 turns |
+| mj | 50 | Architecture — finishes in ~28 turns |
+| shaq | 100 | Implementation — writes code, runs tests, iterates |
+| kobe | 50 | Quality review — hard stop at turn 25 for output |
+| pippen | 50 | Stability review — matches analysis budget |
 | magic | 50 | Synthesis — reads outputs and writes summary |
-
-All agents include a **Turn Budget Management** instruction that enforces hard limits: stop research at ~70% of turns and write output. This prevents agents from spending all turns on research without delivering a final analysis.
 
 ### Usage monitoring
 
-Coach K includes a **Lineup Card** at the end of every `/team` run showing which agents ran on which models.
-
-**Built-in commands you can run anytime:**
-- `/usage` — rate limit status (Claude Max/Pro)
-- `/cost` — token counts and estimated cost (API users)
-- `/stats` — usage patterns and session history
-- `/context` — how much of the context window is filled
-
-Run `/usage` before and after a `/team` session to see the rate limit impact, then adjust agent models accordingly.
-
-### Prompt caching
-
-Claude Code automatically caches system prompts and long conversations. No configuration needed — repeated content (agent definitions, large file reads, prior context) gets cached at 90% savings on input tokens.
+Coach K includes a **Lineup Card** at the end of every `/team` run. Use `/usage` before and after a session to see rate limit impact.
 
 ## Built-in Tension (by design)
 
@@ -386,4 +300,4 @@ The Dream Team has intentional creative tension:
 - **Kobe vs Shaq** — quality vs speed
 - **Coach K vs everyone** — shipping vs perfection
 
-This tension is productive. It prevents groupthink and ensures robust solutions.
+This tension prevents groupthink and ensures robust solutions.

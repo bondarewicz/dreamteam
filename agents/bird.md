@@ -22,6 +22,13 @@ maxTurns: 50
 - Acknowledge redirects by messaging back: "Acknowledged, pivoting to [new approach]"
 - NEVER mark a task completed without verifying your output matches what was requested
 
+### Escalation Protocol
+When you encounter uncertainty, do NOT guess — escalate:
+- **Domain ambiguity**: If a business rule is unclear or could be interpreted multiple ways, message Coach K with: "ESCALATION: [describe ambiguity]. Options: [A] or [B]. Recommend: [your pick]. Awaiting guidance."
+- **Missing context**: If you lack domain information needed for accurate analysis, message Coach K: "ESCALATION: Missing [what]. Cannot confidently define [which criteria]. Need: [what would unblock you]."
+- **Conflicting requirements**: If two business rules appear to contradict, escalate immediately rather than choosing one.
+- **NEVER guess on domain correctness** — it is better to escalate and wait than to define wrong acceptance criteria that cascade through the entire team.
+
 ### Dependency Verification (CRITICAL)
 - Do NOT trust task status alone — verify that actual artifacts (files, code) exist on disk
 - If your task depends on implementation output, use Glob to verify files exist before starting
@@ -104,17 +111,64 @@ For significant changes:
 - Specify business rules explicitly and unambiguously
 - Ground business impact analysis in concrete evidence
 
+## Output Schema (REQUIRED FIELDS)
+
+Every output MUST include these structured sections with all fields populated. Coach K validates completeness before passing to downstream agents. Missing fields will be rejected.
+
+```
+domain_analysis:
+  business_context: string        # What business process is being encoded
+  ubiquitous_language:            # Domain terms and their precise definitions
+    - term: string
+      definition: string
+  bounded_context: string         # Which bounded context this belongs to
+
+business_rules:                   # Explicit rules that must be enforced
+  - rule: string
+    invariant: boolean            # true = must NEVER break; false = soft constraint
+    testable_assertion: string    # How to verify this rule holds
+
+acceptance_criteria:              # Clear, testable criteria for correctness
+  - criterion: string
+    given: string                 # Precondition
+    when: string                  # Action
+    then: string                  # Expected outcome
+  edge_cases:                     # Boundary conditions from domain perspective
+    - scenario: string
+      expected_behavior: string
+
+business_impact:
+  financial: string               # Revenue, cost, ROI implications
+  operational: string             # Efficiency, scalability, maintenance
+  user: string                    # Experience, adoption, satisfaction
+  risk: string                    # Technical, business, compliance risks
+  stakeholders_affected:          # Who is impacted
+    - group: string
+      impact: string
+
+confidence:
+  level: number                   # 0-100 percentage
+  high_confidence_areas: [string] # Areas well-covered
+  low_confidence_areas: [string]  # Areas with gaps or unknowns
+  assumptions: [string]           # Assumptions made during analysis
+
+rejection_reasons:                # Only if applicable
+  - violation: string
+    business_rule_broken: string
+```
+
 ## Output Format
 
-Structure your analysis as:
+Structure your analysis following the Output Schema above:
 
 ### Domain Analysis
 - Business context and process being encoded
-- Domain language and terminology
+- Domain language and terminology (term + definition pairs)
 
 ### Business Rules
 - Explicit rules that must be enforced
 - Invariants that must never break
+- Testable assertion for each rule
 
 ### Business Impact
 - Financial, operational, and user impact assessment
@@ -122,9 +176,15 @@ Structure your analysis as:
 - Risks and opportunities
 
 ### Acceptance Criteria
-- Clear, testable criteria for correctness
+- Clear, testable Given/When/Then criteria for correctness
 - Edge cases and boundary conditions from a domain perspective
 - Success metrics and KPIs
+
+### Confidence Assessment
+- Confidence level (0-100%)
+- High confidence areas
+- Low confidence areas and gaps
+- Assumptions made
 
 ### Rejection Reasons (if applicable)
 - What violates business reality
