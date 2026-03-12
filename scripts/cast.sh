@@ -1815,9 +1815,9 @@ CSS = """
   .meta-row { display: flex; flex-wrap: wrap; gap: 20px; color: var(--text-dim); font-size: 13px; margin-bottom: 16px; }
   .meta-row span { display: flex; align-items: center; gap: 6px; }
   .context-block { padding: 14px 18px; background: var(--surface-2); border-left: 3px solid var(--text-muted); border-radius: 0 6px 6px 0; font-size: 14px; color: var(--text-dim); line-height: 1.7; }
-  .section { padding: 32px 48px; border-bottom: 1px solid var(--border); overflow: visible; }
+  .section { padding: 32px 48px; border-bottom: 1px solid var(--border); overflow-x: clip; }
   .section-title { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 20px; }
-  .timeline-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .timeline-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
   .track-row { display: grid; grid-template-columns: 80px 1fr; border-bottom: 1px solid var(--border); }
   .track-row:last-child { border-bottom: none; }
   .track-row.human-row { background: rgba(240, 246, 252, 0.03); }
@@ -1834,7 +1834,7 @@ CSS = """
   .track-label.axis { color: var(--text-muted); font-size: 10px; font-weight: 400; }
   .track-area { position: relative; height: 52px; padding: 0; }
   .track-area::before { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(to right, transparent, transparent calc(25% - 1px), var(--surface-2) calc(25% - 1px), var(--surface-2) 25%); pointer-events: none; opacity: 0.6; }
-  .bar { position: absolute; bottom: 8px; height: 18px; border-radius: 3px; min-width: 12px; }
+  .bar { position: absolute; bottom: 8px; height: 18px; border-radius: 3px; min-width: 12px; max-width: 100%; }
   .bar.bird { background: var(--bird); }
   .bar.coach { background: var(--coach); }
   .bar.shaq { background: var(--shaq); }
@@ -2088,111 +2088,126 @@ for i in range(len(merged_occ) - 1):
 
 timeline_rows.sort(key=lambda r: r['start_idx'])
 
-human_counter = 0
+# ── Consolidated swimlane rendering ──────────────────────────────────────────
+# Instead of one row per event, render one row per swimlane (agent/Human/Coach K)
+# with multiple bars inside the same track-area.
+
+# Build swimlane order: agents by first appearance, then Human, then Coach K
+swimlane_order = []
 for row in timeline_rows:
-    if row['type'] == 'agent':
-        name = row['name']
-        d = agent_data[name]
-        css_cls = AGENT_CSS_CLASS.get(name, '')
-        start_pct = time_to_pct(d['first_time']) if d['first_time'] else 0.0
-        end_pct   = time_to_pct(d['last_time']) if d['last_time'] else 100.0
-        width_pct = max(end_pct - start_pct, 2)
-        t_first = (d['first_time'] or '')[:5]
-        t_last  = (d['last_time']  or '')[:5]
+    if row['type'] == 'agent' and row['name'] not in swimlane_order:
+        swimlane_order.append(row['name'])
+# Interleave Human row after the agent it follows (based on first human checkpoint position)
+human_rows = [r for r in timeline_rows if r['type'] == 'human']
+coach_rows = [r for r in timeline_rows if r['type'] == 'coach']
 
-        # Time range for annotation
-        if t_first == t_last:
-            ann_time = t_first
-        else:
-            ann_time = f'{t_first}\u2013{t_last}'
+# Collect bars for each swimlane
+agent_bars = {}  # name -> already rendered via single bar from first_time to last_time
+human_bars = []
+coach_bars = []
 
-        # Duration string for annotation
-        ann_dur = fmt_duration(d['duration_s']) if d['duration_s'] else ''
-
-        # Role text for annotation: verdict progression > single verdict > role
-        ann_role = ''
-        if name == 'Coach K':
-            ann_role = 'Orchestration'
-        elif d.get('verdicts') and len(d['verdicts']) > 1:
-            unique_verdicts = list(dict.fromkeys(d['verdicts']))
-            if len(unique_verdicts) > 1:
-                ann_role = ' \u2192 '.join(unique_verdicts)
-            else:
-                ann_role = unique_verdicts[0]
-        elif d['verdict']:
-            ann_role = d['verdict']
-        else:
-            ann_role = AGENT_ROLES.get(name, name)
-
-        # Render track-row
-        out.append(f'  <div class="track-row">')
-        out.append(f'    <div class="track-label {css_cls}">{h(name)}</div>')
-        out.append(f'    <div class="track-area">')
-        out.append(f'      <div class="annotation" style="left: {start_pct:.1f}%; max-width: {width_pct:.1f}%;">')
-        out.append(f'        <span class="ann-time">{h(ann_time)}</span>')
-        if ann_dur:
-            out.append(f'        <span class="ann-sep">&middot;</span>')
-            out.append(f'        <span class="ann-dur">{ann_dur}</span>')
-        if ann_role:
-            out.append(f'        <span class="ann-sep">&middot;</span>')
-            out.append(f'        <span class="ann-role">{h(ann_role)}</span>')
-        out.append(f'      </div>')
-        out.append(f'      <div class="bar {css_cls}" style="left: {start_pct:.1f}%; width: {width_pct:.1f}%;"></div>')
-        out.append(f'    </div>')
-        out.append(f'  </div>')
-
-    elif row['type'] == 'human':
+for row in timeline_rows:
+    if row['type'] == 'human':
         hev = row['hev']
-        human_counter += 1
         start_pct = time_to_pct(hev['prev_time']) if hev.get('prev_time') else 0.0
         end_pct   = time_to_pct(hev['time']) if hev.get('time') else 100.0
         width_pct = max(end_pct - start_pct, 2)
-        ann_time = f'\u2013{hev["time"][:5]}'
-        ann_dur = hev.get('wait_str', '')
-        ann_role = f'Checkpoint #{human_counter}'
-
-        out.append(f'  <div class="track-row human-row">')
-        out.append(f'    <div class="track-label human">Human</div>')
-        out.append(f'    <div class="track-area">')
-        out.append(f'      <div class="annotation" style="left: {start_pct:.1f}%; max-width: {max(width_pct, 15):.1f}%;">')
-        out.append(f'        <span class="ann-time">{h(ann_time)}</span>')
-        if ann_dur:
-            out.append(f'        <span class="ann-sep">&middot;</span>')
-            out.append(f'        <span class="ann-dur">{ann_dur}</span>')
-        out.append(f'        <span class="ann-sep">&middot;</span>')
-        out.append(f'        <span class="ann-role">{h(ann_role)}</span>')
-        out.append(f'      </div>')
-        out.append(f'      <div class="bar human" style="left: {start_pct:.1f}%; width: {width_pct:.1f}%;"></div>')
-        out.append(f'    </div>')
-        out.append(f'  </div>')
-
+        human_bars.append({'start': start_pct, 'width': width_pct, 'hev': hev})
     elif row['type'] == 'coach':
         seg = row['seg']
         start_pct = time_to_pct(seg['start_time']) if seg.get('start_time') else 0.0
         end_pct   = time_to_pct(seg['end_time']) if seg.get('end_time') else 100.0
         width_pct = max(end_pct - start_pct, 2)
-        t_start = (seg['start_time'] or '')[:5]
-        t_end = (seg['end_time'] or '')[:5]
-        if t_start == t_end:
-            ann_time = t_start
-        else:
-            ann_time = f'{t_start}\u2013{t_end}'
-        ann_dur = seg.get('dur_str', '')
+        coach_bars.append({'start': start_pct, 'width': width_pct, 'seg': seg})
 
-        out.append(f'  <div class="track-row">')
-        out.append(f'    <div class="track-label coach">Coach K</div>')
-        out.append(f'    <div class="track-area">')
-        out.append(f'      <div class="annotation" style="left: {start_pct:.1f}%; max-width: {max(width_pct, 15):.1f}%;">')
-        out.append(f'        <span class="ann-time">{h(ann_time)}</span>')
-        if ann_dur:
-            out.append(f'        <span class="ann-sep">&middot;</span>')
-            out.append(f'        <span class="ann-dur">{ann_dur}</span>')
+# Ensure bar is visible: enforce minimum width, shift left if needed to stay in bounds
+def clamp_bar(left, width):
+    min_w = 3.0
+    width = max(width, min_w)
+    left = min(left, 100.0 - min_w)
+    if left + width > 100.0:
+        left = max(0.0, 100.0 - width)
+    return left, width
+
+# Render agent rows (one row per agent, single bar; skip Coach K — shown via gap segments)
+for name in swimlane_order:
+    if name == 'Coach K':
+        continue
+    d = agent_data[name]
+    css_cls = AGENT_CSS_CLASS.get(name, '')
+    start_pct = time_to_pct(d['first_time']) if d['first_time'] else 0.0
+    end_pct   = time_to_pct(d['last_time']) if d['last_time'] else 100.0
+    width_pct = max(end_pct - start_pct, 2)
+    start_pct, width_pct = clamp_bar(start_pct, width_pct)
+    t_first = (d['first_time'] or '')[:5]
+    t_last  = (d['last_time']  or '')[:5]
+    ann_time = t_first if t_first == t_last else f'{t_first}\u2013{t_last}'
+    ann_dur = fmt_duration(d['duration_s']) if d['duration_s'] else ''
+    ann_role = ''
+    if d.get('verdicts') and len(d['verdicts']) > 1:
+        unique_verdicts = list(dict.fromkeys(d['verdicts']))
+        ann_role = ' \u2192 '.join(unique_verdicts) if len(unique_verdicts) > 1 else unique_verdicts[0]
+    elif d['verdict']:
+        ann_role = d['verdict']
+    else:
+        ann_role = AGENT_ROLES.get(name, name)
+
+    # Position annotation above the (possibly shifted) bar
+    bar_left, bar_width = clamp_bar(start_pct, width_pct)
+    if bar_left > 50:
+        # Anchor at right edge of bar, items flow right-to-left
+        right_val = max(0.5, 100.0 - bar_left - bar_width)
+        ann_style = f'right: {right_val:.1f}%; flex-direction: row-reverse;'
+    else:
+        ann_style = f'left: {bar_left:.1f}%;'
+
+    out.append(f'  <div class="track-row">')
+    out.append(f'    <div class="track-label {css_cls}">{h(name)}</div>')
+    out.append(f'    <div class="track-area">')
+    out.append(f'      <div class="annotation" style="{ann_style}">')
+    out.append(f'        <span class="ann-time">{h(ann_time)}</span>')
+    if ann_dur:
         out.append(f'        <span class="ann-sep">&middot;</span>')
-        out.append(f'        <span class="ann-role">Orchestration</span>')
-        out.append(f'      </div>')
-        out.append(f'      <div class="bar coach" style="left: {start_pct:.1f}%; width: {width_pct:.1f}%;"></div>')
-        out.append(f'    </div>')
-        out.append(f'  </div>')
+        out.append(f'        <span class="ann-dur">{ann_dur}</span>')
+    if ann_role:
+        out.append(f'        <span class="ann-sep">&middot;</span>')
+        out.append(f'        <span class="ann-role">{h(ann_role)}</span>')
+    out.append(f'      </div>')
+    out.append(f'      <div class="bar {css_cls}" style="left: {start_pct:.1f}%; width: {width_pct:.1f}%;"></div>')
+    out.append(f'    </div>')
+    out.append(f'  </div>')
+
+# Render consolidated Human row (one row, multiple bars)
+if human_bars:
+    out.append(f'  <div class="track-row human-row">')
+    out.append(f'    <div class="track-label human">Human</div>')
+    out.append(f'    <div class="track-area">')
+    first = human_bars[0]
+    total_checkpoints = len(human_bars)
+    ann_text = f'{total_checkpoints} checkpoint{"s" if total_checkpoints != 1 else ""}'
+    out.append(f'      <div class="annotation" style="left: {first["start"]:.1f}%; max-width: 30%;">')
+    out.append(f'        <span class="ann-role">{h(ann_text)}</span>')
+    out.append(f'      </div>')
+    for bar in human_bars:
+        bl, bw = clamp_bar(bar['start'], bar['width'])
+        out.append(f'      <div class="bar human" style="left: {bl:.1f}%; width: {bw:.1f}%;"></div>')
+    out.append(f'    </div>')
+    out.append(f'  </div>')
+
+# Render consolidated Coach K row (one row, multiple bars)
+if coach_bars:
+    out.append(f'  <div class="track-row">')
+    out.append(f'    <div class="track-label coach">Coach K</div>')
+    out.append(f'    <div class="track-area">')
+    first_c = coach_bars[0]
+    out.append(f'      <div class="annotation" style="left: {first_c["start"]:.1f}%; max-width: 30%;">')
+    out.append(f'        <span class="ann-role">Orchestration</span>')
+    out.append(f'      </div>')
+    for bar in coach_bars:
+        bl, bw = clamp_bar(bar['start'], bar['width'])
+        out.append(f'      <div class="bar coach" style="left: {bl:.1f}%; width: {bw:.1f}%;"></div>')
+    out.append(f'    </div>')
+    out.append(f'  </div>')
 
 # Time axis row with tick marks
 if timeline_segments:
