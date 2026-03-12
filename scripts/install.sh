@@ -71,7 +71,23 @@ done
 echo "  $cmd_count commands installed."
 echo ""
 
-# --- Step 6: Ensure recording directories exist ---
+# --- Step 6: Install scripts ---
+SCRIPTS_DST="$CLAUDE_DIR/scripts"
+mkdir -p "$SCRIPTS_DST"
+echo "Installing scripts..."
+script_count=0
+for script_file in "$SCRIPT_DIR"/*.sh; do
+    filename=$(basename "$script_file")
+    [[ "$filename" == "install.sh" ]] && continue
+    cp "$script_file" "$SCRIPTS_DST/$filename"
+    chmod +x "$SCRIPTS_DST/$filename"
+    echo "  + $filename"
+    script_count=$((script_count + 1))
+done
+echo "  $script_count scripts installed."
+echo ""
+
+# --- Step 7: Ensure recording directories exist ---
 mkdir -p "$REPO_DIR/docs/recordings"
 mkdir -p "$REPO_DIR/docs/retros"
 
@@ -85,6 +101,9 @@ echo "  shaq    — Primary Code Executor"
 echo "  kobe    — Quality & Risk Enforcer"
 echo "  pippen  — Stability, Integration & Defense"
 echo "  magic   — Context Synthesizer & Team Glue"
+echo ""
+echo "Scripts:"
+echo "  cast.sh — Session recording helper"
 echo ""
 echo "Commands:"
 echo "  /mj           — Architecture design & health diagnostics"
