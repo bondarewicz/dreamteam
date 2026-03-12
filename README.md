@@ -302,6 +302,19 @@ To change a model: edit `model:` in `agents/<name>.md`, run `./scripts/install.s
 | pippen | 50 | Stability review — matches analysis budget |
 | magic | 50 | Synthesis — reads outputs and writes summary |
 
+### Model and Thinking Configuration
+
+| Agent | Model | Effort Level | Rationale |
+|-------|-------|--------------|-----------|
+| bird  | opus  | high         | Domain analysis benefits from deep reasoning |
+| mj    | opus  | high         | Architecture trade-offs require extended thinking |
+| kobe  | opus  | high         | Code review requires thorough pattern matching |
+| pippen| opus  | high         | Stability review requires thorough integration and operational analysis |
+| shaq  | opusplan | medium    | Implementation is execution-heavy, not reasoning-heavy |
+| magic | sonnet| low          | Synthesis is structured writing, not complex reasoning |
+
+> **Warning:** Do NOT set `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1`. Adaptive thinking is active by default and allows the model to dynamically scale its thinking budget. Disabling it removes a meaningful quality lever with no compensating benefit.
+
 ### Usage monitoring
 
 Coach K includes a **Lineup Card** at the end of every `/team` run. Use `/usage` before and after a session to see rate limit impact.
