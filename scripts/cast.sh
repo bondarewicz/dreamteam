@@ -19,9 +19,45 @@
 #   cast.sh timeline <file>            Generate visual timeline and append to cast file
 #   cast.sh preview <file>             Render cast file as terminal text (playback preview)
 #   cast.sh export-html <file>        Generate standalone HTML retro report
+#   cast.sh strip-idle <file> [--threshold <secs>]  Strip idle gaps (default 30s), output to <file>.stripped.cast
+#   cast.sh wrap <file> <command...>   Record real terminal via script(1), merge o+m events on exit
+#   cast.sh rec  <file> <title> -- <command...>  Record real terminal with marker sidecar
 #
 # State is tracked in <file>.state (stores last event timestamp as float seconds).
 # Intervals are float seconds per asciicast v3 spec.
+#
+# REC MODE ARCHITECTURE
+# ---------------------
+# The "rec" command (cmd_rec) records a real terminal session using asciinema.
+# During that session asciinema owns the terminal and writes all visible output
+# as "o" events directly into the cast file with its own precise timing.
+# cast.sh commands (agent, human, marker, phase, finish, event) cannot append
+# to the cast file during this window -- doing so would corrupt asciinema's
+# sequential o-event stream.
+#
+# Dual-path design:
+#   Normal path  -- cast.sh writes o and m events directly to the cast file.
+#   Rec-mode path -- cast.sh writes timestamped markers to a sidecar file
+#                    (<file>.markers) instead.
+#
+# Session lifecycle:
+#   1. cmd_rec creates the rec signal file (.cast-rec-active) containing the
+#      session start epoch and the sidecar path, then starts asciinema.
+#   2. Any cast.sh command calls _check_rec_mode; if the signal file exists,
+#      it reads REC_START and REC_MARKERS from it and returns 0 (rec mode).
+#   3. The command calls _write_rec_marker, which computes a delta from
+#      REC_START and appends a JSON entry to the sidecar.
+#   4. When asciinema exits, cmd_rec removes the signal file (ending rec mode)
+#      then calls _merge_markers to sort-merge the sidecar m events into the
+#      cast file's existing events by timestamp.
+#   5. The sidecar is deleted; the final cast file contains both o and m events.
+
+# OUTPUT FORMAT
+# -------------
+# All visible "o" events use plain timestamped text (e.g., "[HH:MM:SS] Agent: msg").
+# Each o event is paired with a structured JSON "m" event (dual-channel pattern).
+# This ensures recordings are readable both as raw terminal output and as
+# machine-parseable data for the HTML report exporter.
 
 set -euo pipefail
 
@@ -46,22 +82,73 @@ write_last_ts() {
 }
 
 # interval_secs <cast_file>
-# Returns a fixed 0.100s delay for line-by-line scrolling.
+# Returns real elapsed seconds since last event (deltas below 0.001 or above 300s are reset to 0.001 to guard against stale state).
 # Writes real wall-clock timestamp to state file for duration reporting.
 interval_secs() {
   local cast_file="$1"
   local current
   current=$(now_secs)
+  local last_ts
+  last_ts=$(read_last_ts "$cast_file")
 
   # Store real wall-clock timestamp for reporting accuracy
   write_last_ts "$cast_file" "$current"
 
-  echo "0.100"
+  # Compute real elapsed delta (clamped to 300s max to guard against stale state files)
+  python3 -c "
+import sys
+delta = float(sys.argv[1]) - float(sys.argv[2])
+if delta < 0.001:
+    delta = 0.001
+if delta > 300:
+    print('WARNING: delta %.1fs exceeds 300s (stale state file?), clamping to 0.001' % delta, file=sys.stderr)
+    delta = 0.001
+print(f'{delta:.3f}')
+" "$current" "$last_ts"
 }
 
 # Wall-clock timestamp for log-style output
 timestamp() {
   date '+%H:%M:%S'
+}
+
+# Check if a cast file is being recorded via cmd_rec (file-based signal).
+# Uses a well-known path so ANY cast.sh command (even with a different file path)
+# detects that a rec session is active and writes markers to the sidecar.
+# Returns 0 if in rec mode, 1 otherwise. Sets REC_START and REC_MARKERS.
+_rec_signal_file() {
+  local repo_root
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "$HOME")
+  echo "${repo_root}/.cast-rec-active"
+}
+
+_check_rec_mode() {
+  local rec_file
+  rec_file=$(_rec_signal_file)
+  if [[ -f "$rec_file" ]]; then
+    # Signal file format: line 1 = start epoch, line 2 = markers sidecar path, line 3 = PID
+    REC_START=$(sed -n '1p' "$rec_file")
+    REC_MARKERS=$(sed -n '2p' "$rec_file")
+    local rec_pid
+    rec_pid=$(sed -n '3p' "$rec_file")
+    # Staleness check: if PID is recorded, verify process is still alive
+    if [[ -n "$rec_pid" ]] && ! kill -0 "$rec_pid" 2>/dev/null; then
+      echo "WARNING: Removing stale .cast-rec-active (PID $rec_pid is dead)" >&2
+      rm -f "$rec_file"
+      return 1
+    fi
+    return 0
+  fi
+  return 1
+}
+
+# Write a structured marker to the sidecar during rec mode.
+# $1 = JSON string of the m-event data (same format as normal-path m events)
+_write_rec_marker() {
+  local m_data="$1"
+  local delta
+  delta=$(python3 -c "import time; print(f'{time.time() - $REC_START:.6f}')")
+  echo "{\"delta\": $delta, \"data\": $m_data}" >> "$REC_MARKERS"
 }
 
 escape_json() {
@@ -86,7 +173,7 @@ agent_color() {
     Pippen) printf '\033[36m' ;;
     Magic)  printf '\033[33m' ;;
     Human)    printf '\033[1;97m' ;;
-    "Coach K") printf '\033[38;2;224;148;64m' ;;
+    "Coach K") printf '\033[38;2;232;99;140m' ;;
     *)         printf '' ;;
   esac
 }
@@ -127,24 +214,24 @@ cmd_init() {
   echo "{\"version\":3,\"term\":{\"cols\":120,\"rows\":40},\"timestamp\":${ts},\"title\":${title_json},\"env\":{\"SHELL\":\"$SHELL\"}}" > "$file"
   write_last_ts "$file" "$now"
 
-  # Opening banner — prominent SESSION START
+  # o event
   local ts_str
   ts_str=$(timestamp)
-  local heavy_sep
-  heavy_sep=$(escape_json_line $'\033[2m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m')
   local bl
-  bl=$(escape_json_line $'\033[1;37m  SESSION START: '"$title"$'\033[0m')
-  local blank
-  blank=$(escape_json_line "")
-  echo "[0.000, \"o\", ${heavy_sep}]" >> "$file"
-  echo "[0.100, \"o\", ${bl}]" >> "$file"
-  echo "[0.100, \"o\", ${heavy_sep}]" >> "$file"
-  echo "[0.100, \"o\", ${blank}]" >> "$file"
+  bl=$(escape_json_line "[$ts_str] SESSION START: $title")
+  echo "[0.000, \"o\", ${bl}]" >> "$file"
 
   echo "$file"
 }
 
 cmd_event() {
+  if _check_rec_mode "$1"; then
+    local ts; ts=$(date +%H:%M:%S)
+    local m_data
+    m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'event','msg':sys.argv[1],'ts':sys.argv[2]}))" "$2" "$ts")
+    _write_rec_marker "$m_data"
+    return 0
+  fi
   local file="$1"
   local text="$2"
   if [[ ! -f "$file" ]]; then
@@ -160,18 +247,24 @@ cmd_event() {
   delta=$(interval_secs "$file")
   local ts
   ts=$(timestamp)
+  # o event
   local line data
-  # TASK CONTEXT lines use dim color
-  if [[ "$text" == TASK\ CONTEXT:* ]]; then
-    line=$'\033[2m'"[$ts] $text"$'\033[0m'
-  else
-    line="[$ts] $text"
-  fi
+  line="[$ts] $text"
   data=$(escape_json_line "$line")
   echo "[${delta}, \"o\", ${data}]" >> "$file"
+  # m event
+  local m_data
+  m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'event','msg':sys.argv[1],'ts':sys.argv[2]}))" "$text" "$ts")
+  echo "[${delta}, \"m\", ${m_data}]" >> "$file"
 }
 
 cmd_marker() {
+  if _check_rec_mode "$1"; then
+    local m_data
+    m_data=$(escape_json "$2")
+    _write_rec_marker "$m_data"
+    return 0
+  fi
   local file="$1"
   local label="$2"
   local delta
@@ -181,8 +274,15 @@ cmd_marker() {
   echo "[${delta}, \"m\", ${data}]" >> "$file"
 }
 
-# Phase events: compute delta once, reuse for both marker and banner (AC8)
+# Phase events: compute delta once, reuse for both marker and banner (single delta reused for paired m+o events)
 cmd_phase() {
+  if _check_rec_mode "$1"; then
+    local ts; ts=$(date +%H:%M:%S)
+    local m_data
+    m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'phase','msg':sys.argv[1],'ts':sys.argv[2]}))" "$2" "$ts")
+    _write_rec_marker "$m_data"
+    return 0
+  fi
   local file="$1"
   local label="$2"
   if [[ ! -f "$file" ]]; then
@@ -198,38 +298,25 @@ cmd_phase() {
   delta=$(interval_secs "$file")
   local ts
   ts=$(timestamp)
-  local marker_data
-  marker_data=$(escape_json "$label")
-  echo "[${delta}, \"m\", ${marker_data}]" >> "$file"
-  local blank
-  blank=$(escape_json_line "")
-
-  # Workflow header (Quick Fix, Full Team, PR Review) gets a prominent banner
-  if [[ "$label" == Quick\ Fix:* || "$label" == Full\ Team:* || "$label" == PR\ Review:* ]]; then
-    local heavy_sep
-    heavy_sep=$(escape_json_line $'\033[2m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m')
-    echo "[${delta}, \"o\", ${blank}]" >> "$file"
-    echo "[${delta}, \"o\", ${heavy_sep}]" >> "$file"
-    local banner
-    banner=$(escape_json_line $'\033[1;37m  '"$label"$'\033[0m')
-    echo "[${delta}, \"o\", ${banner}]" >> "$file"
-    echo "[${delta}, \"o\", ${heavy_sep}]" >> "$file"
-    echo "[${delta}, \"o\", ${blank}]" >> "$file"
-  else
-    # Regular phase: dim thin separators
-    local sep
-    sep=$(escape_json_line $'\033[2m────────────────────────────────────────────────────────────────────\033[0m')
-    echo "[${delta}, \"o\", ${blank}]" >> "$file"
-    echo "[${delta}, \"o\", ${sep}]" >> "$file"
-    local banner
-    banner=$(escape_json_line $'\033[1;37m'"[$ts] $label"$'\033[0m')
-    echo "[${delta}, \"o\", ${banner}]" >> "$file"
-    echo "[${delta}, \"o\", ${sep}]" >> "$file"
-    echo "[${delta}, \"o\", ${blank}]" >> "$file"
-  fi
+  # m event
+  local m_data
+  m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'phase','msg':sys.argv[1],'ts':sys.argv[2]}))" "$label" "$ts")
+  echo "[${delta}, \"m\", ${m_data}]" >> "$file"
+  # o event
+  local banner
+  banner=$(escape_json_line "[$ts] PHASE: $label")
+  echo "[${delta}, \"o\", ${banner}]" >> "$file"
 }
 
 cmd_agent() {
+  # Rec-mode early return: positional args used directly since local vars are assigned after this block
+  if _check_rec_mode "$1"; then
+    local ts; ts=$(date +%H:%M:%S)
+    local m_data
+    m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'agent','agent':sys.argv[1],'msg':sys.argv[2],'ts':sys.argv[3]}))" "$2" "$3" "$ts")
+    _write_rec_marker "$m_data"
+    return 0
+  fi
   local file="$1"
   local name="$2"
   local msg="$3"
@@ -246,25 +333,26 @@ cmd_agent() {
   delta=$(interval_secs "$file")
   local ts
   ts=$(timestamp)
-  local color
-  color=$(agent_color "$name")
-  local reset
-  reset=$(printf '\033[0m')
-  # Color severity badges within the message body
-  local colored_msg
-  colored_msg=$(color_badges "$msg")
+  # o event
   local line data
-  if [[ -n "$color" ]]; then
-    line="${color}[$ts] [$name]${reset} ${colored_msg}"
-  else
-    line="[$ts] [$name] ${colored_msg}"
-  fi
+  line="[$ts] $name: $msg"
   data=$(escape_json_line "$line")
   echo "[${delta}, \"o\", ${data}]" >> "$file"
+  # m event
+  local m_data
+  m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'agent','agent':sys.argv[1],'msg':sys.argv[2],'ts':sys.argv[3]}))" "$name" "$msg" "$ts")
+  echo "[${delta}, \"m\", ${m_data}]" >> "$file"
 }
 
-# Human events: compute delta once, reuse for both marker and banner (AC8)
+# Human events: compute delta once, reuse for both marker and banner (single delta reused for paired m+o events)
 cmd_human() {
+  if _check_rec_mode "$1"; then
+    local ts; ts=$(date +%H:%M:%S)
+    local m_data
+    m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'human','msg':sys.argv[1],'ts':sys.argv[2]}))" "$2" "$ts")
+    _write_rec_marker "$m_data"
+    return 0
+  fi
   local file="$1"
   local msg="$2"
   if [[ ! -f "$file" ]]; then
@@ -280,15 +368,24 @@ cmd_human() {
   delta=$(interval_secs "$file")
   local ts
   ts=$(timestamp)
-  local marker_data
-  marker_data=$(escape_json "Human: $msg")
-  echo "[${delta}, \"m\", ${marker_data}]" >> "$file"
+  # m event
+  local m_data
+  m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'human','msg':sys.argv[1],'ts':sys.argv[2]}))" "$msg" "$ts")
+  echo "[${delta}, \"m\", ${m_data}]" >> "$file"
+  # o event
   local data
-  data=$(escape_json_line $'\033[1;97m'"[$ts] HUMAN: $msg"$'\033[0m')
+  data=$(escape_json_line "[$ts] Human: $msg")
   echo "[${delta}, \"o\", ${data}]" >> "$file"
 }
 
 cmd_finish() {
+  if _check_rec_mode "$1"; then
+    local ts; ts=$(date +%H:%M:%S)
+    local m_data
+    m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'finish','msg':'SESSION COMPLETE','ts':sys.argv[1]}))" "$ts")
+    _write_rec_marker "$m_data"
+    return 0
+  fi
   local file="$1"
 
   if grep -q '"x"' "$file"; then
@@ -300,8 +397,13 @@ cmd_finish() {
   ts_str=$(timestamp)
   local delta bl
   delta=$(interval_secs "$file")
-  bl=$(escape_json_line $'\033[1;37m'"[$ts_str] SESSION COMPLETE"$'\033[0m')
+  # o event
+  bl=$(escape_json_line "[$ts_str] SESSION COMPLETE")
   echo "[${delta}, \"o\", ${bl}]" >> "$file"
+  # m event
+  local m_data
+  m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'finish','msg':'SESSION COMPLETE','ts':sys.argv[1]}))" "$ts_str")
+  echo "[${delta}, \"m\", ${m_data}]" >> "$file"
 
   delta=$(interval_secs "$file")
   echo "[${delta}, \"x\", \"0\"]" >> "$file"
@@ -310,7 +412,7 @@ cmd_finish() {
   rm -f "$file.state"
 }
 
-# Robust reopen: pattern-match for exit event and SESSION COMPLETE banner (AC4, AC5)
+# Robust reopen: pattern-match for exit event and SESSION COMPLETE banner (AC4: pattern-match exit event; AC5: handle already-open files)
 cmd_reopen() {
   local file="$1"
   if [[ ! -f "$file" ]]; then
@@ -318,7 +420,7 @@ cmd_reopen() {
     return 1
   fi
 
-  # Check if file has an exit event -- if not, it's already open (AC5)
+  # Check if file has an exit event -- if not, it's already open (handle already-open files)
   if ! grep -q '"x"' "$file"; then
     echo "WARNING: $file is already open (no exit event found). No changes made." >&2
     # Restore state file if missing
@@ -358,19 +460,119 @@ cmd_reopen() {
   # Restore state file with current timestamp
   write_last_ts "$file" "$(now_secs)"
 
-  # Add continuation marker -- single delta for both events (AC8 pattern)
-  local ts_str bl delta
+  # Add continuation marker -- single delta for both events (single delta reused for paired m+o events)
+  local ts_str bl delta m_data
   ts_str=$(timestamp)
   delta=$(interval_secs "$file")
-  echo "[${delta}, \"m\", \"Session continued\"]" >> "$file"
+  m_data=$(python3 -c "import json,sys; print(json.dumps({'type':'event','msg':'Session continued','ts':sys.argv[1]}))" "$ts_str")
+  echo "[${delta}, \"m\", ${m_data}]" >> "$file"
+  # o event
   bl=$(escape_json_line "[$ts_str] SESSION CONTINUED")
   echo "[${delta}, \"o\", ${bl}]" >> "$file"
 
   echo "$file"
 }
 
-# Upload with error handling (AC7)
+# Convert v3 cast to v2 format, converting structured m events to string labels.
+# Returns the path to a v2-ready file (temp file if conversion needed).
+_ensure_v2() {
+  local file="$1"
+  local version
+  version=$(python3 -c "import json,sys; print(json.loads(open(sys.argv[1]).readline()).get('version',0))" "$file")
+
+  if [[ "$version" == "2" ]]; then
+    echo "$file"
+    return 0
+  fi
+
+  if [[ "$version" != "3" ]]; then
+    echo "ERROR: Unsupported cast version: $version" >&2
+    return 1
+  fi
+
+  local tmp
+  tmp=$(mktemp "${TMPDIR:-/tmp}/cast_v2_XXXXXX.cast")
+
+  python3 - "$file" "$tmp" <<'PYEOF'
+import json, sys
+
+src, dst = sys.argv[1], sys.argv[2]
+
+with open(src) as f:
+    lines = f.readlines()
+
+# Convert header
+hdr = json.loads(lines[0])
+v2_hdr = {"version": 2}
+term = hdr.get("term", {})
+v2_hdr["width"] = term.get("cols", 120)
+v2_hdr["height"] = term.get("rows", 40)
+if "timestamp" in hdr:
+    v2_hdr["timestamp"] = hdr["timestamp"]
+if "title" in hdr:
+    v2_hdr["title"] = hdr["title"]
+if "env" in hdr:
+    v2_hdr["env"] = hdr["env"]
+
+out_lines = [json.dumps(v2_hdr)]
+
+# v3 uses relative deltas, v2 uses cumulative timestamps from start
+cumulative = 0.0
+
+for raw in lines[1:]:
+    raw = raw.strip()
+    if not raw:
+        continue
+    ev = json.loads(raw)
+    if len(ev) < 3:
+        continue
+    delta, etype, data = ev[0], ev[1], ev[2]
+    cumulative += delta
+
+    if etype == "o":
+        out_lines.append(json.dumps([round(cumulative, 6), "o", data]))
+    elif etype == "m":
+        # Convert dict data to a readable label string
+        if isinstance(data, dict):
+            t = data.get("type", "")
+            msg = data.get("msg", "")
+            agent = data.get("agent", "")
+            if t == "phase":
+                label = msg
+            elif t == "agent" and agent:
+                label = f"{agent}: {msg}"
+            elif t == "human":
+                label = f"Human: {msg}"
+            elif t == "finish":
+                label = "Session complete" if not msg else msg.capitalize() if msg.isupper() else msg
+                # Normalize common finish messages
+                if label.upper() == "SESSION COMPLETE":
+                    label = "Session complete"
+            elif t == "event":
+                label = msg
+            else:
+                label = msg if msg else str(data)
+        else:
+            label = str(data)
+        out_lines.append(json.dumps([round(cumulative, 6), "m", label]))
+    # "x" events: drop (v2 has no exit event type)
+
+with open(dst, "w") as f:
+    f.write("\n".join(out_lines) + "\n")
+PYEOF
+
+  echo "$tmp"
+}
+
+# Upload with error handling (error handling with clear messages)
 cmd_upload() {
+  # In rec mode, the team alias handles upload after session ends — skip here
+  if _check_rec_mode "$1" 2>/dev/null; then
+    echo "SKIP: Upload deferred — team alias will upload after session ends." >&2
+    echo "(rec mode active)"
+    return 0
+  fi
+
   local file="$1"
   local title="${2:-}"
 
@@ -386,20 +588,38 @@ cmd_upload() {
     return 1
   fi
 
-  if ! grep -q '"x"' "$file"; then
+  # v3 files have "x" exit events; v2 files from cmd_rec don't — check only for v3
+  local version
+  version=$(python3 -c "import json,sys; print(json.loads(open(sys.argv[1]).readline()).get('version',0))" "$file" 2>/dev/null || echo "0")
+  if [[ "$version" == "3" ]] && ! grep -q '"x"' "$file"; then
     echo "ERROR: Cast file is not complete (no exit event). Run 'finish' first." >&2
     return 1
   fi
+
+  # Strip idle time before upload — no one wants to watch waiting
+  local stripped_file="${file}.stripped.cast"
+  cmd_strip_idle "$file"
+  local work_file="$stripped_file"
+
+  # Convert to v2 if needed, converting structured m events to string labels
+  local upload_file
+  upload_file=$(_ensure_v2 "$work_file") || return $?
 
   local args=(upload --visibility unlisted)
   if [[ -n "$title" ]]; then
     args+=(--title "$title")
   fi
-  args+=("$file")
+  args+=("$upload_file")
 
   local output exit_code
   output=$(asciinema "${args[@]}" 2>&1) || exit_code=$?
   exit_code=${exit_code:-0}
+
+  # Clean up temp files
+  if [[ "$upload_file" != "$work_file" ]]; then
+    rm -f "$upload_file"
+  fi
+  rm -f "$stripped_file"
 
   if [[ $exit_code -ne 0 ]]; then
     echo "ERROR: asciinema upload failed (exit code $exit_code):" >&2
@@ -626,6 +846,7 @@ AGENT_COLORS = {
     'Pippen': '\033[36m',
     'Magic':  '\033[33m',
     'Human':  '\033[1;97m',
+    'Coach K': '\033[38;2;232;99;140m',
 }
 # ANSI background colors for bars
 AGENT_BG = {
@@ -636,6 +857,7 @@ AGENT_BG = {
     'Pippen': '\033[46m',
     'Magic':  '\033[43m',
     'Human':  '\033[107m',
+    'Coach K': '\033[48;2;232;99;140m',
 }
 RESET = '\033[0m'
 DIM   = '\033[2m'
@@ -876,8 +1098,26 @@ with open(sys.argv[1]) as f:
 " "$file"
 }
 
-# Export cast file to standalone HTML report
+# Export cast file to standalone HTML report.
+#
+# Generates a self-contained HTML file with:
+#   - Header with session metadata and verdict badge
+#   - Lineup card with per-agent token usage and cost estimates
+#   - Time-proportional timeline with idle-gap compression
+#   - Agent activity cards with findings, verdicts, and narratives
+#   - Consolidated findings table with status tracking
+#   - Files changed, carry-forward items, and recording link
+#
+# Data flow: cast file -> parse m/o events -> extract structured data -> generate HTML
+# Cost model: blended input/output rates per model (see MODEL_RATES in Python below)
+# PRICING_UPDATE: When Anthropic changes model pricing, update MODEL_RATES dict below.
 cmd_export_html() {
+  # In rec mode, the team alias handles report generation after session ends — skip here
+  if _check_rec_mode "$1" 2>/dev/null; then
+    echo "SKIP: Report deferred — team alias will generate after session ends." >&2
+    return 0
+  fi
+
   local file="$1"
   local asciinema_url="${2:-}"
 
@@ -936,6 +1176,7 @@ AGENT_ROLES = {
     'Coach K': 'Orchestration',
 }
 
+# PRICING_UPDATE: Update these rates when Anthropic changes model pricing (claude.ai/pricing).
 # Blended cost rates ($/M tokens) using 85% input / 15% output ratio (agentic workflows are input-dominant).
 # Pricing source: Anthropic public pricing (claude.ai/pricing).
 #   opus:     (0.85 * $5)  + (0.15 * $25) = $8.00/MTok
@@ -1041,25 +1282,120 @@ task_contexts = []
 coach_events = [] # {time, idx} — tracks Coach K orchestration moments
 verdict_global = None
 total_event_count = len(raw_events)
+# Track indices whose data was already extracted from structured m events,
+# so the o-event regex fallback does not double-count them.
+m_processed_indices = set()
 
 for idx, ev in enumerate(raw_events):
     etype = ev[1]
     data  = ev[2] if len(ev) > 2 else ''
 
-    if not isinstance(data, str):
+    if not isinstance(data, (str, dict)):
         continue
 
-    clean = strip_ansi(data).replace('\r\n', '').replace('\r', '').replace('\n', '').strip()
+    clean = strip_ansi(data).replace('\r\n', '').replace('\r', '').replace('\n', '').strip() if isinstance(data, str) else ''
 
     if etype == 'm':
-        if clean.startswith('Phase') or clean.startswith('Synthesis') or clean.startswith('Quick Fix') or ':' in clean[:30]:
-            phase_events.append(clean)
-            # Phase transitions are Coach K orchestration
-            tm_m = re.match(r'\[?(\d{2}:\d{2}:\d{2})\]?', clean)
-            coach_events.append({'time': None, 'idx': idx})
-        continue
+        # Dual-path: try structured JSON first (new format), fall through to legacy string parsing
+        structured = None
+        try:
+            parsed = json.loads(data) if isinstance(data, str) else data if isinstance(data, dict) else None
+            if isinstance(parsed, dict) and 'type' in parsed:
+                structured = parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        if structured:
+            mtype = structured.get('type', '')
+            m_msg = structured.get('msg', '')
+            m_ts = structured.get('ts', '')
+            m_agent = structured.get('agent', '')
+
+            if mtype == 'phase':
+                phase_events.append(m_msg)
+                coach_events.append({'time': m_ts or None, 'idx': idx})
+            elif mtype == 'agent' and m_agent:
+                if m_agent not in agent_data:
+                    agent_data[m_agent] = {
+                        'first_time': m_ts, 'last_time': m_ts,
+                        'first_idx': idx, 'last_idx': idx,
+                        'summaries': [], 'findings': [], 'verdicts': [],
+                        'confidence': None, 'tokens': None,
+                        'tools': None, 'duration_s': None, 'verdict': None,
+                    }
+                d = agent_data[m_agent]
+                d['last_time'] = m_ts or d['last_time']
+                d['last_idx'] = idx
+                if m_msg:
+                    d['summaries'].append(m_msg)
+                # Parse confidence
+                conf_m = re.search(r'confidence:\s*(\d+)%', m_msg)
+                if conf_m:
+                    d['confidence'] = int(conf_m.group(1))
+                # Parse token usage from "Complete --" lines
+                if m_msg.startswith('Complete --'):
+                    tm = re.search(r'tokens:\s*([\d,]+)', m_msg)
+                    if tm:
+                        d['tokens'] = (d.get('tokens') or 0) + int(tm.group(1).replace(',', ''))
+                    tolm = re.search(r'tools:\s*([\d,]+)', m_msg)
+                    if tolm:
+                        d['tools'] = (d.get('tools') or 0) + int(tolm.group(1).replace(',', ''))
+                    durm = re.search(r'duration:\s*([\d,]+)s', m_msg)
+                    if durm:
+                        d['duration_s'] = (d.get('duration_s') or 0) + int(durm.group(1).replace(',', ''))
+                # Parse verdict
+                vm = re.match(r'Verdict:\s*(SHIP WITH FIXES|READY WITH CAVEATS|NOT READY|SHIP|BLOCK|READY)', m_msg)
+                if vm:
+                    d['verdict'] = vm.group(1)
+                    d['verdicts'].append(vm.group(1))
+                    if m_agent == 'Kobe':
+                        verdict_global = vm.group(1)
+                verm = re.match(r'Verification:\s*(SHIP|BLOCK)', m_msg)
+                if verm:
+                    d['verdict'] = verm.group(1)
+                    d['verdicts'].append(verm.group(1))
+                    if m_agent == 'Kobe':
+                        verdict_global = verm.group(1)
+                # Parse findings
+                finding_prefixes = [
+                    ('FINDING [CRITICAL]', 'FINDING [CRITICAL]'),
+                    ('FINDING [IMPORTANT]', 'FINDING [IMPORTANT]'),
+                    ('FINDING [HIGH]', 'FINDING [HIGH]'),
+                    ('FINDING [MEDIUM]', 'FINDING [MEDIUM]'),
+                    ('FINDING [LOW]', 'FINDING [LOW]'),
+                    ('RULE:', 'RULE'), ('AC:', 'AC'), ('DECISION:', 'DECISION'),
+                    ('RISK:', 'RISK'), ('CHANGED:', 'CHANGED'), ('EDGE CASE:', 'EDGE CASE'),
+                ]
+                for prefix, sev_key in finding_prefixes:
+                    if m_msg.startswith(prefix):
+                        text = m_msg[len(prefix):].strip().lstrip(':').strip()
+                        d['findings'].append({'sev': sev_key, 'text': text, 'agent': m_agent})
+                        break
+                m_processed_indices.add(idx - 1)  # skip paired o event
+            elif mtype == 'human':
+                human_events.append({'time': m_ts, 'msg': m_msg, 'idx': idx})
+                m_processed_indices.add(idx - 1)  # skip paired o event
+            elif mtype == 'event':
+                # Task context from event markers
+                if m_msg.startswith('TASK CONTEXT:'):
+                    task_contexts.append(m_msg[len('TASK CONTEXT:'):].strip())
+                    coach_events.append({'time': m_ts or None, 'idx': idx})
+                m_processed_indices.add(idx - 1)  # skip paired o event
+            elif mtype == 'finish':
+                m_processed_indices.add(idx - 1)  # skip paired o event
+            continue
+        else:
+            # Legacy string m event parsing (old .cast files without structured JSON)
+            if clean.startswith('Phase') or clean.startswith('Synthesis') or clean.startswith('Quick Fix') or ':' in clean[:30]:
+                phase_events.append(clean)
+                coach_events.append({'time': None, 'idx': idx})
+            continue
 
     if etype != 'o':
+        continue
+
+    # Skip o events already extracted via their paired structured m event
+    if idx in m_processed_indices:
         continue
 
     # Task context
@@ -1078,7 +1414,7 @@ for idx, ev in enumerate(raw_events):
             agent_data[name] = {
                 'first_time': ts_str, 'last_time': ts_str,
                 'first_idx': idx, 'last_idx': idx,
-                'summaries': [], 'findings': [],
+                'summaries': [], 'findings': [], 'verdicts': [],
                 'confidence': None, 'tokens': None,
                 'tools': None, 'duration_s': None, 'verdict': None,
             }
@@ -1109,12 +1445,16 @@ for idx, ev in enumerate(raw_events):
         vm = re.match(r'Verdict:\s*(SHIP WITH FIXES|READY WITH CAVEATS|NOT READY|SHIP|BLOCK|READY)', msg)
         if vm:
             d['verdict'] = vm.group(1)
-            if not verdict_global and name == 'Kobe':
+            d['verdicts'].append(vm.group(1))
+            if name == 'Kobe':
                 verdict_global = vm.group(1)
         # Also catch "Verification: SHIP" pattern
         verm = re.match(r'Verification:\s*(SHIP|BLOCK)', msg)
         if verm:
             d['verdict'] = verm.group(1)
+            d['verdicts'].append(verm.group(1))
+            if name == 'Kobe':
+                verdict_global = verm.group(1)
 
         # Parse findings
         finding_prefixes = [
@@ -1168,26 +1508,113 @@ elif 'Coach K' in agent_data and not agent_data['Coach K']['tools'] and coach_ev
 # Order participants
 participant_order = sorted(agent_data.keys(), key=lambda n: agent_data[n]['first_idx'])
 
-# ── compute timeline fractions ────────────────────────────────────────────────
+# ── compute timeline fractions (time-proportional with idle-gap compression) ───
 
-all_times = []
-for name, d in agent_data.items():
-    all_times.append(d['first_idx'])
-    all_times.append(d['last_idx'])
-for h_ev in human_events:
-    all_times.append(h_ev['idx'])
+def build_time_mapper(agent_data, human_events):
+    """Build a function that maps HH:MM:SS -> percentage on compressed timeline."""
+    fmt = '%H:%M:%S'
 
-min_idx = min(all_times) if all_times else 0
-max_idx = max(all_times) if all_times else 1
-span = max(max_idx - min_idx, 1)
+    def to_secs(t):
+        d = datetime.datetime.strptime(t, fmt)
+        return d.hour * 3600 + d.minute * 60 + d.second
 
-def to_pct(idx):
-    return round((idx - min_idx) / span * 100, 1)
+    # Collect all activity intervals (with midnight crossing guard)
+    intervals = []
+    for name, d in agent_data.items():
+        if d['first_time'] and d['last_time']:
+            t1 = to_secs(d['first_time'])
+            t2 = to_secs(d['last_time'])
+            if t2 < t1:
+                t2 += 86400  # midnight crossing
+            intervals.append((t1, t2))
+    for hev in human_events:
+        t = to_secs(hev['time'])
+        intervals.append((t, t))
+
+    if not intervals:
+        return (lambda t: 0.0), [], []
+
+    # Merge overlapping intervals
+    intervals.sort()
+    merged = [list(intervals[0])]
+    for s, e in intervals[1:]:
+        if s <= merged[-1][1] + 1:  # allow 1s tolerance
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+
+    # Calculate active time and gaps
+    total_active = sum(e - s for s, e in merged)
+    if total_active <= 0:
+        total_active = 1
+    num_gaps = max(len(merged) - 1, 0)
+    GAP_PCT = 3.0
+    active_pct = 100.0 - num_gaps * GAP_PCT
+    if active_pct < 50 and num_gaps:
+        GAP_PCT = max((100.0 - 50) / num_gaps, 1.0)
+        active_pct = 100.0 - num_gaps * GAP_PCT
+
+    # Build segment map: each merged interval maps to a range of percentages
+    segments = []  # (time_start, time_end, pct_start, pct_end)
+    pct_cursor = 0.0
+    for i, (s, e) in enumerate(merged):
+        dur = e - s
+        pct_width = (dur / total_active) * active_pct if total_active > 0 else 0
+        segments.append((s, e, pct_cursor, pct_cursor + pct_width))
+        pct_cursor += pct_width
+        if i < len(merged) - 1:
+            pct_cursor += GAP_PCT  # gap
+
+    # Store gap positions for rendering gap markers
+    gaps = []
+    for i in range(len(merged) - 1):
+        gap_time_start = merged[i][1]
+        gap_time_end   = merged[i + 1][0]
+        gap_pct        = segments[i][3]  # right edge of previous segment
+        gap_dur        = gap_time_end - gap_time_start
+        gaps.append({'pct': gap_pct, 'dur_s': gap_dur, 'gap_width': GAP_PCT})
+
+    def time_to_pct(time_str):
+        t = to_secs(time_str)
+        # Midnight crossing: if t falls before the first segment and the
+        # session spans past midnight (last segment end > 86400), wrap t.
+        if t < segments[0][0] and segments[-1][1] > 86400:
+            t += 86400
+        for ts, te, ps, pe in segments:
+            if ts <= t <= te:
+                if te == ts:
+                    return ps
+                frac = (t - ts) / (te - ts)
+                return ps + frac * (pe - ps)
+        # Before first segment
+        if t < segments[0][0]:
+            return 0.0
+        # After last segment
+        return segments[-1][3]
+
+    return time_to_pct, gaps, segments
+
+time_to_pct, timeline_gaps, timeline_segments = build_time_mapper(agent_data, human_events)
 
 # ── compute session metrics ───────────────────────────────────────────────────
 
-escalation_count = sum(1 for ev in raw_events if ev[1] == 'm' and isinstance(ev[2], str) and 'ESCALATION' in ev[2])
-fix_verify_count = sum(1 for ev in raw_events if ev[1] == 'm' and isinstance(ev[2], str) and 'Fix-Verify' in ev[2])
+def _m_event_msg(ev):
+    """Extract the searchable message string from an m event's data payload."""
+    d = ev[2] if len(ev) > 2 else ''
+    if isinstance(d, dict):
+        return d.get('msg', '')
+    if isinstance(d, str):
+        try:
+            parsed = json.loads(d)
+            if isinstance(parsed, dict):
+                return parsed.get('msg', '')
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        return d
+    return ''
+
+escalation_count = sum(1 for ev in raw_events if ev[1] == 'm' and 'ESCALATION' in _m_event_msg(ev))
+fix_verify_count = sum(1 for ev in raw_events if ev[1] == 'm' and 'Fix-Verify' in _m_event_msg(ev))
 
 # Wall clock
 all_first = [agent_data[n]['first_time'] for n in agent_data if agent_data[n]['first_time']]
@@ -1198,8 +1625,13 @@ wall_end   = max(all_last)  if all_last  else None
 def time_diff_min(t1, t2):
     try:
         fmt = '%H:%M:%S'
-        d = datetime.datetime.strptime(t2, fmt) - datetime.datetime.strptime(t1, fmt)
-        return int(d.total_seconds() // 60)
+        d1 = datetime.datetime.strptime(t1, fmt)
+        d2 = datetime.datetime.strptime(t2, fmt)
+        diff = d2 - d1
+        # Midnight crossing guard: if t2 < t1, assume next day
+        if diff.total_seconds() < 0:
+            diff = diff + datetime.timedelta(seconds=86400)
+        return int(diff.total_seconds() // 60)
     except:
         return 0
 
@@ -1267,6 +1699,19 @@ for name in participant_order:
     for f in d['findings']:
         finding_counter[name] += 1
         f['id'] = f'{prefix}{finding_counter[name]}'
+        # Determine status for actionable findings only
+        if f['sev'].startswith('FINDING'):
+            # Use the finding agent's own verdict if they have one (Kobe, Pippen),
+            # otherwise fall back to the global verdict (for Bird, MJ findings)
+            verdict = agent_data[name].get('verdict', '') or verdict_global or ''
+            if fix_verify_count > 0 and verdict in ('SHIP', 'READY'):
+                f['status'] = 'FIXED'
+            elif verdict in ('SHIP WITH FIXES', 'BLOCK', 'NOT READY'):
+                f['status'] = 'OPEN'
+            else:
+                f['status'] = None
+        else:
+            f['status'] = None
         all_findings.append(f)
 
 # ── collect changed files ─────────────────────────────────────────────────────
@@ -1370,19 +1815,43 @@ CSS = """
   .meta-row { display: flex; flex-wrap: wrap; gap: 20px; color: var(--text-dim); font-size: 13px; margin-bottom: 16px; }
   .meta-row span { display: flex; align-items: center; gap: 6px; }
   .context-block { padding: 14px 18px; background: var(--surface-2); border-left: 3px solid var(--text-muted); border-radius: 0 6px 6px 0; font-size: 14px; color: var(--text-dim); line-height: 1.7; }
-  .section { padding: 32px 48px; border-bottom: 1px solid var(--border); }
+  .section { padding: 32px 48px; border-bottom: 1px solid var(--border); overflow: visible; }
   .section-title { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 20px; }
-  .timeline { position: relative; padding: 8px 0; }
-  .timeline-row { display: flex; align-items: center; height: 40px; gap: 14px; }
-  .timeline-label { width: 64px; font-size: 13px; font-weight: 600; text-align: right; flex-shrink: 0; font-family: 'SF Mono','Fira Code',monospace; }
-  .timeline-track { flex: 1; height: 26px; position: relative; background: rgba(255,255,255,0.02); border-radius: 4px; }
-  .timeline-bar { position: absolute; height: 100%; border-radius: 4px; opacity: 0.8; min-width: 8px; }
-  .timeline-info { width: 340px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-  .timeline-time { font-size: 11px; color: var(--text-dim); font-family: 'SF Mono','Fira Code',monospace; width: 100px; flex-shrink: 0; }
-  .timeline-summary { font-size: 12px; color: var(--text-dim); }
-  .human-marker { position: absolute; top: -6px; width: 2px; height: calc(100% + 12px); background: var(--human); opacity: 0.25; z-index: 10; }
-  .time-axis { display: flex; align-items: center; gap: 14px; margin-top: 8px; padding-left: 78px; }
-  .time-axis-track { flex: 1; display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-family: 'SF Mono','Fira Code',monospace; }
+  .timeline-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .track-row { display: grid; grid-template-columns: 80px 1fr; border-bottom: 1px solid var(--border); }
+  .track-row:last-child { border-bottom: none; }
+  .track-row.human-row { background: rgba(240, 246, 252, 0.03); }
+  .track-row.axis-row { background: var(--surface-2); border-top: 1px solid var(--border); }
+  .track-label { padding: 0 10px 0 14px; font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--border); display: flex; align-items: center; font-family: 'SF Mono','Fira Code','Cascadia Code',monospace; }
+  .track-label.bird { color: var(--bird); }
+  .track-label.coach { color: var(--coach); }
+  .track-label.shaq { color: var(--shaq); }
+  .track-label.kobe { color: var(--kobe); }
+  .track-label.mj { color: var(--mj); }
+  .track-label.magic { color: var(--magic); }
+  .track-label.pippen { color: var(--pippen); }
+  .track-label.human { color: var(--human); }
+  .track-label.axis { color: var(--text-muted); font-size: 10px; font-weight: 400; }
+  .track-area { position: relative; height: 52px; padding: 0; }
+  .track-area::before { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(to right, transparent, transparent calc(25% - 1px), var(--surface-2) calc(25% - 1px), var(--surface-2) 25%); pointer-events: none; opacity: 0.6; }
+  .bar { position: absolute; bottom: 8px; height: 18px; border-radius: 3px; min-width: 12px; }
+  .bar.bird { background: var(--bird); }
+  .bar.coach { background: var(--coach); }
+  .bar.shaq { background: var(--shaq); }
+  .bar.kobe { background: var(--kobe); }
+  .bar.mj { background: var(--mj); }
+  .bar.magic { background: var(--magic); }
+  .bar.pippen { background: var(--pippen); }
+  .bar.human { background: transparent; border: 1px dashed rgba(240, 246, 252, 0.35); }
+  .annotation { position: absolute; bottom: 30px; display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; pointer-events: none; }
+  .annotation .ann-time { font-size: 9px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .annotation .ann-dur { font-size: 9px; color: var(--text-muted); }
+  .annotation .ann-role { font-size: 9px; color: var(--text-dim); }
+  .annotation .ann-sep { font-size: 9px; color: var(--text-muted); }
+  .axis-area { position: relative; height: 28px; }
+  .axis-tick { position: absolute; top: 0; display: flex; flex-direction: column; align-items: center; transform: translateX(-50%); }
+  .axis-tick .tick-line { width: 1px; height: 6px; background: var(--border); }
+  .axis-tick .tick-label { font-size: 9px; color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .agent-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
   .agent-card-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; }
   .agent-name { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 14px; }
@@ -1428,9 +1897,13 @@ CSS = """
   .cf-text { font-size: 13px; line-height: 1.6; }
   .lineup-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   .lineup-table th { text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border); color: var(--text-dim); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .lineup-table th:first-child, .lineup-table td:first-child { padding-left: 0; }
   .lineup-table td { padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); }
   .stats-grid { display: flex; flex-wrap: wrap; gap: 32px; }
-  .stat { display: flex; flex-direction: column; gap: 4px; }
+  .stat { display: flex; flex-direction: column; gap: 4px; cursor: help; position: relative; }
+  .stat .stat-tooltip { display: none; position: absolute; bottom: calc(100% + 8px); left: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 11px; color: var(--text-dim); white-space: nowrap; z-index: 100; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+  .stat .stat-tooltip::after { content: ''; position: absolute; top: 100%; left: 16px; border: 5px solid transparent; border-top-color: var(--border); }
+  .stat:hover .stat-tooltip { display: block; }
   .stat-value { font-size: 22px; font-weight: 700; font-family: 'SF Mono','Fira Code',monospace; }
   .stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
   .token-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 24px; }
@@ -1438,6 +1911,8 @@ CSS = """
   .token-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); }
   .recording-link { padding: 20px 48px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-dim); display: flex; align-items: center; gap: 8px; }
   .recording-link code { background: var(--surface); padding: 3px 8px; border-radius: 4px; font-size: 12px; color: var(--text); }
+  .status-fixed { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; background: rgba(63,185,80,0.15); color: var(--ship); }
+  .status-open { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; background: rgba(248,81,73,0.15); color: var(--critical); }
 """
 
 # ── generate HTML ─────────────────────────────────────────────────────────────
@@ -1477,16 +1952,16 @@ out.append('  <div class="section-title">Lineup Card</div>')
 
 # Stats grid first
 out.append('  <div class="stats-grid">')
-out.append(f'    <div class="stat"><span class="stat-value">{total_event_count}</span><span class="stat-label">Events</span></div>')
-out.append(f'    <div class="stat"><span class="stat-value">{len(agent_data)}</span><span class="stat-label">Agents</span></div>')
-out.append(f'    <div class="stat"><span class="stat-value">{len(human_events)}</span><span class="stat-label">Human Checkpoints</span></div>')
-out.append(f'    <div class="stat"><span class="stat-value">{escalation_count}</span><span class="stat-label">Escalations</span></div>')
-out.append(f'    <div class="stat"><span class="stat-value">{fix_verify_count}</span><span class="stat-label">Fix-Verify Loops</span></div>')
+out.append(f'    <div class="stat"><span class="stat-tooltip">Total events logged in the recording</span><span class="stat-value">{total_event_count}</span><span class="stat-label">Events</span></div>')
+out.append(f'    <div class="stat"><span class="stat-tooltip">AI agents that participated in this session</span><span class="stat-value">{len(agent_data)}</span><span class="stat-label">Agents</span></div>')
+out.append(f'    <div class="stat"><span class="stat-tooltip">Points where a human reviewed and approved</span><span class="stat-value">{len(human_events)}</span><span class="stat-label">Human Checkpoints</span></div>')
+out.append(f'    <div class="stat"><span class="stat-tooltip">Issues agents couldn\'t resolve alone and escalated to Coach K</span><span class="stat-value">{escalation_count}</span><span class="stat-label">Escalations</span></div>')
+out.append(f'    <div class="stat"><span class="stat-tooltip">Rounds of Shaq fixing + Kobe/Pippen re-verifying</span><span class="stat-value">{fix_verify_count}</span><span class="stat-label">Fix-Verify Loops</span></div>')
 if wall_clock_str:
-    out.append(f'    <div class="stat"><span class="stat-value">{h(wall_clock_str)}</span><span class="stat-label">Wall Clock</span></div>')
+    out.append(f'    <div class="stat"><span class="stat-tooltip">Real elapsed time from first to last event</span><span class="stat-value">{h(wall_clock_str)}</span><span class="stat-label">Wall Clock</span></div>')
 if verdict_global:
     v_color = 'var(--ship)' if 'SHIP' in verdict_global or verdict_global == 'READY' else 'var(--critical)'
-    out.append(f'    <div class="stat"><span class="stat-value" style="color:{v_color}">{h(verdict_global)}</span><span class="stat-label">Verdict</span></div>')
+    out.append(f'    <div class="stat"><span class="stat-tooltip">Final quality gate decision from Kobe</span><span class="stat-value" style="color:{v_color}">{h(verdict_global)}</span><span class="stat-label">Verdict</span></div>')
 out.append('  </div>')
 
 # Combined lineup + token table
@@ -1532,10 +2007,16 @@ if total_tokens:
 out.append('    </tbody></table>')
 out.append('</div>')
 
-# ── Timeline ──────────────────────────────────────────────────────────────────
+# ── Timeline (Option B: Time-Proportional Bars) ─────────────────────────────
 out.append('<div class="section">')
 out.append('  <div class="section-title">Timeline</div>')
-out.append('  <div class="timeline">')
+out.append('  <div class="timeline-container">')
+
+# CSS class for agent label coloring (lowercase, no spaces)
+AGENT_CSS_CLASS = {
+    'Bird': 'bird', 'MJ': 'mj', 'Shaq': 'shaq', 'Kobe': 'kobe',
+    'Pippen': 'pippen', 'Magic': 'magic', 'Coach K': 'coach', 'Human': 'human',
+}
 
 # Build ordered list of timeline rows: agents + human + coach K segments
 timeline_rows = []
@@ -1562,6 +2043,7 @@ for i, hev in enumerate(human_events):
             prev_time = occ['end_time']
             break
     hev['prev_idx'] = prev_idx
+    hev['prev_time'] = prev_time
     if prev_time:
         try:
             fmt = '%H:%M:%S'
@@ -1577,23 +2059,22 @@ for i, hev in enumerate(human_events):
 
 # Coach K segments: gaps between occupied intervals where Coach K is orchestrating
 # Merge overlapping occupied intervals first
-merged = []
+merged_occ = []
 for occ in occupied:
-    if merged and occ['start_idx'] <= merged[-1]['end_idx'] + 1:
-        if occ['end_idx'] > merged[-1]['end_idx']:
-            merged[-1]['end_idx'] = occ['end_idx']
-            merged[-1]['end_time'] = occ['end_time']
+    if merged_occ and occ['start_idx'] <= merged_occ[-1]['end_idx'] + 1:
+        if occ['end_idx'] > merged_occ[-1]['end_idx']:
+            merged_occ[-1]['end_idx'] = occ['end_idx']
+            merged_occ[-1]['end_time'] = occ['end_time']
     else:
-        merged.append(dict(occ))
+        merged_occ.append(dict(occ))
 
-# Coach K fills the gaps between merged intervals
 coach_segments = []
-for i in range(len(merged) - 1):
-    gap_start = merged[i]['end_idx']
-    gap_end = merged[i + 1]['start_idx']
-    if gap_end - gap_start > 1:  # meaningful gap
-        t_start = merged[i]['end_time']
-        t_end = merged[i + 1]['start_time']
+for i in range(len(merged_occ) - 1):
+    gap_start = merged_occ[i]['end_idx']
+    gap_end = merged_occ[i + 1]['start_idx']
+    if gap_end - gap_start > 1:
+        t_start = merged_occ[i]['end_time']
+        t_end = merged_occ[i + 1]['start_time']
         dur_str = ''
         if t_start and t_end:
             try:
@@ -1612,86 +2093,133 @@ for row in timeline_rows:
     if row['type'] == 'agent':
         name = row['name']
         d = agent_data[name]
-        color_var = AGENT_CSS_VAR.get(name, 'var(--text)')
-        start_pct = to_pct(d['first_idx'])
-        end_pct   = to_pct(d['last_idx'])
+        css_cls = AGENT_CSS_CLASS.get(name, '')
+        start_pct = time_to_pct(d['first_time']) if d['first_time'] else 0.0
+        end_pct   = time_to_pct(d['last_time']) if d['last_time'] else 100.0
         width_pct = max(end_pct - start_pct, 2)
         t_first = (d['first_time'] or '')[:5]
         t_last  = (d['last_time']  or '')[:5]
+
+        # Time range for annotation
         if t_first == t_last:
-            time_str = t_first
+            ann_time = t_first
         else:
-            time_str = f'{t_first} &mdash; {t_last}'
+            ann_time = f'{t_first}\u2013{t_last}'
 
-        # Summary: show verdict if available, otherwise role label
-        completion = ''
-        if d['verdict']:
-            completion = f'Verdict: {d["verdict"]}'
+        # Duration string for annotation
+        ann_dur = fmt_duration(d['duration_s']) if d['duration_s'] else ''
+
+        # Role text for annotation: verdict progression > single verdict > role
+        ann_role = ''
+        if name == 'Coach K':
+            ann_role = 'Orchestration'
+        elif d.get('verdicts') and len(d['verdicts']) > 1:
+            unique_verdicts = list(dict.fromkeys(d['verdicts']))
+            if len(unique_verdicts) > 1:
+                ann_role = ' \u2192 '.join(unique_verdicts)
+            else:
+                ann_role = unique_verdicts[0]
+        elif d['verdict']:
+            ann_role = d['verdict']
         else:
-            completion = AGENT_ROLES.get(name, name)
+            ann_role = AGENT_ROLES.get(name, name)
 
-        out.append('    <div class="timeline-row">')
-        out.append(f'      <div class="timeline-label" style="color:{color_var}">{h(name)}</div>')
-        out.append('      <div class="timeline-track">')
-        out.append(f'        <div class="timeline-bar" style="left:{start_pct}%;width:{width_pct}%;background:{color_var};"></div>')
-        out.append('      </div>')
-        out.append('      <div class="timeline-info">')
-        out.append(f'        <div class="timeline-time">{time_str}</div>')
-        out.append(f'        <div class="timeline-summary" style="color:{color_var}">{h(completion)}</div>')
-        out.append('      </div>')
-        out.append('    </div>')
+        # Render track-row
+        out.append(f'  <div class="track-row">')
+        out.append(f'    <div class="track-label {css_cls}">{h(name)}</div>')
+        out.append(f'    <div class="track-area">')
+        out.append(f'      <div class="annotation" style="left: {start_pct:.1f}%; max-width: {width_pct:.1f}%;">')
+        out.append(f'        <span class="ann-time">{h(ann_time)}</span>')
+        if ann_dur:
+            out.append(f'        <span class="ann-sep">&middot;</span>')
+            out.append(f'        <span class="ann-dur">{ann_dur}</span>')
+        if ann_role:
+            out.append(f'        <span class="ann-sep">&middot;</span>')
+            out.append(f'        <span class="ann-role">{h(ann_role)}</span>')
+        out.append(f'      </div>')
+        out.append(f'      <div class="bar {css_cls}" style="left: {start_pct:.1f}%; width: {width_pct:.1f}%;"></div>')
+        out.append(f'    </div>')
+        out.append(f'  </div>')
+
     elif row['type'] == 'human':
         hev = row['hev']
-        human_counter = human_counter + 1
-        start_pct = to_pct(hev['prev_idx'])
-        end_pct   = to_pct(hev['idx'])
+        human_counter += 1
+        start_pct = time_to_pct(hev['prev_time']) if hev.get('prev_time') else 0.0
+        end_pct   = time_to_pct(hev['time']) if hev.get('time') else 100.0
         width_pct = max(end_pct - start_pct, 2)
-        time_str = hev['time'][:5]
-        wait_label = f' ({hev["wait_str"]})' if hev.get('wait_str') else ''
+        ann_time = f'\u2013{hev["time"][:5]}'
+        ann_dur = hev.get('wait_str', '')
+        ann_role = f'Checkpoint #{human_counter}'
 
-        out.append('    <div class="timeline-row">')
-        out.append(f'      <div class="timeline-label" style="color:var(--human)">Human</div>')
-        out.append('      <div class="timeline-track">')
-        out.append(f'        <div class="timeline-bar" style="left:{start_pct}%;width:{width_pct}%;background:var(--human);opacity:0.3;"></div>')
-        out.append('      </div>')
-        out.append('      <div class="timeline-info">')
-        out.append(f'        <div class="timeline-time">{time_str}{wait_label}</div>')
-        out.append(f'        <div class="timeline-summary" style="color:var(--human);opacity:0.7">Checkpoint #{human_counter}</div>')
-        out.append('      </div>')
-        out.append('    </div>')
+        out.append(f'  <div class="track-row human-row">')
+        out.append(f'    <div class="track-label human">Human</div>')
+        out.append(f'    <div class="track-area">')
+        out.append(f'      <div class="annotation" style="left: {start_pct:.1f}%; max-width: {max(width_pct, 15):.1f}%;">')
+        out.append(f'        <span class="ann-time">{h(ann_time)}</span>')
+        if ann_dur:
+            out.append(f'        <span class="ann-sep">&middot;</span>')
+            out.append(f'        <span class="ann-dur">{ann_dur}</span>')
+        out.append(f'        <span class="ann-sep">&middot;</span>')
+        out.append(f'        <span class="ann-role">{h(ann_role)}</span>')
+        out.append(f'      </div>')
+        out.append(f'      <div class="bar human" style="left: {start_pct:.1f}%; width: {width_pct:.1f}%;"></div>')
+        out.append(f'    </div>')
+        out.append(f'  </div>')
+
     elif row['type'] == 'coach':
         seg = row['seg']
-        start_pct = to_pct(seg['start_idx'])
-        end_pct   = to_pct(seg['end_idx'])
+        start_pct = time_to_pct(seg['start_time']) if seg.get('start_time') else 0.0
+        end_pct   = time_to_pct(seg['end_time']) if seg.get('end_time') else 100.0
         width_pct = max(end_pct - start_pct, 2)
         t_start = (seg['start_time'] or '')[:5]
         t_end = (seg['end_time'] or '')[:5]
         if t_start == t_end:
-            time_str = t_start
+            ann_time = t_start
         else:
-            time_str = f'{t_start} &mdash; {t_end}'
-        dur_label = f' ({seg["dur_str"]})' if seg.get('dur_str') else ''
+            ann_time = f'{t_start}\u2013{t_end}'
+        ann_dur = seg.get('dur_str', '')
 
-        out.append('    <div class="timeline-row">')
-        out.append(f'      <div class="timeline-label" style="color:var(--coach)">Coach K</div>')
-        out.append('      <div class="timeline-track">')
-        out.append(f'        <div class="timeline-bar" style="left:{start_pct}%;width:{width_pct}%;background:var(--coach);opacity:0.4;"></div>')
-        out.append('      </div>')
-        out.append('      <div class="timeline-info">')
-        out.append(f'        <div class="timeline-time">{time_str}{dur_label}</div>')
-        out.append(f'        <div class="timeline-summary" style="color:var(--coach)">Orchestration</div>')
-        out.append('      </div>')
-        out.append('    </div>')
+        out.append(f'  <div class="track-row">')
+        out.append(f'    <div class="track-label coach">Coach K</div>')
+        out.append(f'    <div class="track-area">')
+        out.append(f'      <div class="annotation" style="left: {start_pct:.1f}%; max-width: {max(width_pct, 15):.1f}%;">')
+        out.append(f'        <span class="ann-time">{h(ann_time)}</span>')
+        if ann_dur:
+            out.append(f'        <span class="ann-sep">&middot;</span>')
+            out.append(f'        <span class="ann-dur">{ann_dur}</span>')
+        out.append(f'        <span class="ann-sep">&middot;</span>')
+        out.append(f'        <span class="ann-role">Orchestration</span>')
+        out.append(f'      </div>')
+        out.append(f'      <div class="bar coach" style="left: {start_pct:.1f}%; width: {width_pct:.1f}%;"></div>')
+        out.append(f'    </div>')
+        out.append(f'  </div>')
 
-out.append('  </div>')
-if time_axis:
-    out.append('  <div class="time-axis">')
-    out.append('    <div class="time-axis-track">')
-    for t in time_axis:
-        out.append(f'      <span>{h(t)}</span>')
+# Time axis row with tick marks
+if timeline_segments:
+    out.append('  <div class="track-row axis-row">')
+    out.append('    <div class="track-label axis">time</div>')
+    out.append('    <div class="axis-area">')
+    rendered_ticks = set()
+    for ts_start, ts_end, pct_start, pct_end in timeline_segments:
+        h_s = int(ts_start // 3600)
+        m_s = int((ts_start % 3600) // 60)
+        label_s = f'{h_s:02d}:{m_s:02d}'
+        if label_s not in rendered_ticks:
+            out.append(f'      <div class="axis-tick" style="left: {pct_start:.1f}%;"><div class="tick-line"></div><div class="tick-label">{h(label_s)}</div></div>')
+            rendered_ticks.add(label_s)
+        h_e = int(ts_end // 3600)
+        m_e = int((ts_end % 3600) // 60)
+        label_e = f'{h_e:02d}:{m_e:02d}'
+        if label_e not in rendered_ticks:
+            # Last tick at 99% to avoid overflow
+            pct_val = min(pct_end, 99.0)
+            out.append(f'      <div class="axis-tick" style="left: {pct_val:.1f}%;"><div class="tick-line"></div><div class="tick-label">{h(label_e)}</div></div>')
+            rendered_ticks.add(label_e)
     out.append('    </div>')
     out.append('  </div>')
-out.append('</div>')
+
+out.append('  </div>')  # close timeline-container
+out.append('</div>')  # close section
 
 # ── Agent Activity ────────────────────────────────────────────────────────────
 out.append('<div class="section">')
@@ -1746,7 +2274,7 @@ for name in participant_order:
                 break
         if not narrative:
             for s in d['summaries']:
-                if not s.startswith('Complete') and not s.startswith('Starting'):
+                if not s.startswith('Complete') and not s.startswith('Starting') and not s.startswith('Verdict:') and not s.startswith('Verification:'):
                     narrative = s
                     break
         if narrative:
@@ -1798,17 +2326,26 @@ if all_findings:
     out.append('      <th style="width:60px">Agent</th>')
     out.append('      <th style="width:100px">Type</th>')
     out.append('      <th>Finding</th>')
+    out.append('      <th style="width:70px">Status</th>')
     out.append('    </tr></thead>')
     out.append('    <tbody>')
     for f in all_findings:
         color_var = AGENT_CSS_VAR.get(f['agent'], 'var(--text)')
         bc = badge_class(f['sev'])
         bl = badge_label(f['sev'])
+        status = f.get('status')
+        if status == 'FIXED':
+            status_html = '<span class="status-fixed">Fixed</span>'
+        elif status == 'OPEN':
+            status_html = '<span class="status-open">Open</span>'
+        else:
+            status_html = ''
         out.append('      <tr>')
         out.append(f'        <td style="color:var(--text-muted)">{h(f["id"])}</td>')
         out.append(f'        <td style="color:{color_var}">{h(f["agent"])}</td>')
         out.append(f'        <td><span class="badge badge-{bc}">{h(bl)}</span></td>')
         out.append(f'        <td>{h(f["text"])}</td>')
+        out.append(f'        <td>{status_html}</td>')
         out.append('      </tr>')
     out.append('    </tbody></table>')
     out.append('</div>')
@@ -1869,7 +2406,426 @@ PYEOF
   fi
 }
 
-# --- Main dispatch ---
+# Strip idle gaps from a recording, producing a contiguous playback file
+cmd_strip_idle() {
+  local file="$1"
+  shift
+  local threshold=30
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --threshold)
+        threshold="$2"
+        shift 2
+        ;;
+      *)
+        echo "ERROR: Unknown option $1" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  # Validate threshold is a positive number
+  if ! python3 -c "import sys; t=float(sys.argv[1]); assert t > 0" "$threshold" 2>/dev/null; then
+    echo "ERROR: --threshold must be a positive number, got: $threshold" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$file" ]]; then
+    echo "ERROR: $file does not exist" >&2
+    return 1
+  fi
+
+  local out_file="${file}.stripped.cast"
+
+  python3 -c "
+import json, sys
+
+cast_file = sys.argv[1]
+out_file  = sys.argv[2]
+threshold = float(sys.argv[3])
+
+with open(cast_file) as f:
+    header_line = f.readline()
+    header = json.loads(header_line)
+    events = []
+    skipped = 0
+    for line_num, line in enumerate(f, 2):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+            if isinstance(ev, list) and len(ev) >= 3:
+                events.append(ev)
+            else:
+                skipped += 1
+                print(f'WARNING: strip-idle: skipped malformed event at line {line_num}', file=sys.stderr)
+        except Exception:
+            skipped += 1
+            print(f'WARNING: strip-idle: skipped unparseable event at line {line_num}', file=sys.stderr)
+
+if skipped:
+    print(f'WARNING: strip-idle: {skipped} event(s) skipped total', file=sys.stderr)
+
+if not events:
+    # Write header only
+    with open(out_file, 'w') as f:
+        f.write(header_line)
+    print(out_file)
+    sys.exit(0)
+
+# Compute cumulative time, identify gaps > threshold, and remove gap time
+# Each event's delta is ev[0]. Cumulative time builds from deltas.
+cumulative = 0.0
+cum_times = []
+for ev in events:
+    cumulative += ev[0]
+    cum_times.append(cumulative)
+
+# Identify gaps: intervals where a single delta > threshold
+total_removed = 0.0
+adjusted_deltas = []
+for i, ev in enumerate(events):
+    delta = ev[0]
+    if delta > threshold:
+        # Compress: keep a small residual (0.5s) to show transition
+        removed = delta - 0.5
+        adjusted_deltas.append(0.5)
+        total_removed += removed
+    else:
+        adjusted_deltas.append(delta)
+
+# Write output
+# NOTE: strip-idle only adjusts the asciicast delta (ev[0]) for playback timing.
+# The ts field inside structured m event JSON payloads is intentionally preserved
+# as-is because it records the real wall-clock timestamp for reporting accuracy.
+with open(out_file, 'w') as f:
+    f.write(header_line)
+    for i, ev in enumerate(events):
+        ev_out = [adjusted_deltas[i]] + ev[1:]
+        f.write(json.dumps(ev_out) + '\n')
+
+print(out_file)
+" "$file" "$out_file" "$threshold"
+}
+
+# Merge marker events from sidecar into an existing asciinema cast file.
+# The cast file already has properly timed "o" events from asciinema rec.
+# We just insert "m" events at the right cumulative timestamps.
+_merge_markers() {
+  local file="$1" markers="$2"
+
+  # Skip if no markers
+  if [[ ! -s "$markers" ]]; then
+    return 0
+  fi
+
+  python3 - "$file" "$markers" << 'PYEOF'
+import json, sys
+
+cast_file = sys.argv[1]
+markers_file = sys.argv[2]
+
+# Read existing cast file (header + o events from asciinema rec)
+with open(cast_file) as f:
+    lines = f.readlines()
+
+header = lines[0]
+hdr = json.loads(header)
+is_v3 = hdr.get('version', 0) == 3
+
+events = []
+for line in lines[1:]:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        events.append(json.loads(line))
+    except:
+        pass
+
+# Read markers — deltas are ABSOLUTE (seconds from session start)
+markers = []
+with open(markers_file) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            m = json.loads(line)
+            data = m.get('data', m.get('label', ''))
+            markers.append([m['delta'], 'm', data])
+        except:
+            pass
+
+# NOTE: v3 uses relative deltas, v2 uses cumulative timestamps.
+# Marker deltas are absolute from session start. The merge logic
+# converts v3 relative deltas to cumulative before sorting with markers,
+# then converts back to relative deltas.
+if is_v3:
+    # v3 events use RELATIVE deltas. Markers use ABSOLUTE from start.
+    # Convert v3 to cumulative, merge, sort, convert back to relative.
+    cumulative = 0.0
+    for ev in events:
+        cumulative += ev[0]
+        ev[0] = cumulative
+    all_events = events + markers
+    all_events.sort(key=lambda e: e[0])
+    prev = 0.0
+    for ev in all_events:
+        cur = ev[0]
+        ev[0] = round(cur - prev, 6)
+        prev = cur
+else:
+    # v2: timestamps already cumulative — merge and sort directly
+    all_events = events + markers
+    all_events.sort(key=lambda e: e[0])
+
+# Write back
+with open(cast_file, 'w') as f:
+    f.write(header)
+    for ev in all_events:
+        f.write(json.dumps(ev) + '\n')
+
+print(f"Merged {len(markers)} markers into recording ({len(events)} events)")
+PYEOF
+}
+
+# LEGACY/UNUSED: This function is not called anywhere. cmd_rec uses _merge_markers instead. Kept for reference; safe to remove.
+_merge_recording() {
+  local file="$1" raw="$2" markers="$3" start_epoch="$4"
+
+  python3 - "$file" "$raw" "$markers" "$start_epoch" << 'PYEOF'
+import json, sys, os
+
+cast_file = sys.argv[1]
+raw_file = sys.argv[2]
+markers_file = sys.argv[3]
+start_epoch = float(sys.argv[4])
+
+# Read header (first line, already written by cmd_rec)
+with open(cast_file) as f:
+    header_line = f.readline()
+
+# Read raw script output
+raw_text = ''
+if os.path.exists(raw_file):
+    with open(raw_file, 'rb') as f:
+        raw_text = f.read().decode('utf-8', errors='replace')
+
+# Read marker events from sidecar
+marker_events = []
+if os.path.exists(markers_file):
+    with open(markers_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                m = json.loads(line)
+                marker_events.append(m)
+            except:
+                pass
+
+# Determine session duration from markers or raw output
+if marker_events:
+    session_duration = max(m['delta'] for m in marker_events)
+else:
+    # Estimate from raw output size (rough: 1 second per 500 chars, min 1s)
+    session_duration = max(1.0, len(raw_text) / 500.0)
+
+# Split raw output into chunks by newlines
+chunks = []
+if raw_text:
+    lines = raw_text.split('\n')
+    for i, line in enumerate(lines):
+        if i < len(lines) - 1:
+            chunks.append(line + '\n')
+        elif line:  # last line, no trailing newline if empty
+            chunks.append(line)
+
+# Distribute chunk timestamps proportionally across session duration
+all_events = []
+if chunks:
+    n = len(chunks)
+    for i, chunk in enumerate(chunks):
+        if n == 1:
+            t = 0.001
+        else:
+            t = (i / (n - 1)) * session_duration
+            if t < 0.001:
+                t = 0.001
+        all_events.append((t, 'o', chunk))
+
+# Add marker events as m events (v2 format: cumulative timestamp)
+for m in marker_events:
+    all_events.append((m['delta'], 'm', m['label']))
+
+# Sort all events by timestamp
+all_events.sort(key=lambda e: e[0])
+
+# Write header + all events to cast file (v2 cumulative format)
+with open(cast_file, 'w') as f:
+    # Rewrite header as v2
+    hdr = json.loads(header_line)
+    v2_hdr = {"version": 2}
+    term = hdr.get("term", {})
+    v2_hdr["width"] = term.get("cols", 120)
+    v2_hdr["height"] = term.get("rows", 40)
+    if "timestamp" in hdr:
+        v2_hdr["timestamp"] = hdr["timestamp"]
+    if "title" in hdr:
+        v2_hdr["title"] = hdr["title"]
+    if "env" in hdr:
+        v2_hdr["env"] = hdr["env"]
+    f.write(json.dumps(v2_hdr) + '\n')
+    for t, etype, data in all_events:
+        f.write(json.dumps([round(t, 6), etype, data]) + '\n')
+PYEOF
+}
+
+# Record a real terminal session via script(1) with marker sidecar.
+# Usage: cast.sh rec <file> <title> -- <command...>
+cmd_rec() {
+  local file="$1"; shift
+  local title="$1"; shift
+
+  # Skip the -- separator if present
+  if [[ "${1:-}" == "--" ]]; then
+    shift
+  fi
+
+  if [[ $# -eq 0 ]]; then
+    echo "ERROR: rec requires a command to run. Usage: cast.sh rec <file> <title> -- <command...>" >&2
+    return 1
+  fi
+
+  if ! command -v asciinema &>/dev/null; then
+    echo "ERROR: asciinema is required for rec. Install: pip install asciinema" >&2
+    return 1
+  fi
+
+  local dir
+  dir=$(dirname "$file")
+  mkdir -p "$dir"
+
+  # Create sidecar for markers and rec signal file
+  local markers_file="${file}.markers"
+  local rec_file
+  rec_file=$(_rec_signal_file)
+  : > "$markers_file"
+
+  local start_epoch
+  start_epoch=$(python3 -c "import time; print(f'{time.time():.6f}')")
+
+  # Write rec signal file — cast.sh commands check for this to detect rec mode
+  # Line 1: start epoch, Line 2: markers sidecar path, Line 3: PID
+  printf '%s\n%s\n%s\n' "$start_epoch" "$markers_file" "$$" > "$rec_file"
+
+  # Cleanup trap — removes signal file if session is interrupted (Ctrl+C, crash)
+  trap "rm -f '$rec_file' '$markers_file'" EXIT INT TERM
+
+  # Use asciinema rec — captures real terminal with proper timing natively
+  # --cols/--rows: force PTY size so the app adapts its layout for clean playback
+  #   (210 cols makes web player text tiny and breaks TUI positioning on narrow viewports)
+  # --idle-time-limit: cap idle gaps at 5s in the recording for better pacing
+  # --overwrite: asciinema writes its own header + events; any prior file content is intentionally replaced
+  local rec_cols="${REC_COLS:-120}"
+  local rec_rows="${REC_ROWS:-40}"
+  local rec_idle="${REC_IDLE_LIMIT:-5}"
+  local exit_code=0
+  asciinema rec --overwrite --cols "$rec_cols" --rows "$rec_rows" --idle-time-limit "$rec_idle" --title "$title" -c "$*" "$file" || exit_code=$?
+
+  # Remove rec signal file (stops rec mode detection)
+  rm -f "$rec_file"
+  trap - EXIT INT TERM
+
+  # Merge markers into the asciinema-produced cast file
+  _merge_markers "$file" "$markers_file"
+
+  # Clean up temp files
+  rm -f "$markers_file"
+
+  echo "Recording saved: $file"
+  return $exit_code
+}
+
+# Wrap a command with real terminal capture via script(1).
+# Usage: cast.sh wrap <file> <command...>
+# CAST_FILE env var is exported for the child process.
+# Note: rec-mode detection uses .cast-rec-active signal files, not CAST_FILE.
+# Real terminal output is captured by script(1) and merged on exit.
+cmd_wrap() {
+  local file="$1"; shift
+  if [[ $# -eq 0 ]]; then
+    echo "ERROR: wrap requires a command to run. Usage: cast.sh wrap <file> <command...>" >&2
+    return 1
+  fi
+
+  local dir
+  dir=$(dirname "$file")
+  mkdir -p "$dir"
+
+  local title="${CAST_TITLE:-Dream Team Session}"
+  local ts
+  ts=$(date +%s)
+  local title_json
+  title_json=$(escape_json "$title")
+
+  # Write asciicast header
+  echo "{\"version\":3,\"term\":{\"cols\":120,\"rows\":40},\"timestamp\":${ts},\"title\":${title_json},\"env\":{\"SHELL\":\"$SHELL\"}}" > "$file"
+
+  local raw_file="${file}.raw"
+
+  # Run the command inside script(1) for real terminal capture
+  CAST_FILE="$file" script -q "$raw_file" "$@"
+  local exit_code=$?
+
+  # Convert raw script output to asciicast "o" events and merge with existing m events
+  python3 -c "
+import json, sys, os, time
+
+cast_file = sys.argv[1]
+raw_file  = sys.argv[2]
+
+# Read existing events (m events written by cast.sh commands during the wrapped session)
+with open(cast_file) as f:
+    header_line = f.readline()
+    m_events = []
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+            if isinstance(ev, list) and len(ev) >= 3:
+                m_events.append(ev)
+        except:
+            pass
+
+# Read raw script output as a single block
+raw_text = ''
+if os.path.exists(raw_file):
+    with open(raw_file, 'rb') as f:
+        raw_text = f.read().decode('utf-8', errors='replace')
+
+# Write merged output: header + raw output as single o event + m events
+with open(cast_file, 'w') as f:
+    f.write(header_line)
+    if raw_text:
+        f.write(json.dumps([0.001, 'o', raw_text]) + '\n')
+    for ev in m_events:
+        f.write(json.dumps(ev) + '\n')
+
+# Clean up raw file
+os.remove(raw_file)
+" "$file" "$raw_file"
+
+  return $exit_code
+}
+
+# ── Main dispatch ──
 case "${1:-}" in
   init)        cmd_init "$2" "${3:-}" ;;
   event)       cmd_event "$2" "$3" ;;
@@ -1885,8 +2841,11 @@ case "${1:-}" in
   timeline)    cmd_timeline "$2" ;;
   preview)     cmd_preview "$2" ;;
   export-html) cmd_export_html "$2" "${3:-}" ;;
+  strip-idle)  cmd_strip_idle "$2" "${@:3}" ;;
+  wrap)        cmd_wrap "$2" "${@:3}" ;;
+  rec)         cmd_rec "$2" "$3" "${@:4}" ;;
   *)
-    echo "Usage: cast.sh {init|event|marker|phase|agent|human|finish|reopen|upload|validate|duration|timeline|preview|export-html} <file> [args...]" >&2
+    echo "Usage: cast.sh {init|event|marker|phase|agent|human|finish|reopen|upload|validate|duration|timeline|preview|export-html|strip-idle|wrap|rec} <file> [args...]" >&2
     exit 1
     ;;
 esac
