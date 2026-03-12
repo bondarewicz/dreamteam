@@ -71,17 +71,19 @@ done
 echo "  $cmd_count commands installed."
 echo ""
 
-# --- Step 6: Install scripts ---
+# --- Step 6: Install scripts (symlinks — always in sync, never stale) ---
 SCRIPTS_DST="$CLAUDE_DIR/scripts"
 mkdir -p "$SCRIPTS_DST"
-echo "Installing scripts..."
+echo "Installing scripts (symlinks)..."
 script_count=0
 for script_file in "$SCRIPT_DIR"/*.sh; do
     filename=$(basename "$script_file")
     [[ "$filename" == "install.sh" ]] && continue
-    cp "$script_file" "$SCRIPTS_DST/$filename"
-    chmod +x "$SCRIPTS_DST/$filename"
-    echo "  + $filename"
+    # Remove old copy/symlink and create fresh symlink to repo
+    rm -f "$SCRIPTS_DST/$filename"
+    ln -s "$script_file" "$SCRIPTS_DST/$filename"
+    chmod +x "$script_file"
+    echo "  + $filename -> $(basename "$script_file") (symlink)"
     script_count=$((script_count + 1))
 done
 echo "  $script_count scripts installed."
