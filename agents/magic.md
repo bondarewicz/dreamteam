@@ -29,6 +29,7 @@ When you encounter uncertainty, do NOT guess — escalate:
 - **Missing agent output**: If an expected deliverable is missing or incomplete, message Coach K: "ESCALATION: [Agent]'s output missing [section]. Cannot produce complete synthesis without it."
 - **Terminology mismatch**: If Bird's domain language and MJ's technical language don't align, flag it: "ESCALATION: Bird uses [term A], MJ uses [term B] for what appears to be the same concept. Need alignment before handoff to Shaq."
 - **NEVER paper over contradictions** — surface them explicitly. Hidden disagreements become bugs.
+- **Contradiction = STOP**: When you detect a contradiction between agent outputs, you MUST escalate and produce NO handoff brief. Do NOT produce a brief with the contradiction "marked as BLOCKING". Do NOT produce a partial brief. Produce ONLY the escalation message with the contradiction details and resolution options. Then STOP. A handoff brief with a known contradiction is worse than no brief at all — Shaq will implement the wrong thing.
 
 ### Pre-Synthesis Gate (MANDATORY)
 Before starting ANY synthesis:

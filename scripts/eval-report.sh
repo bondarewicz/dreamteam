@@ -57,11 +57,12 @@ for fpath in files:
         run_id = data.get('run_id', 'unknown')
         date = data.get('date', '')[:10]
         is_baseline = data.get('is_complete_baseline', False)
-        summary = data.get('summary', {})
-        pass_count = summary.get('pass', 0)
-        partial_count = summary.get('partial', 0)
-        fail_count = summary.get('fail', 0)
-        scenarios_run = data.get('scenarios_run', 0)
+        # Recompute from actual results — never trust summary field
+        results_list = data.get('results', [])
+        pass_count = sum(1 for r in results_list if r.get('score') == 'pass')
+        partial_count = sum(1 for r in results_list if r.get('score') == 'partial')
+        fail_count = sum(1 for r in results_list if r.get('score') == 'fail')
+        scenarios_run = data.get('scenarios_run', len(results_list))
         baseline_label = '[BASELINE]' if is_baseline else '[partial]'
         print(f'  {date}  {baseline_label:12s}  {pass_count}P/{partial_count}p/{fail_count}F  ({scenarios_run} scenarios)  {os.path.basename(fpath)}')
     except Exception as e:
@@ -177,11 +178,21 @@ def h(text):
 # ── Compute overall summary for current run ───────────────────────────────
 
 if current_run:
-    total_pass = current_run.get('summary', {}).get('pass', 0)
-    total_partial = current_run.get('summary', {}).get('partial', 0)
-    total_fail = current_run.get('summary', {}).get('fail', 0)
-    scenarios_run = current_run.get('scenarios_run', 0)
+    # Recompute from actual results — never trust the summary field
+    results_list = current_run.get('results', [])
+    total_pass = sum(1 for r in results_list if r.get('score') == 'pass')
+    total_partial = sum(1 for r in results_list if r.get('score') == 'partial')
+    total_fail = sum(1 for r in results_list if r.get('score') == 'fail')
+    scenarios_run = current_run.get('scenarios_run', len(results_list))
     total_scored = total_pass + total_partial + total_fail
+
+    # Warn on mismatch between summary field and actual results
+    stated = current_run.get('summary', {})
+    if (stated.get('pass', 0) != total_pass or
+        stated.get('partial', 0) != total_partial or
+        stated.get('fail', 0) != total_fail):
+        print(f'  WARNING: summary field mismatch! stated={stated.get("pass",0)}P/{stated.get("partial",0)}p/{stated.get("fail",0)}F '
+              f'actual={total_pass}P/{total_partial}p/{total_fail}F — using actual counts', file=sys.stderr)
     overall_pass_rate = (total_pass / total_scored) if total_scored > 0 else 0
     pass_pct = round(overall_pass_rate * 100)
     partial_pct = round((total_partial / total_scored) * 100) if total_scored > 0 else 0
@@ -220,7 +231,7 @@ all_agents = sorted(set(list(agent_summaries.keys()) + list(results_by_agent.key
 # Scenario type order
 SCENARIO_TYPES = ['happy-path', 'edge-case', 'escalation']
 TYPE_LABELS = {'happy-path': 'Happy Path', 'edge-case': 'Edge Case', 'escalation': 'Escalation'}
-TYPE_TAGS = {'happy-path': 'hp', 'edge-case': 'ec', 'escalation': 'esc'}
+TYPE_TAGS = {'happy-path': 'S1', 'edge-case': 'S2', 'escalation': 'S3'}
 
 # ── Regression detection ──────────────────────────────────────────────────
 
@@ -760,6 +771,7 @@ CSS = '''
     border-top: 1px solid rgba(255,255,255,0.05);
   }
 
+
   /* ══════════════════════════════════════════════════════
      SECTION BADGE
      ══════════════════════════════════════════════════════ */
@@ -1120,10 +1132,10 @@ for agent in all_agents:
     color_var = agent_color_var(agent)
     role = agent_role(agent)
     agent_results = results_by_agent.get(agent, [])
-    summ = agent_summaries.get(agent, {})
-    a_pass = summ.get('pass', 0)
-    a_partial = summ.get('partial', 0)
-    a_fail = summ.get('fail', 0)
+    # Recompute from actual results — never trust agent_summaries field
+    a_pass = sum(1 for r in agent_results if r.get('score') == 'pass')
+    a_partial = sum(1 for r in agent_results if r.get('score') == 'partial')
+    a_fail = sum(1 for r in agent_results if r.get('score') == 'fail')
 
     # Build pass/fail/partial header line
     pass_label = f"{a_pass}/{a_pass+a_partial+a_fail} pass"
@@ -1173,9 +1185,17 @@ for agent in all_agents:
         sname = r.get('scenario_name', sid)
         obs_list = r.get('observations', [])
         conf = r.get('confidence_stated')
+        duration_ms = r.get('duration_ms')
+        tokens_used = r.get('tokens_used')
 
         type_tag = TYPE_TAGS.get(stype, stype[:3])
-        type_label = stype  # just the raw type label (not "Happy Path", just "happy-path")
+        # Extract scenario number from scenario_id (e.g., "scenario-01-..." -> "Scenario 01")
+        scenario_num = ''
+        if sid.startswith('scenario-'):
+            sid_parts = sid.split('-')
+            if len(sid_parts) >= 2:
+                scenario_num = f'Scenario {sid_parts[1]}'
+        type_label = scenario_num or stype
 
         # Confidence display
         conf_html = ''
@@ -1214,6 +1234,32 @@ for agent in all_agents:
             else:
                 criteria_html = ''
 
+        # Metrics line (duration + tokens + cost)
+        # PRICING_UPDATE: Keep in sync with scripts/cast.sh MODEL_RATES.
+        # Blended cost rates ($/M tokens) using 85% input / 15% output ratio.
+        #   opus:   (0.85 * $5)  + (0.15 * $25) = $8.00/MTok
+        #   sonnet: (0.85 * $3)  + (0.15 * $15) = $4.80/MTok
+        COST_PER_MTOK = {'magic': 4.80}
+        COST_DEFAULT = 8.00  # opus — conservative fallback
+        metrics_parts = []
+        if duration_ms is not None:
+            duration_s = duration_ms / 1000
+            if duration_s >= 60:
+                metrics_parts.append(f'{duration_s/60:.1f}m')
+            else:
+                metrics_parts.append(f'{duration_s:.0f}s')
+        if tokens_used is not None:
+            if tokens_used >= 1000:
+                metrics_parts.append(f'{tokens_used/1000:.1f}k tok')
+            else:
+                metrics_parts.append(f'{tokens_used} tok')
+            rate = COST_PER_MTOK.get(agent, COST_DEFAULT)
+            cost_usd = tokens_used * rate / 1_000_000
+            metrics_parts.append(f'${cost_usd:.3f}')
+        metrics_html = ''
+        if metrics_parts:
+            metrics_html = f'<div class="b-mismatch" style="color:var(--text-2);font-weight:400">{" &middot; ".join(metrics_parts)}</div>'
+
         emit(f'''      <div class="b-card {h(score)}">
         <div class="b-header">
           <div>
@@ -1227,6 +1273,7 @@ for agent in all_agents:
         </div>
         {criteria_html}
         {mismatch_html}
+        {metrics_html}
       </div>''')
 
     emit('''    </div>
@@ -1416,8 +1463,20 @@ else:
     for agent in all_agents:
         summ = agent_summaries.get(agent, {})
         a_conf = summ.get('avg_confidence_stated')
-        a_pr = summ.get('pass_rate')
-        a_gap = summ.get('calibration_gap')
+        # Recompute pass_rate from actual results
+        ar = results_by_agent.get(agent, [])
+        if ar:
+            a_pr = sum(1 for r in ar if r.get('score') == 'pass') / len(ar)
+        else:
+            a_pr = summ.get('pass_rate')
+        # Recompute calibration_gap from actual data
+        conf_values = [r.get('confidence_stated') for r in ar if r.get('confidence_stated') is not None]
+        if conf_values and ar:
+            a_conf = sum(conf_values) / len(conf_values)
+            actual_score = sum(score_numeric(r.get('score', 'fail')) for r in ar) / len(ar)
+            a_gap = a_conf - actual_score
+        else:
+            a_gap = summ.get('calibration_gap')
         agent_cls = agent_class(agent)
 
         conf_display = f"{round(a_conf)}%" if a_conf is not None else "n/a"

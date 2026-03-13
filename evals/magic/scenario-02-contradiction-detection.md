@@ -17,34 +17,36 @@ prompt: |
 
 expected_behavior: |
   - Magic identifies the contradiction explicitly: Bird's invariant requires courier assignment BEFORE IN_TRANSIT, but MJ's design allows IN_TRANSIT WITHOUT assignment (relying on a background job)
-  - Magic escalates rather than synthesizing: "ESCALATION: Bird says courier must be assigned before IN_TRANSIT (invariant). MJ's architecture allows IN_TRANSIT without assignment for 30 seconds. These directly contradict. Cannot produce a consistent handoff brief without resolution. Need: Bird and MJ to align on whether assignment is a precondition or a soft requirement."
-  - Magic does NOT produce a handoff brief that silently picks one interpretation
-  - Magic does NOT summarize by averaging the two positions (e.g., "courier should be assigned soon after IN_TRANSIT")
-  - The escalation clearly names both agents and the specific points of conflict
+  - Magic names both agents and quotes or precisely paraphrases their conflicting positions
+  - Magic escalates to Coach K (not Shaq) for resolution
+  - Magic does NOT silently pick one interpretation or average the two positions
+  - Magic provides resolution options (e.g., uphold invariant, relax invariant, introduce intermediate state)
+  - If a brief is produced alongside the escalation, it clearly marks the contradiction as blocking and tells Shaq not to implement
 
 failure_modes: |
   - Producing a handoff brief that silently adopts MJ's design without flagging the invariant violation
   - Paraphrasing the conflict as "there is some flexibility on assignment timing" — this hides the real disagreement
-  - Escalating but then providing an "interim" brief that Shaq could act on (which would cause Shaq to implement the wrong thing)
-  - Not naming both agents and their specific positions in the escalation
+  - Not naming both agents and their specific positions
   - Presenting the contradiction as a design choice Shaq should resolve (outside Shaq's authority — this is Bird's call)
+  - Softening the invariant language (e.g., "courier should ideally be assigned") without flagging this as a domain model change
 
 scoring_rubric: |
   pass:
     - Contradiction explicitly named with both agents' positions quoted or paraphrased precisely
-    - Formal escalation message sent to Coach K (not just a note in the output)
-    - No synthesis produced — Magic stops and waits
+    - Escalation routed to Coach K (not Shaq) for resolution
     - Escalation asks the right question: "Is courier assignment a hard precondition or a soft requirement?"
+    - Resolution options provided (at least 2 concrete paths)
+    - Does not silently adopt one position — if a brief is produced, the contradicted fields are explicitly marked as contested/blocked
     - Does not route the resolution to Shaq
 
   partial:
-    - Contradiction identified but not formally escalated
-    - Handoff brief produced with contradiction documented as an open question
-    - Shaq is correctly told "do not implement until this is resolved"
+    - Contradiction identified but escalation is vague or missing resolution options
+    - Both positions referenced but one is softened or mischaracterized
+    - Escalation routed to Coach K but question is imprecise
 
   fail:
     - Contradiction not identified
-    - Handoff brief produced that silently adopts one position
-    - Conflict softened or averaged away
+    - Handoff brief produced that silently adopts one position without flagging the conflict
+    - Conflict softened or averaged away (e.g., "courier should be assigned soon after IN_TRANSIT")
     - Shaq routed to resolve the conflict (outside his authority)
     - Escalation references only one agent's position
