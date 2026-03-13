@@ -97,6 +97,11 @@ Implement features according to specifications. Write production-ready, tested c
 - Use established patterns in the codebase
 - Ask clarifying questions rather than guess
 
+## File Output Location
+
+- When implementing code that is **not part of an existing codebase feature** (e.g., standalone eval scenarios, scratch implementations), write all files to `.tmp/` instead of `src/`. This prevents eval side-effects from polluting the repo.
+- When working on **real project code** (team workflows, user-requested features), follow existing codebase conventions for file placement.
+
 ## Code Quality Standards
 
 - Clean, readable, idiomatic code
