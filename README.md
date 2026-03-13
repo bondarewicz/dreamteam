@@ -111,7 +111,7 @@ graph LR
 
 1. **Coach K** fetches PR data using read-only `gh` commands
 2. **Bird + MJ + Kobe** review the diff in parallel
-3. **Coach K** synthesizes verdicts and writes to `analysis/PR-<number>-review.md`
+3. **Coach K** synthesizes verdicts and writes to `docs/PR-<number>-review.md`
 
 All `gh` commands are **READ-ONLY**. Nothing is ever posted to GitHub.
 
@@ -160,7 +160,7 @@ graph TD
 |-------|--------|-------------|
 | **1. Analysis** | Bird + MJ (concurrent) | Bird defines domain rules while MJ designs architecture. They exchange findings via messages and adjust in real-time. |
 | **1b. Context Curation** | Magic | Creates a curated handoff brief for Shaq — resolves terminology mismatches, flags contradictions, distills only what's needed for implementation. |
-| **2. Checkpoint** | Coach K + User | Coach K saves checkpoint to `analysis/checkpoint-<topic>.md`, breaks work into tasks, presents plan. User approves before implementation. |
+| **2. Checkpoint** | Coach K + User | Coach K saves checkpoint to `docs/checkpoint-<topic>.md`, breaks work into tasks, presents plan. User approves before implementation. |
 | **3. Implementation** | Shaq | Implements from Magic's handoff brief. Must submit plan before writing code (plan mode enforced). Maps implementation back to acceptance criteria. |
 | **4. Review** | Kobe + Pippen (parallel) | Kobe reviews quality/risk, Pippen reviews stability/ops. Both receive curated context, not raw dumps. |
 | **4b. Fix-Verify** | Shaq → Kobe + Pippen | If reviewers find issues, Shaq fixes, then reviewers re-verify. Loop repeats until both say SHIP. |
@@ -180,18 +180,18 @@ Every `/team` session (all modes) is recorded as an [asciicast v3](https://docs.
 
 - Phase transitions, agent spawns/completions, human decisions, escalations, fix-verify loops
 - Uploaded to asciinema (unlisted) at session end — link saved to the retro
-- Local file saved to `docs/recordings/YYYY-MM-DD-<topic>.cast`
+- Local file saved to `recordings/YYYY-MM-DD-<topic>.cast` (gitignored — uploaded to asciinema)
 
 The recording is constructed programmatically via `scripts/cast.sh` — it captures the team workflow narrative, not raw terminal output.
 
 ### Retrospectives
 
-After every `/team` session, Magic produces a mandatory retrospective saved to `docs/retros/YYYY-MM-DD-<topic>.md`:
+After every `/team` session, an HTML retrospective report is generated at `reports/retros/YYYY-MM-DD-<topic>.html`:
 
-- Executive summary, findings table, agent contributions
+- Executive summary, timeline, agent activity cards, findings table
 - **Team metrics:** escalation count, confidence levels per agent, finding attribution, fix-verify loop count, contradictions detected
 - **Session recording** link (asciinema URL or local path)
-- Carry-forward items and process lessons
+- Standalone HTML — viewable offline, all CSS inline
 
 ### Git Safety
 
@@ -252,18 +252,25 @@ dreamteam/
 │   ├── kobe.md                # Quality enforcer & production readiness
 │   ├── pippen.md              # Stability & integration
 │   └── magic.md               # Context synthesizer & handoff curator
-├── commands/                  # Slash commands (8 files)
+├── commands/                  # Slash commands (9 files)
 │   ├── bird.md, mj.md, shaq.md, kobe.md, pippen.md, magic.md
 │   ├── team.md                # /team (Coach K orchestrator)
+│   ├── eval.md                # /eval (eval runner + Coach K scoring)
 │   └── code-review.md         # /code-review (automated PR review)
 ├── scripts/
 │   ├── install.sh             # Installer script
-│   └── cast.sh                # Asciicast v3 recording helper
-├── docs/
-│   ├── team-improvement-analysis.md  # Gap analysis with sources
-│   ├── claude-skillz-analysis.md     # Transferable patterns analysis
-│   ├── recordings/                   # Session recordings (.cast files)
-│   └── retros/                       # Session retrospectives
+│   ├── cast.sh                # Asciicast v3 recording helper
+│   └── eval-report.sh         # Eval HTML report generator
+├── docs/                      # Markdown docs, analysis, checkpoints
+│   ├── team-improvement-analysis.md
+│   └── claude-skillz-analysis.md
+├── evals/                     # Eval scenarios and results
+│   ├── <agent>/scenario-*.md  # 3 scenarios per agent (18 total)
+│   └── results/*.json         # Eval run results (append-only)
+├── recordings/                # Session recordings (.cast, gitignored)
+├── reports/
+│   ├── retros/                # Session retro HTML reports
+│   └── evals/                 # Eval HTML dashboards
 └── README.md
 ```
 

@@ -89,9 +89,11 @@ done
 echo "  $script_count scripts installed."
 echo ""
 
-# --- Step 7: Ensure recording directories exist ---
-mkdir -p "$REPO_DIR/docs/recordings"
-mkdir -p "$REPO_DIR/docs/retros"
+# --- Step 7: Ensure output directories exist ---
+mkdir -p "$REPO_DIR/recordings"
+mkdir -p "$REPO_DIR/reports/retros"
+mkdir -p "$REPO_DIR/reports/evals"
+mkdir -p "$REPO_DIR/evals/results"
 
 # --- Summary ---
 echo "=== Installation Complete ==="
