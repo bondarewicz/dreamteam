@@ -876,6 +876,58 @@ echo "Upload failed. Report saved with local filename: $REPORT_FILE"
 ```
 The recording is always saved locally regardless of upload success.
 
+### Eval Gate (MANDATORY — when agent/command definitions change)
+
+Run this gate whenever the session modifies agent definitions, command files, or eval scenarios. Skip entirely if none of those files changed.
+
+#### When to Run
+
+| Changed files | Scenarios to run |
+|---------------|-----------------|
+| `agents/<name>.md` | `evals/<name>/scenario-*.md` (that agent only) |
+| `commands/team.md` or `commands/*.md` | All `evals/*/scenario-*.md` files (glob and report the actual count) |
+| `evals/<name>/*.md` | `evals/<name>/scenario-*.md` (that agent only) |
+| No agent/command/eval files changed | **Skip gate entirely** |
+
+#### Execution
+
+Coach K runs each required scenario via a subagent. Use the subagent type that matches each agent's role (e.g., the Bird subagent for bird scenarios). For each scenario:
+
+1. Open the scenario file — read `prompt`, `expected_behavior`, `failure_modes`, `scoring_rubric`.
+2. Give the prompt to the agent subagent in a fresh context (no prior session state).
+3. Score the output: **pass / partial / fail** per the `scoring_rubric`.
+
+#### Scoring and Verdict
+
+```
+EVAL GATE RESULTS:
+  <agent>/<scenario>  — [pass/partial/fail]  <one-line note>
+  ...
+
+Verdict: [PASS / BLOCK]
+```
+
+- **ANY fail** → verdict is **BLOCK** — do not proceed to the Production Safety Gate.
+- **All pass or partial** → verdict is **PASS** — list partials as warnings and continue.
+
+Explain the blocker concisely so the team knows what to fix before re-running.
+
+#### Results Recording
+
+Append results to `evals/results/YYYY-MM-DD.md` (create the file if it does not exist):
+
+```markdown
+## <ISO date> — <session topic>
+
+| Scenario | Score | Note |
+|----------|-------|------|
+| <agent>/<scenario-file> | pass/partial/fail | <note> |
+
+Verdict: PASS / BLOCK
+```
+
+---
+
 ### Production Safety Gate (MANDATORY — before suggesting git commands)
 
 **NEVER suggest the user push to production without completing this gate.** This is the single most important checkpoint in the entire workflow. A shipped bug costs 100x more than a caught one.

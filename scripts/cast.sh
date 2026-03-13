@@ -126,17 +126,48 @@ _check_rec_mode() {
   local rec_file
   rec_file=$(_rec_signal_file)
   if [[ -f "$rec_file" ]]; then
+    # Empty file check
+    if [[ ! -s "$rec_file" ]]; then
+      echo "WARNING: Removing empty .cast-rec-active" >&2
+      rm -f "$rec_file"
+      return 1
+    fi
     # Signal file format: line 1 = start epoch, line 2 = markers sidecar path, line 3 = PID
     REC_START=$(sed -n '1p' "$rec_file")
     REC_MARKERS=$(sed -n '2p' "$rec_file")
     local rec_pid
     rec_pid=$(sed -n '3p' "$rec_file")
-    # Staleness check: if PID is recorded, verify process is still alive
-    if [[ -n "$rec_pid" ]] && ! kill -0 "$rec_pid" 2>/dev/null; then
-      echo "WARNING: Removing stale .cast-rec-active (PID $rec_pid is dead)" >&2
+    # Age check (MUST come before PID check): stale if epoch is >3600s old or missing/corrupt
+    local now age
+    now=$(date +%s)
+    if [[ -z "$REC_START" ]] || ! [[ "$REC_START" =~ ^[0-9]+$ ]]; then
+      echo "WARNING: Removing corrupt .cast-rec-active (no valid epoch)" >&2
       rm -f "$rec_file"
       return 1
     fi
+    age=$(( now - REC_START ))
+    if (( age < 0 )); then
+      echo "WARNING: Removing .cast-rec-active — REC_START is in the future (clock skew? age ${age}s)" >&2
+      rm -f "$rec_file"
+      return 1
+    fi
+    if (( age > 3600 )); then
+      echo "WARNING: Removing stale .cast-rec-active (age ${age}s > 3600s)" >&2
+      rm -f "$rec_file"
+      return 1
+    fi
+    # Age is <3600s — now check PID if present
+    if [[ -n "$rec_pid" ]]; then
+      if ! kill -0 "$rec_pid" 2>/dev/null; then
+        echo "WARNING: Removing stale .cast-rec-active (PID $rec_pid is dead)" >&2
+        rm -f "$rec_file"
+        return 1
+      fi
+      # PID alive and age <3600s: valid active session
+      return 0
+    fi
+    # No PID but age <3600s: backward compat with older signal file format
+    echo "WARNING: .cast-rec-active has no PID — session may be orphaned (age ${age}s)" >&2
     return 0
   fi
   return 1
