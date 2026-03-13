@@ -139,6 +139,31 @@ Agent call N: subagent_type=pippen, prompt=<scenario-03 prompt verbatim>
 
 Capture the full agent output from each. Store only the first ~500 characters as `agent_output_excerpt`.
 
+### 4b-save. Persist raw agent output IMMEDIATELY (crash protection)
+
+**As soon as each agent returns**, write its raw output and metadata to disk BEFORE any scoring. This is the most critical durability step — agent runs are expensive and must never be re-run due to context loss.
+
+For each completed agent:
+```bash
+RAW_DIR="${RESULTS_DIR}/raw/${RUN_DATETIME}"
+mkdir -p "$RAW_DIR"
+cat > "${RAW_DIR}/${AGENT}-${SCENARIO_ID}.json" <<'RAWEOF'
+{
+  "agent": "<agent-name>",
+  "scenario_id": "<scenario-id>",
+  "agent_output": "<full agent output>",
+  "agent_output_excerpt": "<first ~500 chars>",
+  "duration_ms": <N>,
+  "tokens_used": <N>,
+  "timestamp": "<ISO8601>"
+}
+RAWEOF
+```
+
+Use the **Write tool** (not Bash echo) to write each file — this guarantees atomicity. Write each agent's output in the SAME message response where you receive it, before any other processing.
+
+**Why this matters:** If context compacts after agents finish but before scoring, these files let the next session re-score from saved outputs without re-running agents. Agent runs cost tokens and time — raw output files are the insurance policy.
+
 ### 4c. Coach K automated scoring
 
 After capturing the agent output, Coach K scores the scenario without asking the human.
@@ -162,12 +187,7 @@ After capturing the agent output, Coach K scores the scenario without asking the
    - The `text` should be a concise statement of what was met or missed (not the full rubric text)
    - This structured mapping is critical — the HTML report uses observations as a criteria checklist
 
-Display the scoring result inline (do not ask the human to confirm):
-```
-  Score:      pass/partial/fail
-  Confidence: N/100
-  Reason:     <justification>
-```
+Do not display per-scenario scoring in the terminal — results go to the HTML report only.
 
 ### 4d. Record the result (incremental save)
 
@@ -197,6 +217,8 @@ Each result contains (AC-8):
   "justification": "<non-empty string>",
   "observations": [{"type": "positive|negative", "text": "..."}],
   "agent_output_excerpt": "<first ~500 chars of agent output>",
+  "duration_ms": <N>,
+  "tokens_used": <N>,
   "timestamp": "<ISO8601>"
 }
 ```
@@ -223,20 +245,39 @@ If a `*-partial.jsonl` file exists in the results directory from a prior interru
 3. Skip those scenarios and continue from where the run left off
 4. Display: `Resuming interrupted run: N of TOTAL already scored`
 
-To check for a partial file at the start of Step 4:
+To check for recoverable state at the start of Step 4:
 ```bash
 PARTIAL_FILE="${RESULTS_DIR}/${RUN_DATETIME}-partial.jsonl"
-# Also check for any existing partial files from prior runs:
+# Check for partial JSONL files from prior runs (scored but not finalized):
 EXISTING_PARTIAL=$(ls -1 "${RESULTS_DIR}"/*-partial.jsonl 2>/dev/null | head -1)
+# Check for raw output directories from prior runs (agent ran but scoring lost):
+EXISTING_RAW=$(ls -d "${RESULTS_DIR}"/raw/*/ 2>/dev/null | head -1)
 ```
 
-If `EXISTING_PARTIAL` exists, ask the user: "Found interrupted run at [file]. Resume it or start fresh?"
+**Recovery priority order:**
+1. If `EXISTING_PARTIAL` exists: results were scored but run wasn't finalized. Resume scoring remaining scenarios.
+2. If `EXISTING_RAW` exists (but no matching partial): agents ran but context was lost before scoring. Re-score from saved raw outputs — do NOT re-run the agents.
+3. If neither exists: start fresh.
+
+Ask the user: "Found interrupted run at [file/dir]. Resume (re-score from saved outputs) or start fresh?"
+
+### 4g. Re-scoring from raw outputs
+
+When raw output files exist from a prior interrupted run:
+1. Use Glob to find all files in `${RESULTS_DIR}/raw/<run-datetime>/`
+2. For each raw output file, read it with the Read tool
+3. Load the corresponding scenario file (for rubric)
+4. Run Coach K automated scoring (Step 4c) using the saved `agent_output` — do NOT spawn a new agent
+5. Write scored results to JSONL checkpoint (Step 4d) as normal
+6. Continue with any remaining unscored scenarios (spawn fresh agents for those)
+
+This ensures that the expensive agent run is NEVER repeated when only the scoring was lost.
 
 ---
 
-## STEP 5: COMPUTE SUMMARIES
+## STEP 5: COMPUTE AND VALIDATE SUMMARIES
 
-After all scenarios are scored, compute:
+After all scenarios are scored, compute summaries by **counting from the scored results list** — never from memory or mental math:
 
 **Overall summary:**
 ```json
@@ -268,6 +309,15 @@ After all scenarios are scored, compute:
 - calibration_gap = avg_confidence_stated - (actual_correctness * 100)
 - Positive gap = overconfident. Negative gap = underconfident.
 - If no `confidence_stated` values: set both `avg_confidence_stated` and `calibration_gap` to null.
+
+**Validation gate (MANDATORY):**
+Before writing the result file, verify that the summary totals match the actual results:
+1. Count pass/partial/fail from the individual scored results
+2. Sum per-agent pass/partial/fail counts — they must equal the overall totals
+3. Verify: `pass + partial + fail == scenarios_run`
+4. If ANY mismatch is found, recount from the results list — do NOT use the mismatched values
+
+This validation prevents the most common scoring bug: summary totals that don't match per-agent breakdowns.
 
 ---
 
@@ -301,6 +351,8 @@ The full JSON schema:
       "justification": "...",
       "observations": [{"type": "positive|negative", "text": "..."}],
       "agent_output_excerpt": "<first ~500 chars>",
+      "duration_ms": N,
+      "tokens_used": N,
       "timestamp": "<ISO8601>"
     }
   ],
@@ -335,42 +387,19 @@ rm -f "${RESULTS_DIR}/${RUN_DATETIME}-partial.jsonl"
 
 ---
 
-## STEP 7: SHOW RUN SUMMARY AND GENERATE REPORT
+## STEP 7: GENERATE AND OPEN REPORT
 
-After writing the result file, display a summary to the user:
-
-```
-Run complete.
-Run ID: eval/run-YYYY-MM-DD-HHMM
-Results: N pass / N partial / N fail  (N% pass rate)
-Complete baseline: yes/no
-Saved to: evals/results/YYYY-MM-DD-HHMM.json
-
-Per-agent:
-  bird:   N/N pass  (confidence: N avg, calibration gap: +Npp or "n/a")
-  mj:     N/N pass  ...
-  ...
-
-Generating HTML report...
-```
-
-Then immediately run the report generation script:
+After writing the result file, generate the HTML report and open it. No terminal summary needed — the HTML report is the single source of truth.
 
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 bash "${REPO_ROOT}/scripts/eval-report.sh" generate
-```
-
-After the script completes, open the report for human review:
-
-```bash
 open "${REPO_ROOT}/reports/evals/$(date -u '+%Y-%m-%d')-eval-report.html"
 ```
 
-Display the report path to the user:
+Display only:
 ```
-Report generated: reports/evals/YYYY-MM-DD-eval-report.html
-Report opened for human review.
+Report opened: reports/evals/YYYY-MM-DD-eval-report.html
 ```
 
 ---
@@ -438,6 +467,10 @@ Report opened for review.
 9. **Calibration gap** = avg stated confidence minus actual pass rate (pass=100, partial=50, fail=0)
 10. **Do not hardcode** agent names, scenario counts, or scenario types — discover from filesystem
 11. **confidence_stated** = Coach K's confidence in the automated score (0–100); always set after automated scoring
+12. **No assumed scores** — never re-score prior outputs or assume how past runs "would have scored" under a new rubric. When a rubric changes, re-run the scenarios against live agents. Eval integrity requires empirical measurement, not inference.
+13. **Raw outputs persisted immediately** — write each agent's raw output to disk the moment it arrives, before scoring. Agent runs are expensive; raw output files are the insurance policy against context loss.
+14. **Three-layer durability** — (1) raw agent output saved to `results/raw/<run>/` immediately on receipt, (2) scored results appended to JSONL checkpoint after each score, (3) final JSON written on run completion. No single point of failure can lose results.
+15. **Summary must match results** — the `summary.pass/partial/fail` and `agent_summaries` fields must be computed by counting from the actual `results` array, not from mental math. The report script recomputes from results and warns on mismatch.
 
 ---
 
@@ -451,3 +484,6 @@ Report opened for review.
 - Do NOT hardcode the number of agents or scenarios
 - Do NOT deliver a summarized or modified prompt — verbatim only
 - Do NOT skip report generation after a scenario run — it is always automatic
+- Do NOT re-score prior agent outputs against a changed rubric — always re-run the agent fresh
+- Do NOT delay writing raw agent output — write it in the SAME response where you receive the agent's result, before scoring
+- Do NOT re-run agents when raw output files exist from an interrupted run — re-score from saved outputs instead
