@@ -42,8 +42,8 @@ fi
 
 ### File naming (matches retro format):
 ```
-Recording: <git-root>/docs/recordings/YYYY-MM-DD-<topic>.cast
-Report:    <git-root>/docs/reports/YYYY-MM-DD-<topic>.html
+Recording: <git-root>/recordings/YYYY-MM-DD-<topic>.cast
+Report:    <git-root>/reports/retros/YYYY-MM-DD-<topic>.html
 ```
 
 ---
@@ -58,10 +58,10 @@ Once you understand the task, immediately initialize the recording:
 CAST_SCRIPT="$HOME/.claude/scripts/cast.sh"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 TOPIC="<topic>"  # kebab-case slug, e.g., add-pagination, fix-checkout-race
-CAST_FILE="${REPO_ROOT}/docs/recordings/$(date +%Y-%m-%d)-${TOPIC}.cast"
+CAST_FILE="${REPO_ROOT}/recordings/$(date +%Y-%m-%d)-${TOPIC}.cast"
 "$CAST_SCRIPT" init "$CAST_FILE" "Dream Team: <one-line task description>"
 ```
-The `TOPIC` variable is reused when generating the HTML report (`docs/reports/$(date +%Y-%m-%d)-${TOPIC}.html`).
+The `TOPIC` variable is reused when generating the HTML report (`reports/retros/$(date +%Y-%m-%d)-${TOPIC}.html`).
 
 **MANDATORY — Log task context immediately after init (1-5 lines):**
 ```bash
@@ -358,7 +358,7 @@ After all three agents complete:
    - If ANY agent says REQUEST CHANGES → overall = REQUEST CHANGES
    - If all say APPROVE → overall = APPROVE
    - Otherwise → COMMENT
-3. **Write local review file** to `analysis/PR-<number>-review.md`
+3. **Write local review file** to `docs/PR-<number>-review.md`
 4. **Present to user** in conversation with:
    - Combined findings (deduplicated, prioritized)
    - Individual agent verdicts
@@ -378,7 +378,7 @@ PR: [number or branch]
 | mj    | opus  | Architecture review |
 | kobe  | opus  | Quality/risk review |
 
-Output: LOCAL ONLY (analysis/PR-<number>-review.md)
+Output: LOCAL ONLY (docs/PR-<number>-review.md)
 Tip: Run /usage to check rate limit impact.
 ```
 
@@ -538,7 +538,7 @@ This checkpoint is MANDATORY — never skip it.
 When user approves, log: `"$CAST_SCRIPT" human "$CAST_FILE" "Approved plan — proceeding to implementation"`
 
 #### Checkpoint Artifact (save to disk)
-Save the checkpoint to `analysis/checkpoint-<topic>.md` so Phase 1 work is preserved if later phases need re-running:
+Save the checkpoint to `docs/checkpoint-<topic>.md` so Phase 1 work is preserved if later phases need re-running:
 ```markdown
 # Checkpoint: [topic]
 Date: [today]
@@ -569,7 +569,7 @@ YOUR TASK (Task #5): [user's request]
 HANDOFF BRIEF (curated by Magic from Bird's domain analysis and MJ's architecture):
 [paste Magic's handoff brief — this is your primary input]
 
-For full context if needed, the checkpoint is saved at: analysis/checkpoint-<topic>.md
+For full context if needed, the checkpoint is saved at: docs/checkpoint-<topic>.md
 
 IMPORTANT:
 - You MUST use plan mode (EnterPlanMode) BEFORE writing any code
@@ -784,19 +784,19 @@ If the user changes requirements after an agent has started working:
 
 After every Dream Team session, generate the HTML report:
 
-1. **Generate HTML report** at `docs/reports/YYYY-MM-DD-<topic>.html`:
+1. **Generate HTML report** at `reports/retros/YYYY-MM-DD-<topic>.html`:
    ```bash
    REPO_ROOT="$(git rev-parse --show-toplevel)"
-   REPORT_FILE="${REPO_ROOT}/docs/reports/$(date +%Y-%m-%d)-${TOPIC}.html"
-   mkdir -p "${REPO_ROOT}/docs/reports"
+   REPORT_FILE="${REPO_ROOT}/reports/retros/$(date +%Y-%m-%d)-${TOPIC}.html"
+   mkdir -p "${REPO_ROOT}/reports/retros"
    "$CAST_SCRIPT" export-html "$CAST_FILE"
    mv "${CAST_FILE%.cast}.html" "$REPORT_FILE"
    ```
 2. **The HTML report includes automatically:** Executive summary, timeline, agent activity cards, findings table (with status), files changed, carry-forward items, lineup card, session metrics with per-agent token usage and cost
 3. **Magic produces the retro** as part of synthesis by logging events that the HTML parser extracts — Coach K runs `export-html` after `finish`
-4. **Save checkpoint** — if not already saved in Phase 2, save all agent outputs to `analysis/checkpoint-<topic>.md` for recovery
+4. **Save checkpoint** — if not already saved in Phase 2, save all agent outputs to `docs/checkpoint-<topic>.md` for recovery
 5. **The report is standalone HTML** — viewable offline, no external dependencies, all CSS inline
-6. **No separate retro file** — the HTML report IS the retro. Do not write markdown retros to `docs/retros/`
+6. **No separate retro file** — the HTML report IS the retro. Do not write markdown retros to `retros/`
 
 This is non-negotiable. Every session must leave a paper trail for future sessions to build on.
 
@@ -845,7 +845,7 @@ If the user provides feedback or requests changes after the session is complete:
 
 If `reopen` fails (file deleted, corrupted), start a fresh recording immediately:
 ```bash
-CAST_FILE="$(git rev-parse --show-toplevel)/docs/recordings/$(date +%Y-%m-%d)-${TOPIC}-cont.cast"
+CAST_FILE="$(git rev-parse --show-toplevel)/recordings/$(date +%Y-%m-%d)-${TOPIC}-cont.cast"
 "$CAST_SCRIPT" init "$CAST_FILE" "Dream Team (cont): <task description>"
 ```
 
@@ -857,8 +857,8 @@ CAST_URL=$("$CAST_SCRIPT" upload "$CAST_FILE" "Dream Team: <task description>")
 
 # Re-run export-html with the URL to embed a clickable link in the final report
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-REPORT_FILE="${REPO_ROOT}/docs/reports/$(date +%Y-%m-%d)-${TOPIC}.html"
-mkdir -p "${REPO_ROOT}/docs/reports"
+REPORT_FILE="${REPO_ROOT}/reports/retros/$(date +%Y-%m-%d)-${TOPIC}.html"
+mkdir -p "${REPO_ROOT}/reports/retros"
 "$CAST_SCRIPT" export-html "$CAST_FILE" "$CAST_URL"
 mv "${CAST_FILE%.cast}.html" "$REPORT_FILE"
 open "$REPORT_FILE"
@@ -868,8 +868,8 @@ If upload fails (network, auth, missing asciinema): the intermediate report alre
 ```bash
 # Upload failed — use intermediate report as final
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-REPORT_FILE="${REPO_ROOT}/docs/reports/$(date +%Y-%m-%d)-${TOPIC}.html"
-mkdir -p "${REPO_ROOT}/docs/reports"
+REPORT_FILE="${REPO_ROOT}/reports/retros/$(date +%Y-%m-%d)-${TOPIC}.html"
+mkdir -p "${REPO_ROOT}/reports/retros"
 mv "${CAST_FILE%.cast}.html" "$REPORT_FILE"
 open "$REPORT_FILE"
 echo "Upload failed. Report saved with local filename: $REPORT_FILE"
@@ -1035,7 +1035,7 @@ After the workflow completes (Magic's synthesis in either mode), present to the 
 2. **Files** created or modified
 3. **Production Safety Gate** — risk level, pre-push checklist, rollback plan, final recommendation
 4. **Recording** — asciinema URL (or local path if upload failed)
-5. **Report** — confirm HTML report was generated at `docs/reports/YYYY-MM-DD-<topic>.html`
+5. **Report** — confirm HTML report was generated at `reports/retros/YYYY-MM-DD-<topic>.html`
 6. **Suggested git commands** — ONLY if Production Safety Gate passes (✅ or ⚠️)
 7. **Next steps** and follow-up items
 8. **Open questions** if any remain

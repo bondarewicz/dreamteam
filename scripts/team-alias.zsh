@@ -15,7 +15,7 @@ team() {
         cast_script="$HOME/.claude/scripts/cast.sh"
     fi
 
-    local recordings_dir="${repo_root}/docs/recordings"
+    local recordings_dir="${repo_root}/recordings"
     mkdir -p "$recordings_dir"
 
     local cast_file="${recordings_dir}/$(date +%Y-%m-%d)-${topic}.cast"
@@ -38,7 +38,7 @@ team() {
     fi
 
     # Auto-generate HTML report
-    local reports_dir="${repo_root}/docs/reports"
+    local reports_dir="${repo_root}/reports/retros"
     mkdir -p "$reports_dir"
     local report_file="${reports_dir}/$(date +%Y-%m-%d)-${topic}.html"
 
