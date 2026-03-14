@@ -232,32 +232,42 @@ Use the **Write tool** (not Bash echo) to write each file — this guarantees at
 
 ### 4b-graders. Run code-based graders (HARD GATE)
 
-If the scenario defines a `graders:` field, run all graders against the raw agent output **after** saving the raw file but **before** Coach K scoring.
+If the scenario defines a `graders:` field, run the grader script against the raw agent output **after** saving the raw file but **before** Coach K scoring:
 
-**Supported grader types:**
+```bash
+GRADER_RESULT=$(bash "${REPO_ROOT}/scripts/eval-graders.sh" "${SCENARIO_FILE}" "${RAW_OUTPUT_FILE}")
+GRADER_EXIT=$?
+```
+
+The script returns:
+- Exit code 0: all graders passed
+- Exit code 1: one or more graders failed (HARD GATE — scenario score is "fail")
+- stdout: JSON array of grader results
+
+Store `GRADER_RESULT` as `grader_results` in the result entry. If `GRADER_EXIT != 0`, set `grader_override = true`.
+
+Coach K does NOT run graders — the script handles them as pure code with zero LLM calls.
+
+**Supported grader types** (implemented by `scripts/eval-graders.sh`):
 
 | Type | Config fields | Pass condition |
 |------|---------------|----------------|
 | `json_valid` | (none) | Output contains at least one valid JSON object or array |
 | `contains` | `values`: string or list of strings | Output contains ALL specified strings |
 | `not_contains` | `values`: string or list of strings | Output contains NONE of the specified strings |
-| `regex` | `pattern`: regex string | Output matches the regex pattern |
+| `regex` | `pattern`: regex string | Output matches the regex pattern (re.search) |
 | `section_present` | `sections`: list of strings | Output contains ALL specified section headers |
 | `field_count` | `pattern`: regex, `min`: int, `max`: int | Count of pattern matches is within [min, max] |
 | `length_bounds` | `min`: int (chars), `max`: int (chars) | Output length in characters is within [min, max] |
 
 **HARD GATE RULE:** If ANY grader fails, the scenario's final `score` is automatically `"fail"` regardless of Coach K's assessment.
 
-Grader execution procedure:
-1. Run all graders for the scenario against the agent output.
-2. Record each grader result as:
-   ```json
-   {"type": "<grader-type>", "config": {<grader config>}, "passed": true|false, "detail": "<explanation if failed, or 'passed' if passed>"}
-   ```
-3. Store all grader results as `grader_results` in the result entry.
-4. If any grader failed, set a `grader_override = true` flag for this scenario.
-5. Proceed to Coach K scoring regardless of grader results (Coach K score is recorded for diagnostic value).
-6. When recording the final `score`, if `grader_override == true`, set `score = "fail"`.
+Grader result procedure:
+1. Parse `GRADER_RESULT` (JSON array) as `grader_results`.
+2. Store all grader results as `grader_results` in the result entry.
+3. If `GRADER_EXIT != 0`, set a `grader_override = true` flag for this scenario.
+4. Proceed to Coach K scoring regardless of grader results (Coach K score is recorded for diagnostic value).
+5. When recording the final `score`, if `grader_override == true`, set `score = "fail"`.
 
 When `TRIALS_N > 1`: run graders independently per trial (each trial has its own grader results). A trial with a failed grader receives `score = "fail"` for that trial. The per-trial `grader_results` are stored inside the `trials` array entry for that trial.
 
