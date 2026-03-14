@@ -6,6 +6,8 @@ Tests Shaq's ability to implement a feature precisely to spec — no more, no le
 
 ---
 
+category: regression
+
 prompt: |
   Bird has defined these acceptance criteria for a weight bracket classifier:
 

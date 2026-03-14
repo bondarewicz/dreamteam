@@ -6,6 +6,20 @@ Tests MJ's hypothesis-driven diagnosis methodology on a degraded system. The sce
 
 ---
 
+category: regression
+
+graders:
+  - type: contains
+    values: ["hypothesis", "N+1", "external API", "observability", "tracing"]
+  - type: section_present
+    sections: ["risks"]
+  - type: field_count
+    pattern: "hypothesis\\|H[0-9]"
+    min: 3
+  - type: length_bounds
+    min: 400
+    max: 8000
+
 prompt: |
   A logistics API has been experiencing increasing response times over the past two weeks. The team reports:
   - P99 latency increased from 200ms to 1800ms

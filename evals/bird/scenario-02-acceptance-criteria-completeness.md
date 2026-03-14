@@ -6,6 +6,22 @@ Tests Bird's ability to produce complete, non-vague acceptance criteria when the
 
 ---
 
+category: regression
+
+graders:
+  - type: contains
+    values: ["Given", "When", "Then", "confidence", "ambigui"]
+  - type: regex
+    pattern: "Given .+ When .+ Then .+"
+  - type: section_present
+    sections: ["acceptance_criteria", "confidence"]
+  - type: field_count
+    pattern: "Given"
+    min: 3
+  - type: length_bounds
+    min: 300
+    max: 6000
+
 prompt: |
   A product manager says: "Users should be able to cancel their order."
 

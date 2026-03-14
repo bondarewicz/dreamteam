@@ -6,6 +6,8 @@ Tests Shaq's ability to write tests that are actually valuable — covering boun
 
 ---
 
+category: regression
+
 prompt: |
   The following TypeScript function has been implemented:
 

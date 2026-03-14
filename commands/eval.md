@@ -14,6 +14,8 @@ Read the user's arguments from `$ARGUMENTS`.
 | `/eval <agent>` | Run all 3 scenarios for the named agent only (e.g. `/eval bird`) |
 | `/eval <agent> <scenario-id>` | Run one specific scenario (e.g. `/eval bird scenario-01-domain-rule-extraction`) |
 | `/eval --report` | Generate HTML report from saved results — do not run any scenarios |
+| `/eval --trials 3` | Run all scenarios with 3 trials each |
+| `/eval bird --trials 3` | Run bird scenarios with 3 trials each |
 
 Parse arguments:
 ```
@@ -21,6 +23,16 @@ ARGS="$ARGUMENTS"
 ```
 
 If `--report` is the only argument, skip to the REPORT GENERATION section.
+
+**Parsing `--trials N`:**
+- Scan `$ARGUMENTS` for the `--trials` flag followed by a value N.
+- N must be a positive integer >= 1. Default is 1 (no trials, single run, backward-compatible behavior).
+- Invalid values (0, -1, non-integer such as "abc") produce a clear error message and abort:
+  ```
+  Error: --trials requires a positive integer >= 1. Got: <value>
+  ```
+- `--trials 1` is identical to not providing the flag.
+- Store the parsed value as `TRIALS_N` (integer).
 
 ---
 
@@ -72,6 +84,13 @@ For each scenario file, use the Read tool to read it. Validate that all 4 requir
 
 **Field parsing:** Fields are YAML-style blocks. A field starts at `fieldname:` on its own line and continues until the next field marker or end of file. Parse using the Read tool output — extract the content between field headers.
 
+**Optional fields (recognized but not required):**
+- `graders:` — code-based grader definitions (5th field, after `scoring_rubric:`). Scenarios without this field behave exactly as today.
+- `category:` — `"regression"` or `"capability"`. Affects report alerting. Omit to use no category.
+- `reference_output:` — known-good output for grader/scorer validation.
+
+Validation should recognize these optional fields without requiring them. Their presence does not change whether a scenario is included or skipped.
+
 ---
 
 ## STEP 3: RUN INITIALIZATION
@@ -103,6 +122,8 @@ Show the user a run header before starting:
 Dream Team Eval Runner
 Run ID: eval/run-YYYY-MM-DD-HHMM
 Scenarios to run: N (of TOTAL total)
+Trials per scenario: <TRIALS_N>   [omit this line if TRIALS_N == 1]
+Total agent calls: <N * TRIALS_N>  [omit this line if TRIALS_N == 1]
 Complete baseline: yes/no
 Scoring mode: automated (Coach K) — human review via HTML report
 ```
@@ -116,8 +137,15 @@ Scoring mode: automated (Coach K) — human review via HTML report
 ### 4a. Show progress
 
 Before launching, display the full run list:
+
+When `TRIALS_N == 1` (default):
 ```
 Launching all N scenarios in parallel...
+```
+
+When `TRIALS_N > 1`:
+```
+Launching N scenarios x TRIALS_N trials = TOTAL agent calls in parallel...
 ```
 
 ### 4b. Spawn ALL agents concurrently (AC-2: session isolation)
@@ -127,8 +155,9 @@ Use the **Agent tool** to spawn ALL scenarios in a single message. Each scenario
 - Set `subagent_type` to the agent name exactly as the directory is named (e.g. `bird`, `mj`, `shaq`, `magic`, `kobe`, `pippen`)
 - Deliver the scenario's `prompt` field **verbatim** (AC-7) — do not summarize, rephrase, or add instructions
 - The prompt is the ONLY content delivered to the agent
-- Launch ALL scenarios in ONE message — do NOT wait for one to finish before starting the next
+- Launch ALL scenarios (and ALL trials) in ONE message — do NOT wait for one to finish before starting the next
 
+**When `TRIALS_N == 1` (default):**
 ```
 [Single message with N parallel Agent tool calls]
 Agent call 1: subagent_type=bird, prompt=<scenario-01 prompt verbatim>
@@ -137,17 +166,35 @@ Agent call 2: subagent_type=bird, prompt=<scenario-02 prompt verbatim>
 Agent call N: subagent_type=pippen, prompt=<scenario-03 prompt verbatim>
 ```
 
+**When `TRIALS_N > 1`:**
+Spawn `N_scenarios * TRIALS_N` Agent tool calls in a single message. Every trial for every scenario is launched concurrently. Each trial is a completely independent, fresh Agent session with the same verbatim prompt.
+
+```
+[Single message with N*TRIALS_N parallel Agent tool calls]
+Agent call 1: subagent_type=bird, prompt=<scenario-01 prompt verbatim>  [trial 1]
+Agent call 2: subagent_type=bird, prompt=<scenario-01 prompt verbatim>  [trial 2]
+Agent call 3: subagent_type=bird, prompt=<scenario-01 prompt verbatim>  [trial 3]
+Agent call 4: subagent_type=bird, prompt=<scenario-02 prompt verbatim>  [trial 1]
+...
+Agent call N*TRIALS_N: subagent_type=pippen, prompt=<scenario-03 prompt verbatim>  [trial TRIALS_N]
+```
+
+Example: 18 scenarios x 3 trials = 54 Agent tool calls in one message.
+
 Capture the full agent output from each. Store only the first ~500 characters as `agent_output_excerpt`.
 
 ### 4b-save. Persist raw agent output IMMEDIATELY (crash protection)
 
 **As soon as each agent returns**, write its raw output and metadata to disk BEFORE any scoring. This is the most critical durability step — agent runs are expensive and must never be re-run due to context loss.
 
-For each completed agent:
+**When `TRIALS_N == 1`:**
 ```bash
 RAW_DIR="${RESULTS_DIR}/raw/${RUN_DATETIME}"
 mkdir -p "$RAW_DIR"
-cat > "${RAW_DIR}/${AGENT}-${SCENARIO_ID}.json" <<'RAWEOF'
+# filename: <agent>-<scenario-id>.json
+```
+Raw file schema:
+```json
 {
   "agent": "<agent-name>",
   "scenario_id": "<scenario-id>",
@@ -157,16 +204,66 @@ cat > "${RAW_DIR}/${AGENT}-${SCENARIO_ID}.json" <<'RAWEOF'
   "tokens_used": <N>,
   "timestamp": "<ISO8601>"
 }
-RAWEOF
+```
+
+**When `TRIALS_N > 1`:**
+```bash
+RAW_DIR="${RESULTS_DIR}/raw/${RUN_DATETIME}"
+mkdir -p "$RAW_DIR"
+# filename: <agent>-<scenario-id>-trial-<trial-number>.json
+```
+Raw file schema (per trial):
+```json
+{
+  "agent": "<agent-name>",
+  "scenario_id": "<scenario-id>",
+  "trial_number": <N>,
+  "agent_output": "<full agent output>",
+  "agent_output_excerpt": "<first ~500 chars>",
+  "duration_ms": <N>,
+  "tokens_used": <N>,
+  "timestamp": "<ISO8601>"
+}
 ```
 
 Use the **Write tool** (not Bash echo) to write each file — this guarantees atomicity. Write each agent's output in the SAME message response where you receive it, before any other processing.
 
 **Why this matters:** If context compacts after agents finish but before scoring, these files let the next session re-score from saved outputs without re-running agents. Agent runs cost tokens and time — raw output files are the insurance policy.
 
+### 4b-graders. Run code-based graders (HARD GATE)
+
+If the scenario defines a `graders:` field, run all graders against the raw agent output **after** saving the raw file but **before** Coach K scoring.
+
+**Supported grader types:**
+
+| Type | Config fields | Pass condition |
+|------|---------------|----------------|
+| `json_valid` | (none) | Output contains at least one valid JSON object or array |
+| `contains` | `values`: string or list of strings | Output contains ALL specified strings |
+| `not_contains` | `values`: string or list of strings | Output contains NONE of the specified strings |
+| `regex` | `pattern`: regex string | Output matches the regex pattern |
+| `section_present` | `sections`: list of strings | Output contains ALL specified section headers |
+| `field_count` | `pattern`: regex, `min`: int, `max`: int | Count of pattern matches is within [min, max] |
+| `length_bounds` | `min`: int (chars), `max`: int (chars) | Output length in characters is within [min, max] |
+
+**HARD GATE RULE:** If ANY grader fails, the scenario's final `score` is automatically `"fail"` regardless of Coach K's assessment.
+
+Grader execution procedure:
+1. Run all graders for the scenario against the agent output.
+2. Record each grader result as:
+   ```json
+   {"type": "<grader-type>", "config": {<grader config>}, "passed": true|false, "detail": "<explanation if failed, or 'passed' if passed>"}
+   ```
+3. Store all grader results as `grader_results` in the result entry.
+4. If any grader failed, set a `grader_override = true` flag for this scenario.
+5. Proceed to Coach K scoring regardless of grader results (Coach K score is recorded for diagnostic value).
+6. When recording the final `score`, if `grader_override == true`, set `score = "fail"`.
+
+When `TRIALS_N > 1`: run graders independently per trial (each trial has its own grader results). A trial with a failed grader receives `score = "fail"` for that trial. The per-trial `grader_results` are stored inside the `trials` array entry for that trial.
+
 ### 4c. Coach K automated scoring
 
-After capturing the agent output, Coach K scores the scenario without asking the human.
+After capturing the agent output (and running any graders), Coach K scores the scenario without asking the human.
 
 **Scoring procedure:**
 
@@ -189,6 +286,16 @@ After capturing the agent output, Coach K scores the scenario without asking the
 
 Do not display per-scenario scoring in the terminal — results go to the HTML report only.
 
+**When `TRIALS_N > 1`:** Score each trial independently. Each trial produces its own `score`, `confidence_stated`, `justification`, and `observations`. After all trials for a scenario are scored:
+
+- **`score` (final)** = worst score across all trials. Severity order: `fail` > `partial` > `pass`. If any trial fails, the scenario's final score is `fail`. If no failures but any partial, the final score is `partial`. Only if all trials pass is the final score `pass`.
+- **`pass_at_1`** = (number of trials that scored `pass`) / TRIALS_N. Computed empirically from observed trial scores.
+- **`pass_at_k`** = `1` if at least one trial scored `pass`, else `0`. Empirical from observed results.
+- **`pass_hat_k`** = `1` if ALL trials scored `pass`, else `0`. Empirical from observed results.
+- **`flaky`** = `true` if not all trial scores are identical.
+
+If `grader_override == true` for a trial, that trial's score is `"fail"` and counts as a fail trial in the above calculations.
+
 ### 4d. Record the result (incremental save)
 
 After each scored scenario, append the result to an in-memory list AND write it to disk immediately. This ensures no data is lost if the session is interrupted by context compaction, user abort, or crash.
@@ -205,6 +312,7 @@ After each scored scenario, append the result to an in-memory list AND write it 
 
 Each result contains (AC-8):
 
+**When `TRIALS_N == 1` (default, backward-compatible):**
 ```json
 {
   "run_id": "<run_id>",
@@ -219,9 +327,50 @@ Each result contains (AC-8):
   "agent_output_excerpt": "<first ~500 chars of agent output>",
   "duration_ms": <N>,
   "tokens_used": <N>,
-  "timestamp": "<ISO8601>"
+  "timestamp": "<ISO8601>",
+  "grader_results": [<present only if scenario defines graders>],
+  "category": "<regression|capability — present only if scenario defines category>"
 }
 ```
+
+**When `TRIALS_N > 1`:**
+```json
+{
+  "run_id": "<run_id>",
+  "agent": "<agent-name>",
+  "scenario_id": "<scenario-id>",
+  "scenario_type": "<happy-path|edge-case|escalation>",
+  "scenario_name": "<human-readable name>",
+  "score": "<worst score across all trials: fail > partial > pass>",
+  "confidence_stated": <N — from the worst-scoring trial>,
+  "justification": "<non-empty string — from the worst-scoring trial>",
+  "observations": [<from the worst-scoring trial>],
+  "agent_output_excerpt": "<first ~500 chars — from trial 1>",
+  "duration_ms": <N — from trial 1>,
+  "tokens_used": <N — from trial 1>,
+  "timestamp": "<ISO8601 — from trial 1>",
+  "trials": [
+    {
+      "trial_number": 1,
+      "score": "<pass|partial|fail>",
+      "confidence_stated": <N>,
+      "justification": "<non-empty string>",
+      "observations": [{"type": "positive|negative", "text": "..."}],
+      "grader_results": [<present only if scenario defines graders>],
+      "duration_ms": <N>,
+      "timestamp": "<ISO8601>"
+    }
+  ],
+  "pass_at_1": <decimal 0.0-1.0 — empirical: pass_trial_count / TRIALS_N>,
+  "pass_at_k": <true|false — empirical: true if at least one trial passed>,
+  "pass_hat_k": <true|false — empirical: true if all trials passed>,
+  "flaky": <true|false — true if not all trial scores are identical>,
+  "grader_results": [<aggregated grader results — present only if scenario defines graders>],
+  "category": "<regression|capability — present only if scenario defines category>"
+}
+```
+
+**Schema invariant:** Without `--trials` (or `--trials 1`): NO `trials` array, NO `pass_at_1`, `pass_at_k`, `pass_hat_k`, `flaky` fields. Schema is identical to the previous format for full backward compatibility. The `grader_results` and `category` fields are present only when the scenario defines them, in either single-trial or multi-trial mode.
 
 **Determine `scenario_type`** from the scenario filename:
 - Files containing `scenario-01` are `happy-path`
@@ -289,6 +438,14 @@ After all scenarios are scored, compute summaries by **counting from the scored 
 }
 ```
 
+When `TRIALS_N > 1`, also add to the overall summary:
+```json
+{
+  "total_flaky": <count of scenarios where flaky == true>,
+  "total_saturated_agents": <count of agents where saturated == true>
+}
+```
+
 **Per-agent summaries** (iterate over all agents that appeared in results):
 ```json
 {
@@ -300,6 +457,15 @@ After all scenarios are scored, compute summaries by **counting from the scored 
     "avg_confidence_stated": <decimal or null if no confidence data>,
     "calibration_gap": <decimal or null>
   }
+}
+```
+
+When `TRIALS_N > 1`, also add to each agent summary:
+```json
+{
+  "avg_pass_at_1": <decimal 0.0-1.0 — average pass_at_1 across all agent's scenarios>,
+  "flaky_count": <count of scenarios for this agent where flaky == true>,
+  "saturated": <true if ALL of this agent's scenarios have pass_hat_k == true, else false>
 }
 ```
 
@@ -327,6 +493,7 @@ Use the Write tool to write the result file as JSON to `evals/results/YYYY-MM-DD
 
 The full JSON schema:
 
+**Without `--trials` (or `--trials 1`) — backward-compatible schema (UNCHANGED):**
 ```json
 {
   "run_id": "eval/run-YYYY-MM-DD-HHMM",
@@ -353,7 +520,9 @@ The full JSON schema:
       "agent_output_excerpt": "<first ~500 chars>",
       "duration_ms": N,
       "tokens_used": N,
-      "timestamp": "<ISO8601>"
+      "timestamp": "<ISO8601>",
+      "grader_results": [{"type": "...", "config": {}, "passed": true, "detail": "..."}],
+      "category": "regression|capability"
     }
   ],
   "agent_summaries": {
@@ -368,6 +537,80 @@ The full JSON schema:
   },
   "meta": {
     "repo_commit": "<git short SHA>",
+    "trials": 1,
+    "notes": "Preliminary scoring by Coach K. Human review pending via HTML report."
+  }
+}
+```
+
+Note: `grader_results` and `category` fields are present in a result entry ONLY if the scenario defines them. `trials` is included in `meta` for all runs (value 1 when not using `--trials`).
+
+**With `--trials N` (N > 1):**
+```json
+{
+  "run_id": "eval/run-YYYY-MM-DD-HHMM",
+  "date": "<ISO8601 timestamp>",
+  "is_complete_baseline": <true|false>,
+  "scenarios_total": <N>,
+  "scenarios_run": <N>,
+  "summary": {
+    "pass": N,
+    "partial": N,
+    "fail": N,
+    "pass_rate": 0.N,
+    "total_flaky": N,
+    "total_saturated_agents": N
+  },
+  "results": [
+    {
+      "agent": "bird",
+      "scenario_id": "scenario-01-domain-rule-extraction",
+      "scenario_type": "happy-path",
+      "scenario_name": "Domain Rule Extraction",
+      "score": "<worst across trials>",
+      "confidence_stated": N,
+      "justification": "...",
+      "observations": [...],
+      "agent_output_excerpt": "<first ~500 chars — from trial 1>",
+      "duration_ms": N,
+      "tokens_used": N,
+      "timestamp": "<ISO8601>",
+      "trials": [
+        {
+          "trial_number": 1,
+          "score": "pass|partial|fail",
+          "confidence_stated": N,
+          "justification": "...",
+          "observations": [{"type": "positive|negative", "text": "..."}],
+          "grader_results": [...],
+          "duration_ms": N,
+          "timestamp": "<ISO8601>"
+        }
+      ],
+      "pass_at_1": 0.33,
+      "pass_at_k": true,
+      "pass_hat_k": false,
+      "flaky": true,
+      "grader_results": [...],
+      "category": "regression|capability"
+    }
+  ],
+  "agent_summaries": {
+    "<agent>": {
+      "pass": N,
+      "partial": N,
+      "fail": N,
+      "pass_rate": 0.N,
+      "avg_confidence_stated": N or null,
+      "calibration_gap": N or null,
+      "avg_pass_at_1": 0.N,
+      "flaky_count": N,
+      "saturated": true|false
+    }
+  },
+  "meta": {
+    "repo_commit": "<git short SHA>",
+    "trials": N,
     "notes": "Preliminary scoring by Coach K. Human review pending via HTML report."
   }
 }
@@ -457,10 +700,10 @@ Report opened for review.
 ## DOMAIN RULES (MUST HONOR)
 
 1. **Scores are strictly pass/partial/fail** — no numeric scores at scenario level
-2. **Session isolation** — each scenario runs in a fresh Agent tool call, zero context carry-over
+2. **Session isolation** — each scenario runs in a fresh Agent tool call, zero context carry-over; each trial is also a fresh independent session
 3. **Coach K scores are preliminary** — automated scoring is the default; human may override via Step 8
 4. **Justification is mandatory** — Coach K must always produce a non-empty justification
-5. **Prompts delivered verbatim** — never modify, summarize, or add to the scenario's prompt field
+5. **Prompts delivered verbatim** — never modify, summarize, or add to the scenario's prompt field; all trials receive the identical verbatim prompt
 6. **Regression baseline** — only runs with `is_complete_baseline: true` can serve as regression baseline
 7. **Complete baseline** = all discovered scenarios scored in one run (no filtering)
 8. **Append-only** — result files are never retroactively modified; human overrides go into a new file
@@ -468,9 +711,13 @@ Report opened for review.
 10. **Do not hardcode** agent names, scenario counts, or scenario types — discover from filesystem
 11. **confidence_stated** = Coach K's confidence in the automated score (0–100); always set after automated scoring
 12. **No assumed scores** — never re-score prior outputs or assume how past runs "would have scored" under a new rubric. When a rubric changes, re-run the scenarios against live agents. Eval integrity requires empirical measurement, not inference.
-13. **Raw outputs persisted immediately** — write each agent's raw output to disk the moment it arrives, before scoring. Agent runs are expensive; raw output files are the insurance policy against context loss.
-14. **Three-layer durability** — (1) raw agent output saved to `results/raw/<run>/` immediately on receipt, (2) scored results appended to JSONL checkpoint after each score, (3) final JSON written on run completion. No single point of failure can lose results.
+13. **Raw outputs persisted immediately** — write each agent's raw output to disk the moment it arrives, before scoring. Agent runs are expensive; raw output files are the insurance policy against context loss. Per-trial raw files follow the naming convention `<agent>-<scenario-id>-trial-<N>.json`.
+14. **Three-layer durability** — (1) raw agent output saved to `results/raw/<run>/` immediately on receipt (per trial when using `--trials`), (2) scored results appended to JSONL checkpoint after each score, (3) final JSON written on run completion. No single point of failure can lose results.
 15. **Summary must match results** — the `summary.pass/partial/fail` and `agent_summaries` fields must be computed by counting from the actual `results` array, not from mental math. The report script recomputes from results and warns on mismatch.
+16. **Grader fail = scenario fail** — if ANY code-based grader fails for a trial, that trial's score is `"fail"` regardless of Coach K's rubric assessment. Grader results are stored in `grader_results` per trial.
+17. **Score = worst across trials** — multi-trial final score uses severity ordering: fail > partial > pass. Never use majority vote.
+18. **Trial metrics are empirical** — `pass_at_1`, `pass_at_k`, `pass_hat_k` are computed by counting observed trial outcomes, never derived from a formula applied to a single run.
+19. **Backward compatibility** — when `TRIALS_N == 1`, the result JSON schema is identical to the pre-trials format. No `trials` array, no `pass_at_1/pass_at_k/pass_hat_k/flaky` fields. Existing result files from prior runs remain parseable.
 
 ---
 
@@ -482,8 +729,13 @@ Report opened for review.
 - Do NOT mark a filtered run as `is_complete_baseline: true`
 - Do NOT modify existing result files — write a new file for human overrides
 - Do NOT hardcode the number of agents or scenarios
-- Do NOT deliver a summarized or modified prompt — verbatim only
+- Do NOT deliver a summarized or modified prompt — verbatim only; all trials get the IDENTICAL verbatim prompt
 - Do NOT skip report generation after a scenario run — it is always automatic
 - Do NOT re-score prior agent outputs against a changed rubric — always re-run the agent fresh
 - Do NOT delay writing raw agent output — write it in the SAME response where you receive the agent's result, before scoring
 - Do NOT re-run agents when raw output files exist from an interrupted run — re-score from saved outputs instead
+- Do NOT accept `--trials 0` or negative values — validate and abort with a clear error message
+- Do NOT run trials sequentially — all N_scenarios * TRIALS_N agent calls launch in one parallel message
+- Do NOT use majority vote for multi-trial scoring — always use worst score (fail > partial > pass)
+- Do NOT override Coach K's score with a grader pass — graders are a hard gate for fail only, not a hard gate for pass
+- Do NOT add `trials`/`pass_at_k`/`flaky` fields when `TRIALS_N == 1` — preserve backward compatibility

@@ -6,6 +6,17 @@ Tests Kobe's precision: given code that is mostly correct, Kobe must identify re
 
 ---
 
+category: regression
+
+graders:
+  - type: not_contains
+    values: ["race condition", "injection", "Critical"]
+  - type: section_present
+    sections: ["production_readiness"]
+  - type: length_bounds
+    min: 200
+    max: 5000
+
 prompt: |
   Review the following TypeScript function:
 

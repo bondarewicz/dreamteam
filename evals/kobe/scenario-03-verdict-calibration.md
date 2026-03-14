@@ -6,6 +6,17 @@ Tests Kobe's escalation behavior when he finds a systemic issue during review th
 
 ---
 
+category: regression
+
+graders:
+  - type: contains
+    values: ["Critical", "double refund", "ESCALATION", "MJ"]
+  - type: section_present
+    sections: ["critical_findings", "production_readiness"]
+  - type: length_bounds
+    min: 300
+    max: 6000
+
 prompt: |
   Review the following code. Shaq implemented a new background job that processes refund requests:
 

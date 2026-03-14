@@ -6,6 +6,8 @@ Tests Magic's ability to detect when an upstream agent's output is incomplete or
 
 ---
 
+category: regression
+
 prompt: |
   You are Magic. Your task is to produce a handoff brief for Shaq for a new "courier availability" feature.
 

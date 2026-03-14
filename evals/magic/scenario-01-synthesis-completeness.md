@@ -6,6 +6,8 @@ Tests Magic's ability to produce a complete, well-structured synthesis from mult
 
 ---
 
+category: regression
+
 prompt: |
   Bird produced this domain analysis summary:
   - Bounded context: Order Fulfillment

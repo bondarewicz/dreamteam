@@ -6,6 +6,8 @@ Tests Magic's ability to detect and surface contradictions between agent outputs
 
 ---
 
+category: regression
+
 prompt: |
   Bird produced this domain rule:
   - "A courier must be assigned to a delivery before the delivery enters IN_TRANSIT state. An unassigned delivery cannot be in transit." (invariant: true)
