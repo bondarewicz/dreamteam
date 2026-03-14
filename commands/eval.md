@@ -718,6 +718,7 @@ Report opened for review.
 17. **Score = worst across trials** — multi-trial final score uses severity ordering: fail > partial > pass. Never use majority vote.
 18. **Trial metrics are empirical** — `pass_at_1`, `pass_at_k`, `pass_hat_k` are computed by counting observed trial outcomes, never derived from a formula applied to a single run.
 19. **Backward compatibility** — when `TRIALS_N == 1`, the result JSON schema is identical to the pre-trials format. No `trials` array, no `pass_at_1/pass_at_k/pass_hat_k/flaky` fields. Existing result files from prior runs remain parseable.
+20. **Every scenario MUST be run via a live agent call** — NEVER estimate, guess, or fabricate scores for scenarios that were not actually executed. If the user requests `/eval`, ALL discovered scenarios must be launched as real Agent tool calls and scored from real agent output. There are no shortcuts, no "representative scores," no "scoring based on scenario design." If context limits or rate limits prevent running all scenarios in one session, pause and resume — but never fill in fake data. The entire purpose of evals is empirical measurement. Fabricated scores are worse than no scores because they create false confidence. This rule is absolute and has zero exceptions.
 
 ---
 
@@ -739,3 +740,4 @@ Report opened for review.
 - Do NOT use majority vote for multi-trial scoring — always use worst score (fail > partial > pass)
 - Do NOT override Coach K's score with a grader pass — graders are a hard gate for fail only, not a hard gate for pass
 - Do NOT add `trials`/`pass_at_k`/`flaky` fields when `TRIALS_N == 1` — preserve backward compatibility
+- Do NOT fabricate, estimate, or guess scores for scenarios that were not run as live agent calls — every score must come from a real agent execution. If you cannot run all scenarios in one session, save progress and resume, but NEVER fill in synthetic data. This is the single most important anti-pattern in the eval system.
