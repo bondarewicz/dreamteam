@@ -22,8 +22,8 @@ prompt: |
   AC8: Given a user ID, when listSubscriptions is called, then all subscriptions for that user are returned (active and cancelled)
 
   MJ says:
-  - Files: src/subscriptions/subscription.ts (type), src/subscriptions/subscription-repository.ts (interface), src/subscriptions/subscription-service.ts (class), src/subscriptions/subscription-service.test.ts (tests)
-  - Use AppError from src/shared/app-error.ts (existing) for all errors
+  - Files: .tmp/subscriptions/subscription.ts (type), .tmp/subscriptions/subscription-repository.ts (interface), .tmp/subscriptions/subscription-service.ts (class), .tmp/subscriptions/subscription-service.test.ts (tests)
+  - Use AppError from .tmp/shared/app-error.ts (existing) for all errors
   - Date operations: use Date.now() for current timestamp
   - renewSubscription adds exactly 2592000000 ms (30 days in ms) to Date.now()
   - No external dependencies
