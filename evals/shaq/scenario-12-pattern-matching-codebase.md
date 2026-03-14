@@ -14,13 +14,13 @@ prompt: |
   EXISTING PATTERN — ProductService:
 
   ```typescript
-  // src/products/product-repository.ts
+  // .tmp/products/product-repository.ts
   export interface ProductRepository {
     findById(id: string): Promise<Product | null>;
     save(product: Product): Promise<void>;
   }
 
-  // src/products/product-service.ts
+  // .tmp/products/product-service.ts
   import { ProductRepository } from "./product-repository";
   import { AppError } from "../shared/app-error";
 
@@ -36,7 +36,7 @@ prompt: |
     }
   }
 
-  // src/shared/app-error.ts
+  // .tmp/shared/app-error.ts
   export class AppError extends Error {
     constructor(public readonly code: string, message: string) {
       super(message);
@@ -56,7 +56,7 @@ prompt: |
   Implement the WarehouseService, its repository interface, and tests.
 
 expected_behavior: |
-  - Files follow the same structure: src/warehouses/warehouse-repository.ts and src/warehouses/warehouse-service.ts
+  - Files follow the same structure: .tmp/warehouses/warehouse-repository.ts and .tmp/warehouses/warehouse-service.ts
   - WarehouseRepository is an interface (not a class) matching the ProductRepository pattern
   - WarehouseService constructor injects WarehouseRepository
   - AppError is imported from ../shared/app-error — Shaq does NOT create a new error class
@@ -67,14 +67,14 @@ expected_behavior: |
 
 failure_modes: |
   - Creating a new WarehouseError class instead of reusing AppError
-  - Using a different file path convention (e.g., src/warehouse/WarehouseService.ts instead of kebab-case)
+  - Using a different file path convention (e.g., .tmp/warehouse/WarehouseService.ts instead of kebab-case)
   - WarehouseRepository as a class instead of interface
   - Constructor not using readonly or using a different DI pattern
   - Not calling repo.save in updateCapacity
 
 scoring_rubric: |
   pass:
-    - File paths follow established pattern (src/warehouses/warehouse-*.ts, kebab-case)
+    - File paths follow established pattern (.tmp/warehouses/warehouse-*.ts, kebab-case)
     - WarehouseRepository is an interface
     - WarehouseService injects repository via constructor with readonly
     - AppError reused (not a new class created)

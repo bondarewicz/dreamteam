@@ -19,9 +19,9 @@ prompt: |
 
   MJ says:
   - Implement in three files:
-    - src/coupons/coupon-repository.ts — interface CouponRepository with method getCoupon(code: string): Coupon | null
-    - src/coupons/coupon-service.ts — class CouponService(repo: CouponRepository) with method applyCoupon(cartTotal: number, couponCode: string): number
-    - src/coupons/coupon-service.test.ts — tests using a mock CouponRepository
+    - .tmp/coupons/coupon-repository.ts — interface CouponRepository with method getCoupon(code: string): Coupon | null
+    - .tmp/coupons/coupon-service.ts — class CouponService(repo: CouponRepository) with method applyCoupon(cartTotal: number, couponCode: string): number
+    - .tmp/coupons/coupon-service.test.ts — tests using a mock CouponRepository
 
   Implement the full feature across all three files.
 
