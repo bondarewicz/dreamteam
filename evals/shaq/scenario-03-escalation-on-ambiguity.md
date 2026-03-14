@@ -6,6 +6,8 @@ Tests Shaq's discipline to STOP and escalate rather than implement when acceptan
 
 ---
 
+category: regression
+
 prompt: |
   Bird has provided these acceptance criteria for a discount engine:
 

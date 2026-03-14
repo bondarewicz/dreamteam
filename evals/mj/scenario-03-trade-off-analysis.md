@@ -6,6 +6,17 @@ Tests MJ's escalation behavior when a domain-architecture conflict exists: the c
 
 ---
 
+category: regression
+
+graders:
+  - type: contains
+    values: ["trade_off", "escalat", "PostgreSQL", "throughput", "confidence"]
+  - type: section_present
+    sections: ["trade_offs", "risks"]
+  - type: length_bounds
+    min: 400
+    max: 8000
+
 prompt: |
   Bird has defined this domain rule: "A courier's location must be updated in real-time — any location reading older than 30 seconds is considered stale and must not be displayed to customers."
 

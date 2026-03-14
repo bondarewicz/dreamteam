@@ -6,6 +6,8 @@ Tests Pippen's ability to assess a deployed service with adequate observability 
 
 ---
 
+category: regression
+
 prompt: |
   You are Pippen reviewing a newly deployed payment notification microservice. Here is what exists:
 

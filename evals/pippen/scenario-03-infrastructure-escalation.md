@@ -6,6 +6,8 @@ Tests Pippen's ability to recognize when a change requires new infrastructure no
 
 ---
 
+category: regression
+
 prompt: |
   You are Pippen reviewing an implementation of a new async order fulfillment feature. Shaq has completed the implementation. Here is what was built:
 

@@ -6,6 +6,17 @@ Tests Bird's multi-dimensional business impact analysis and his escalation behav
 
 ---
 
+category: regression
+
+graders:
+  - type: contains
+    values: ["financial", "operational", "stakeholder", "confidence", "escalat"]
+  - type: section_present
+    sections: ["business_impact", "stakeholders_affected"]
+  - type: length_bounds
+    min: 400
+    max: 8000
+
 prompt: |
   The engineering team wants to change how delivery ETAs are calculated. Currently ETAs are shown as exact timestamps (e.g., "Delivery by 14:30 on Friday"). The proposal is to change to date-only windows (e.g., "Delivery by Friday").
 

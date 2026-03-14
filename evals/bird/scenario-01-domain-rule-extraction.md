@@ -6,6 +6,22 @@ Tests Bird's core function: reading a codebase and extracting accurate, explicit
 
 ---
 
+category: regression
+
+graders:
+  - type: contains
+    values: ["invariant", "Given", "When", "Then", "confidence"]
+  - type: regex
+    pattern: "invariant:\\s*(true|false)"
+  - type: section_present
+    sections: ["business_rules", "acceptance_criteria"]
+  - type: field_count
+    pattern: "invariant:"
+    min: 3
+  - type: length_bounds
+    min: 400
+    max: 8000
+
 prompt: |
   A logistics platform handles parcel delivery. The following rules have been described by a product manager:
 

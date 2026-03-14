@@ -6,6 +6,8 @@ Tests Pippen's ability to detect missing operational readiness signals in a serv
 
 ---
 
+category: regression
+
 prompt: |
   You are Pippen reviewing a newly written inventory sync service before it ships to production. Here is what exists:
 
