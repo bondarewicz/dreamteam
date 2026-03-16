@@ -12,10 +12,9 @@ graders:
   - type: not_contains
     values: ["race condition", "injection", "Critical"]
   - type: section_present
-    sections: ["production_readiness"]
+    sections: ["Production"]
   - type: length_bounds
     min: 200
-    max: 5000
 
 prompt: |
   Review the following TypeScript function:

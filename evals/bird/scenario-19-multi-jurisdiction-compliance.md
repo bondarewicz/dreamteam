@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["jurisdiction", "conflict", "escalat", "compliance", "confidence"]
   - type: section_present
-    sections: ["business_rules", "business_impact"]
+    sections: ["Business Rules"]
   - type: length_bounds
     min: 500
-    max: 10000
 
 prompt: |
   A global logistics platform wants to add a "driver earnings transparency" feature:

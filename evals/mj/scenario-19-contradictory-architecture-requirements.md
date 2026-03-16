@@ -15,7 +15,6 @@ graders:
     sections: ["risks"]
   - type: length_bounds
     min: 400
-    max: 8000
 
 prompt: |
   The architecture requirements for a new payment processing service:

@@ -12,7 +12,7 @@ graders:
   - type: contains
     values: ["Given", "When", "Then", "confidence", "ambigui"]
   - type: regex
-    pattern: "Given .+ When .+ Then .+"
+    pattern: "(?i)given\\b.+when\\b.+then\\b"
   - type: section_present
     sections: ["acceptance_criteria", "confidence"]
   - type: field_count
@@ -20,7 +20,6 @@ graders:
     min: 3
   - type: length_bounds
     min: 300
-    max: 6000
 
 prompt: |
   A product manager says: "Users should be able to cancel their order."

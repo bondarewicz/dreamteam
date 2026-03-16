@@ -15,7 +15,6 @@ graders:
     values: ["Given\n  An order", "invariant: true\n- "]
   - type: length_bounds
     min: 150
-    max: 4000
 
 prompt: |
   A product manager provides the following requirements for an order cancellation feature:

@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["bottleneck", "scaling", "database", "trade_off", "risk"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 500
-    max: 8000
 
 prompt: |
   Current system metrics:

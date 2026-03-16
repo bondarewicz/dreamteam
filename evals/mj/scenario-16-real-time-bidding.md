@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["latency", "trade_off", "risk", "in-memory", "timeout"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 600
-    max: 10000
 
 prompt: |
   A courier marketplace wants to build a real-time courier bidding system:

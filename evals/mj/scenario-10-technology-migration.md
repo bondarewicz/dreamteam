@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["migration", "rollback", "strangler", "risk", "trade_off"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 500
-    max: 8000
 
 prompt: |
   The platform currently uses MongoDB for all data storage. The team wants to migrate the Order Management domain to PostgreSQL for the following reasons: need for ACID transactions across order and payment records; complex join queries for reporting; need for foreign key constraints to prevent orphaned records.

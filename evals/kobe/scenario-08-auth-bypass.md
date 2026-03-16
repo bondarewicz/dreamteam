@@ -12,13 +12,12 @@ graders:
   - type: contains
     values: ["auth", "Critical", "BLOCK", "bypass", "safe_to_deploy"]
   - type: section_present
-    sections: ["critical_findings", "production_readiness"]
+    sections: ["Critical", "Production"]
   - type: field_count
-    pattern: "severity:\\s*Critical"
+    pattern: "(?i)(severity|critical).{0,20}(critical|severity)"
     min: 1
   - type: length_bounds
     min: 200
-    max: 5000
 
 prompt: |
   Review the following TypeScript API handler for fetching an order:

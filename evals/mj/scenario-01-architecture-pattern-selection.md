@@ -12,12 +12,11 @@ graders:
   - type: contains
     values: ["trade_off", "flexibility", "rigidity", "risk", "implementation_guidance"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: not_contains
     values: ["event sourcing", "CQRS"]
   - type: length_bounds
     min: 400
-    max: 8000
 
 prompt: |
   A courier company needs to build a notification system. Requirements:

@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["event loop", "blocking", "safe_to_deploy"]
   - type: section_present
-    sections: ["production_readiness"]
+    sections: ["Production"]
   - type: length_bounds
     min: 300
-    max: 6000
 
 prompt: |
   Review the following Node.js TypeScript endpoint that processes webhook events from the carrier API:

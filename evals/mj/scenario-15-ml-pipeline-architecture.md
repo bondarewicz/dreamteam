@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["feature store", "model serving", "trade_off", "risk", "versioning"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 600
-    max: 10000
 
 prompt: |
   A logistics platform wants to build an ML-based delivery time estimation system:

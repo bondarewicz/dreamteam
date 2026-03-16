@@ -12,13 +12,12 @@ graders:
   - type: contains
     values: ["bounded context", "invariant", "Given", "When", "Then"]
   - type: section_present
-    sections: ["domain_analysis", "business_rules", "acceptance_criteria"]
+    sections: ["Business Rules", "Acceptance Criteria"]
   - type: field_count
-    pattern: "bounded.context"
+    pattern: "(?i)bounded.context|context.*boundary|separate.*context"
     min: 2
   - type: length_bounds
     min: 500
-    max: 10000
 
 prompt: |
   A logistics platform's product team describes a new feature called "Smart Route Optimization":

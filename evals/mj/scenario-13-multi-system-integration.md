@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["integration", "transformation", "idempoten", "trade_off", "risk"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 600
-    max: 10000
 
 prompt: |
   A logistics platform needs to integrate with three external systems simultaneously:

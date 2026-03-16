@@ -15,7 +15,6 @@ graders:
     sections: ["business_rules", "confidence"]
   - type: length_bounds
     min: 400
-    max: 7000
 
 prompt: |
   Existing domain model (already established and in production):

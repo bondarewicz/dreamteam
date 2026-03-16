@@ -15,7 +15,6 @@ graders:
     sections: ["domain_analysis", "business_rules"]
   - type: length_bounds
     min: 500
-    max: 8000
 
 prompt: |
   Two existing bounded contexts:

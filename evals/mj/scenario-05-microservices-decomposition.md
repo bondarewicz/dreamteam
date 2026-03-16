@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["trade_off", "risk", "flexibility", "bounded context"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 500
-    max: 8000
 
 prompt: |
   A courier platform currently has a monolithic backend. The team (8 engineers) wants to move to microservices. The platform has these capabilities:

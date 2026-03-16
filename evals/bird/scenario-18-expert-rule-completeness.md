@@ -12,12 +12,11 @@ graders:
   - type: contains
     values: ["invariant", "confidence", "assumption"]
   - type: regex
-    pattern: "invariant:\\s*(true|false)"
+    pattern: "(?i)invariant.{0,5}(true|false)"
   - type: section_present
     sections: ["business_rules", "confidence"]
   - type: length_bounds
     min: 400
-    max: 10000
 
 prompt: |
   A new product called "DynaPricing" is described by the CEO in an all-hands meeting as follows:

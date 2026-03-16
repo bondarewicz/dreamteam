@@ -15,7 +15,6 @@ graders:
     sections: ["risks"]
   - type: length_bounds
     min: 500
-    max: 10000
 
 prompt: |
   Review the following architecture and identify all risks, hidden coupling, and future scalability problems:

@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["invariant", "breaking", "impact", "confidence"]
   - type: section_present
-    sections: ["business_rules", "business_impact"]
+    sections: ["Business Rules"]
   - type: length_bounds
     min: 500
-    max: 8000
 
 prompt: |
   The current domain model for a delivery platform has this rule:

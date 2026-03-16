@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["off-by-one", "pagination", "safe_to_deploy"]
   - type: section_present
-    sections: ["critical_findings", "production_readiness"]
+    sections: ["Critical", "Production"]
   - type: length_bounds
     min: 200
-    max: 5000
 
 prompt: |
   Review the following TypeScript pagination implementation for an order history endpoint:

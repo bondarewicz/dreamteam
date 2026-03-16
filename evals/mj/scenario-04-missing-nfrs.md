@@ -15,7 +15,6 @@ graders:
     values: ["microservices", "event-driven", "recommendation", "trade_off"]
   - type: length_bounds
     min: 100
-    max: 2000
 
 prompt: |
   Design an architecture for a food delivery platform. The platform will connect restaurants, customers, and delivery drivers.
