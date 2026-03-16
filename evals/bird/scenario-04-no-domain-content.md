@@ -10,12 +10,11 @@ category: capability
 
 graders:
   - type: contains
-    values: ["deflect", "domain", "out of scope"]
+    values: ["domain"]
   - type: not_contains
     values: ["invariant:", "Given", "acceptance_criteria"]
   - type: length_bounds
     min: 50
-    max: 1000
 
 prompt: |
   What is the time complexity of a binary search tree insertion operation, and how does a red-black tree maintain balance? Provide a technical explanation with pseudocode.

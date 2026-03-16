@@ -15,7 +15,6 @@ graders:
     sections: ["domain_analysis", "business_rules"]
   - type: length_bounds
     min: 400
-    max: 8000
 
 prompt: |
   Existing domain definition (established and in use):

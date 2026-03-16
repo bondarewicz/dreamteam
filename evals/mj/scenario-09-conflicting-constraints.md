@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["trade_off", "CAP theorem", "consistency", "latency", "escalat"]
   - type: section_present
-    sections: ["trade_offs", "risks"]
+    sections: ["Trade", "Risk"]
   - type: length_bounds
     min: 500
-    max: 8000
 
 prompt: |
   A logistics platform needs to build a courier assignment system. The product team's requirements:

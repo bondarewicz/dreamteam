@@ -175,6 +175,27 @@ def score_numeric(score):
 def h(text):
     return html.escape(str(text)) if text is not None else ''
 
+def fmt_grader_config(cfg):
+    """Format a grader config dict as human-readable text, not raw Python repr."""
+    if not cfg:
+        return ''
+    if isinstance(cfg, str):
+        return cfg
+    parts = []
+    for k, v in cfg.items():
+        if isinstance(v, list):
+            parts.append(f'{k}=[{", ".join(str(x) for x in v)}]')
+        else:
+            parts.append(f'{k}={v}')
+    return ' '.join(parts)
+
+def fmt_grader_desc(g):
+    """Format a single grader as 'type config_summary'."""
+    gtype = g.get('type', 'grader')
+    gcfg = g.get('config', {})
+    cfg_str = fmt_grader_config(gcfg)
+    return f'{gtype} {cfg_str}'.strip() if cfg_str else gtype
+
 # ── Compute overall summary for current run ───────────────────────────────
 
 if current_run:
@@ -470,13 +491,13 @@ for r in results:
         if failed_graders:
             agent_name = r.get('agent', 'unknown')
             sname = r.get('scenario_name', r.get('scenario_id', 'unknown'))
-            grader_desc = ', '.join(f"{g.get('type','grader')}:{g.get('config','')}" for g in failed_graders)
+            grader_desc = ', '.join(fmt_grader_desc(g) for g in failed_graders)
             action_items.append({
                 'priority': 'p1',
                 'level': 'critical',
                 'agent': agent_name,
                 'text': f'<strong>Grader hard gate failed</strong> &mdash; <span class="action-agent {agent_class(agent_name)}-color">{h(agent_name.capitalize())}</span> "{h(sname)}"',
-                'detail': f'Grader {h(grader_desc)} failed. Check if the prompt needs clarification or if output format drifted.',
+                'detail': f'Grader failed: {h(grader_desc)}. Check if the prompt needs clarification or if output format drifted.',
             })
 
 # P1: regression-category scenarios that dropped
@@ -2123,8 +2144,7 @@ for agent in all_agents:
             for g in grader_results:
                 gpass = g.get('passed', True)
                 gtype = g.get('type', 'grader')
-                gcfg = g.get('config', '')
-                gdesc = f'{h(gtype)}: {h(gcfg)}' if gcfg else h(gtype)
+                gdesc = h(fmt_grader_desc(g))
                 gclass = 'grader-pass' if gpass else 'grader-fail'
                 gicon = '&#10003;' if gpass else '&#10007;'
                 chips_html += f'<span class="grader-chip {gclass}"><span class="grader-icon">{gicon}</span> {gdesc}</span>\n          '
@@ -2457,7 +2477,7 @@ if category_regressions:
         if creg['grader_results']:
             failed = [g for g in creg['grader_results'] if not g.get('passed', True)]
             if failed:
-                grader_summary = ', '.join(f"{g.get('type','grader')}:{g.get('config','')}" for g in failed)
+                grader_summary = ', '.join(fmt_grader_desc(g) for g in failed)
                 grader_summary = f'<span style="font-family:var(--mono); font-size:11px; color:var(--fail);">{h(grader_summary)} FAIL</span>'
             else:
                 grader_summary = '<span style="font-size:11px; color:var(--text-muted);">all pass</span>'

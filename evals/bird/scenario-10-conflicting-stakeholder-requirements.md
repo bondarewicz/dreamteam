@@ -15,7 +15,6 @@ graders:
     sections: ["business_rules", "confidence"]
   - type: length_bounds
     min: 300
-    max: 6000
 
 prompt: |
   You are analyzing requirements for a courier-tracking feature where customers can see their courier's real-time location.

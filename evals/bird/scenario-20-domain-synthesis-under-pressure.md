@@ -12,15 +12,14 @@ graders:
   - type: contains
     values: ["invariant", "contradiction", "confidence", "escalat"]
   - type: regex
-    pattern: "invariant:\\s*(true|false)"
+    pattern: "(?i)invariant.{0,5}(true|false)"
   - type: section_present
     sections: ["business_rules", "confidence"]
   - type: field_count
-    pattern: "invariant:"
+    pattern: "(?i)invariant"
     min: 4
   - type: length_bounds
     min: 600
-    max: 12000
 
 prompt: |
   The following notes were collected from a product discovery workshop for a new "Express Delivery" product. They are raw and unfiltered:

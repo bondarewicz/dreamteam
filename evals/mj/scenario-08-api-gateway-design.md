@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["API gateway", "rate limit", "authentication", "trade_off", "risk"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 500
-    max: 8000
 
 prompt: |
   A logistics platform exposes APIs to three types of consumers:

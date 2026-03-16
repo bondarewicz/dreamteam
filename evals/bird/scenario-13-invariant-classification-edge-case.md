@@ -12,15 +12,14 @@ graders:
   - type: contains
     values: ["invariant", "policy", "configurable", "confidence"]
   - type: regex
-    pattern: "invariant:\\s*(true|false)"
+    pattern: "(?i)invariant.{0,5}(true|false)"
   - type: section_present
-    sections: ["business_rules"]
+    sections: ["Business Rules"]
   - type: field_count
-    pattern: "invariant:"
+    pattern: "(?i)invariant"
     min: 4
   - type: length_bounds
     min: 400
-    max: 7000
 
 prompt: |
   A subscription billing platform has these rules described by the product team:

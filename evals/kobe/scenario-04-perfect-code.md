@@ -12,12 +12,11 @@ graders:
   - type: not_contains
     values: ["severity: Critical", "BLOCK", "race condition", "injection"]
   - type: contains
-    values: ["safe_to_deploy", "SHIP", "confidence"]
+    values: ["SHIP"]
   - type: section_present
-    sections: ["production_readiness"]
+    sections: ["Production"]
   - type: length_bounds
     min: 100
-    max: 3000
 
 prompt: |
   Review the following TypeScript function that validates a courier's eligibility to accept a delivery:

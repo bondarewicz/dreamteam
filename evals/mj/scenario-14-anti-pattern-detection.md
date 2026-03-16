@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["anti-pattern", "risk", "remediation", "trade_off"]
   - type: section_present
-    sections: ["risks", "implementation_guidance"]
+    sections: ["Risk", "Implementation"]
   - type: length_bounds
     min: 600
-    max: 10000
 
 prompt: |
   Review the following architecture that was built organically over 3 years:

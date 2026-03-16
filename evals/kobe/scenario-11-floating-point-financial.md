@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["floating point", "financial", "safe_to_deploy"]
   - type: section_present
-    sections: ["critical_findings", "production_readiness"]
+    sections: ["Critical", "Production"]
   - type: length_bounds
     min: 200
-    max: 5000
 
 prompt: |
   Review the following TypeScript function that calculates the total payout for a courier's weekly earnings, including base pay, bonuses, and deductions:

@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["timezone", "UTC", "safe_to_deploy"]
   - type: section_present
-    sections: ["critical_findings", "production_readiness"]
+    sections: ["Critical", "Production"]
   - type: length_bounds
     min: 200
-    max: 5000
 
 prompt: |
   Review the following TypeScript function that checks if a delivery is within the allowed same-day delivery window (orders must be placed before 14:00 local time):

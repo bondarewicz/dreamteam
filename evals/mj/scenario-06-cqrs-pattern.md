@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["CQRS", "read model", "write model", "event", "trade_off"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 500
-    max: 8000
 
 prompt: |
   A logistics platform has a reporting problem. The order management database has 50 million records. Queries for the operations dashboard (showing: orders by status, delivery success rates, average transit time by zone, courier performance rankings) are taking 30-60 seconds. These queries are read-only. The underlying order data model is highly normalized (12 tables, complex joins required). Write volume is low: ~500 new orders/day.

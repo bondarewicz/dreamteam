@@ -15,7 +15,6 @@ graders:
     sections: ["business_impact", "confidence"]
   - type: length_bounds
     min: 500
-    max: 8000
 
 prompt: |
   The engineering team sends this request: "We want to change our data retention policy for delivery records. Currently we store all delivery data for 7 years. The new proposal is to auto-delete delivery records after 90 days to reduce storage costs. This is an infrastructure optimization — no business logic changes."

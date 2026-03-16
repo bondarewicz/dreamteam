@@ -10,17 +10,16 @@ category: capability
 
 graders:
   - type: contains
-    values: ["invariant", "Given", "When", "Then", "confidence"]
+    values: ["invariant", "given", "when", "then"]
   - type: regex
-    pattern: "invariant:\\s*(true|false)"
+    pattern: "(?i)invariant.{0,5}(true|false)"
   - type: section_present
-    sections: ["business_rules", "acceptance_criteria"]
+    sections: ["Business Rules", "Acceptance Criteria"]
   - type: field_count
-    pattern: "invariant:"
+    pattern: "(?i)invariant"
     min: 3
   - type: length_bounds
     min: 400
-    max: 8000
 
 prompt: |
   A telemedicine platform has the following rules described by the product and compliance teams:

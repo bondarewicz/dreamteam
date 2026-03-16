@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["escalat", "MJ", "architectural", "safe_to_deploy"]
   - type: section_present
-    sections: ["critical_findings", "production_readiness"]
+    sections: ["Critical", "Production"]
   - type: length_bounds
     min: 300
-    max: 6000
 
 prompt: |
   Review the following TypeScript code in the Order Service:

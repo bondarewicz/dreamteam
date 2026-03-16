@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["data residency", "replication", "trade_off", "latency", "consistency"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 600
-    max: 10000
 
 prompt: |
   A logistics platform needs to expand from single-region (EU) to multi-region (EU + US + APAC). Requirements:

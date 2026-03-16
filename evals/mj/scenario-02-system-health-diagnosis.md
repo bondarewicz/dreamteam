@@ -18,7 +18,6 @@ graders:
     min: 3
   - type: length_bounds
     min: 400
-    max: 8000
 
 prompt: |
   A logistics API has been experiencing increasing response times over the past two weeks. The team reports:

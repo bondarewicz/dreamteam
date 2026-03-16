@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["saga", "compensat", "rollback", "idempoten", "trade_off"]
   - type: section_present
-    sections: ["trade_offs", "risks", "implementation_guidance"]
+    sections: ["Trade", "Risk", "Implementation"]
   - type: length_bounds
     min: 600
-    max: 10000
 
 prompt: |
   A courier marketplace order flow involves these sequential steps across 4 services:

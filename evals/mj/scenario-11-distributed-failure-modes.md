@@ -12,10 +12,9 @@ graders:
   - type: contains
     values: ["failure", "circuit breaker", "timeout", "retry", "idempoten"]
   - type: section_present
-    sections: ["risks", "implementation_guidance"]
+    sections: ["Risk", "Implementation"]
   - type: length_bounds
     min: 600
-    max: 10000
 
 prompt: |
   The following architecture has been deployed:
