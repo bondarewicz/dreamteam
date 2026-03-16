@@ -500,6 +500,22 @@ for r in results:
                 'detail': f'Grader failed: {h(grader_desc)}. Check if the prompt needs clarification or if output format drifted.',
             })
 
+# P1: calibration blind spots — high confidence on fail-scored scenarios
+for r in results:
+    score = r.get('score', '')
+    conf = r.get('confidence_stated')
+    if score == 'fail' and conf is not None and conf >= 70:
+        agent_name = r.get('agent', 'unknown')
+        sname = r.get('scenario_name', r.get('scenario_id', 'unknown'))
+        sid = r.get('scenario_id', 'unknown')
+        action_items.append({
+            'priority': 'p1',
+            'level': 'critical',
+            'agent': agent_name,
+            'text': f'<strong>Calibration blind spot</strong> &mdash; <span class="action-agent {agent_class(agent_name)}-color">{h(agent_name.capitalize())}</span> "{h(sname)}" scored <strong>fail</strong> with <strong>{round(conf)}%</strong> confidence',
+            'detail': f'Agent was {round(conf)}% confident on a scenario it failed. This indicates the agent cannot detect when it is wrong. Review the scenario rubric and agent prompt for systemic overconfidence patterns.',
+        })
+
 # P1: regression-category scenarios that dropped
 for r in results:
     cat = r.get('category', '')
@@ -2676,6 +2692,7 @@ else:
           <th>Avg Stated Conf</th>
           <th>Actual Pass Rate</th>
           <th>Calibration Gap</th>
+          <th>Worst Fail Conf</th>
           <th>Flag</th>
         </tr>
       </thead>
@@ -2700,11 +2717,30 @@ else:
             a_gap = summ.get('calibration_gap')
         agent_cls = agent_class(agent)
 
+        # Worst-case calibration: highest confidence on a fail-scored scenario
+        fail_results = [r for r in ar if r.get('score') == 'fail' and r.get('confidence_stated') is not None]
+        if fail_results:
+            worst_fail = max(fail_results, key=lambda r: r.get('confidence_stated', 0))
+            worst_fail_conf = worst_fail.get('confidence_stated', 0)
+            worst_fail_scenario = worst_fail.get('scenario_name', worst_fail.get('scenario_id', ''))
+            worst_fail_display = f"{round(worst_fail_conf)}%"
+            worst_fail_cls = 'over' if worst_fail_conf >= 70 else 'ok'
+        else:
+            worst_fail_conf = None
+            worst_fail_scenario = ''
+            worst_fail_display = '&mdash;'
+            worst_fail_cls = 'ok'
+
         conf_display = f"{round(a_conf)}%" if a_conf is not None else "n/a"
         pr_display = f"{round((a_pr or 0) * 100)}%" if a_pr is not None else "n/a"
         gap_display = cal_gap_label(a_gap)
         gap_cls = cal_gap_class(a_gap)
         flag_label = cal_flag_label(a_gap)
+
+        # Override flag if worst-case fail confidence is dangerously high
+        if worst_fail_conf is not None and worst_fail_conf >= 70:
+            flag_label = 'Blind Spot'
+            gap_cls = 'over'
 
         # Bar width: clamp gap magnitude to 0-100%
         if a_gap is not None:
@@ -2722,6 +2758,7 @@ else:
               <div class="gap-indicator"><div class="gap-fill {gap_cls}" style="width:{bar_width}%"></div></div>
             </div>
           </td>
+          <td>{f'<span class="cal-flag {worst_fail_cls}" title="{h(worst_fail_scenario)}">{worst_fail_display}</span>' if worst_fail_conf is not None else '<span class="cal-flag ok">&mdash;</span>'}</td>
           <td><span class="cal-flag {gap_cls}">{h(flag_label)}</span></td>
         </tr>
 ''')
