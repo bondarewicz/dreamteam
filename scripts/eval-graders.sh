@@ -217,7 +217,13 @@ def run_grader(grader, output):
         values = grader.get('values', [])
         if isinstance(values, str):
             values = [values]
-        missing = [v for v in values if v not in output]
+        case_sensitive = grader.get('case_sensitive', False)
+        if case_sensitive:
+            missing = [v for v in values if v not in output]
+        else:
+            # Normalize: lowercase + collapse underscores/hyphens/spaces
+            norm_out = re.sub(r'[-_\s]+', ' ', output.lower())
+            missing = [v for v in values if re.sub(r'[-_\s]+', ' ', v.lower()) not in norm_out]
         if missing:
             return False, f'missing values: {", ".join(missing)}'
         return True, 'passed'
@@ -226,7 +232,12 @@ def run_grader(grader, output):
         values = grader.get('values', [])
         if isinstance(values, str):
             values = [values]
-        found = [v for v in values if v in output]
+        case_sensitive = grader.get('case_sensitive', False)
+        if case_sensitive:
+            found = [v for v in values if v in output]
+        else:
+            norm_out = re.sub(r'[-_\s]+', ' ', output.lower())
+            found = [v for v in values if re.sub(r'[-_\s]+', ' ', v.lower()) in norm_out]
         if found:
             return False, f'forbidden values found: {", ".join(found)}'
         return True, 'passed'
@@ -244,7 +255,12 @@ def run_grader(grader, output):
         sections = grader.get('sections', [])
         if isinstance(sections, str):
             sections = [sections]
-        missing = [s for s in sections if s not in output]
+        case_sensitive = grader.get('case_sensitive', False)
+        if case_sensitive:
+            missing = [s for s in sections if s not in output]
+        else:
+            norm_out = re.sub(r'[-_\s]+', ' ', output.lower())
+            missing = [s for s in sections if re.sub(r'[-_\s]+', ' ', s.lower()) not in norm_out]
         if missing:
             return False, f'missing sections: {", ".join(missing)}'
         return True, 'passed'
