@@ -555,12 +555,14 @@ def phase_assemble():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     # Load all scored result files
+    run_id = f'eval/run-{RUN_DATETIME}'
     scored_files = sorted(glob.glob(os.path.join(scored_dir, '*.json')))
     results = []
     for fpath in scored_files:
         try:
             with open(fpath, encoding='utf-8', errors='replace') as f:
                 data = json.load(f)
+            data['run_id'] = run_id
             results.append(data)
         except Exception as e:
             print(f'  WARN: could not read scored file {fpath}: {e}', file=sys.stderr)
@@ -591,7 +593,13 @@ def phase_assemble():
         pr       = round(bucket['pass'] / total_a, 4) if total_a > 0 else 0.0
         confs    = bucket['confidences']
         avg_conf = round(sum(confs) / len(confs), 1) if confs else None
-        calib_gap = round(avg_conf / 100 - pr, 4) if avg_conf is not None else None
+        # Calibration gap: avg_confidence - weighted_score
+        # Weighted: pass=100, partial=50, fail=0
+        if avg_conf is not None and total_a > 0:
+            weighted = (bucket['pass'] * 100 + bucket['partial'] * 50) / total_a
+            calib_gap = round(avg_conf - weighted, 1)
+        else:
+            calib_gap = None
         agent_summaries[agent] = {
             'pass':                    bucket['pass'],
             'partial':                 bucket['partial'],
