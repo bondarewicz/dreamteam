@@ -4,6 +4,8 @@
 #
 # Uses CLAUDE_TAB env var for tab identification.
 # Falls back to "Claude Code" if unset.
+#
+# TODO: make sure notifications are only fired when human input required
 
 MSG="${1:-Waiting for input}"
 TAB="${CLAUDE_TAB:-Claude Code}"
