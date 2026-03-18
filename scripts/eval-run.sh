@@ -14,6 +14,7 @@
 #     --agent NAME     Run only scenarios for named agent
 #     --phase PHASE    Run only a specific phase: agents|graders|score|all (default: all)
 #     --trials N       Run each scenario N times (default: 1). Enables pass@k reporting.
+#     --scenario PAT   Run only scenarios matching glob pattern (e.g. "scenario-2[1-5]*")
 #     --dry-run        Show what would run without executing
 #
 # Requirements:
@@ -32,6 +33,7 @@ REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo 
 PARALLEL=10
 RESUME_DIR=""
 AGENT_FILTER=""
+SCENARIO_FILTER=""
 PHASE="all"
 TRIALS=1
 DRY_RUN=""
@@ -44,6 +46,8 @@ while [ $# -gt 0 ]; do
       RESUME_DIR="$2"; shift 2 ;;
     --agent)
       AGENT_FILTER="$2"; shift 2 ;;
+    --scenario)
+      SCENARIO_FILTER="$2"; shift 2 ;;
     --phase)
       PHASE="$2"; shift 2 ;;
     --trials)
@@ -73,6 +77,7 @@ exec python3 - \
   --repo-root "$REPO_ROOT" \
   ${RESUME_DIR:+--resume "$RESUME_DIR"} \
   ${AGENT_FILTER:+--agent "$AGENT_FILTER"} \
+  ${SCENARIO_FILTER:+--scenario "$SCENARIO_FILTER"} \
   --trials "$TRIALS" \
   ${DRY_RUN:+--dry-run} \
   << 'PYEOF'
@@ -98,6 +103,7 @@ parser.add_argument('--script-dir',  default='.')
 parser.add_argument('--repo-root',   default='.')
 parser.add_argument('--resume',      default='')
 parser.add_argument('--agent',       default='')
+parser.add_argument('--scenario',    default='')
 parser.add_argument('--trials',      type=int,   default=1)
 parser.add_argument('--dry-run',     action='store_true')
 args = parser.parse_args()
@@ -107,8 +113,9 @@ PHASE        = args.phase
 SCRIPT_DIR   = args.script_dir
 REPO_ROOT    = args.repo_root
 RESUME_DIR   = args.resume
-AGENT_FILTER = args.agent
-TRIALS       = max(1, args.trials)
+AGENT_FILTER    = args.agent
+SCENARIO_FILTER = args.scenario
+TRIALS          = max(1, args.trials)
 DRY_RUN      = args.dry_run
 
 EVALS_DIR   = os.path.join(REPO_ROOT, 'evals')
@@ -140,14 +147,21 @@ for agent_dir in sorted(glob.glob(os.path.join(EVALS_DIR, '*/'))):
         continue
     if AGENT_FILTER and agent != AGENT_FILTER:
         continue
+    import fnmatch as _fnmatch
     for scenario_file in sorted(glob.glob(os.path.join(agent_dir, 'scenario-*.md'))):
         if os.path.isfile(scenario_file):
+            if SCENARIO_FILTER:
+                basename = os.path.splitext(os.path.basename(scenario_file))[0]
+                if not _fnmatch.fnmatch(basename, SCENARIO_FILTER):
+                    continue
             SCENARIOS.append(scenario_file)
 
 TOTAL = len(SCENARIOS)
 print(f'Discovered {TOTAL} scenarios')
 if AGENT_FILTER:
     print(f'  (filtered to agent: {AGENT_FILTER})')
+if SCENARIO_FILTER:
+    print(f'  (filtered to scenario: {SCENARIO_FILTER})')
 
 # ── Dry run ───────────────────────────────────────────────────────────────────
 
