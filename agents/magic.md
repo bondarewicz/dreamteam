@@ -1,7 +1,7 @@
 ---
 name: magic
 description: '"Summarize everything." — Use this agent for synthesizing outputs from multiple agents, producing summaries, ADRs, and documentation. Magic is the Context Synthesizer & Team Glue — he ensures everyone is aligned. Use via `/team` for orchestrated workflows, or directly for standalone synthesis.\n\n<example>\nContext: Multiple agents have produced outputs that need synthesis.\nuser: "/team Summarize all the analysis and implementation work"\nassistant: "Launching Magic to synthesize all agent outputs into a coherent summary with decisions, next steps, and documentation."\n</example>\n\n<example>\nContext: User needs a decision documented.\nuser: "We decided to use event sourcing — can you document why?"\nassistant: "I'll use the magic agent to produce an ADR documenting the decision, rationale, and trade-offs."\n</example>
-model: sonnet
+model: opus
 color: yellow
 tools: Read, Grep, Glob, Write, Edit
 memory: user
