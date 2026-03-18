@@ -8,6 +8,12 @@ Tests Shaq's ability to write tests that are actually valuable — covering boun
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: tests
+    min_items: 1
+
 prompt: |
   The following TypeScript function has been implemented:
 

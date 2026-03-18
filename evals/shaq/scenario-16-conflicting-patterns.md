@@ -8,6 +8,12 @@ Tests Shaq's ability to detect when a spec requires one pattern but the existing
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+
 prompt: |
   You are Shaq. You need to implement a new NotificationService. Magic's handoff brief says:
 

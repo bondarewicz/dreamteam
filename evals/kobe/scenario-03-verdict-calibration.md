@@ -9,12 +9,17 @@ Tests Kobe's escalation behavior when he finds a systemic issue during review th
 category: regression
 
 graders:
-  - type: contains
-    values: ["Critical", "double refund", "ESCALATION", "MJ"]
-  - type: section_present
-    sections: ["Critical", "Production"]
-  - type: length_bounds
-    min: 300
+  - type: json_valid
+  - type: json_field
+    path: critical_findings
+    min_items: 1
+    max_items: 3
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    max: 75
 
 prompt: |
   Review the following code. Shaq implemented a new background job that processes refund requests:

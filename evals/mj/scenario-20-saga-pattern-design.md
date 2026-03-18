@@ -9,12 +9,13 @@ Expert-level: MJ must design a saga pattern for a multi-step distributed transac
 category: capability
 
 graders:
-  - type: contains
-    values: ["saga", "compensat", "rollback", "idempoten", "trade_off"]
-  - type: section_present
-    sections: ["Trade", "Risk", "Implementation"]
-  - type: length_bounds
-    min: 600
+  - type: json_valid
+  - type: json_field
+    path: trade_offs
+    min_items: 1
+  - type: json_field
+    path: risks
+    min_items: 1
 
 prompt: |
   A courier marketplace order flow involves these sequential steps across 4 services:

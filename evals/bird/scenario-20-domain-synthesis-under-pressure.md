@@ -9,17 +9,25 @@ Expert-level: Bird is given a dense, poorly-organized feature dump from multiple
 category: capability
 
 graders:
-  - type: contains
-    values: ["invariant", "contradiction", "confidence", "escalat"]
-  - type: regex
-    pattern: "(?i)invariant.{0,5}(true|false)"
-  - type: section_present
-    sections: ["business_rules", "confidence"]
-  - type: field_count
-    pattern: "(?i)invariant"
-    min: 4
-  - type: length_bounds
-    min: 600
+  - type: json_valid
+  - type: json_field
+    path: "escalations"
+    min_items: 2
+  - type: json_field
+    path: "escalations[*].type"
+    equals: "contradiction"
+  - type: json_field
+    path: "confidence.level"
+    max: 50
+  - type: json_field
+    path: "acceptance_criteria"
+    max_items: 0
+  - type: json_field
+    path: "business_rules"
+    min_items: 3
+  - type: json_field
+    path: "business_rules[*].invariant"
+    type_check: "boolean"
 
 prompt: |
   The following notes were collected from a product discovery workshop for a new "Express Delivery" product. They are raw and unfiltered:

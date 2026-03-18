@@ -9,12 +9,10 @@ Tests Kobe's ability to identify a subtle timezone bug in date comparison logic 
 category: capability
 
 graders:
-  - type: contains
-    values: ["timezone", "UTC", "safe_to_deploy"]
-  - type: section_present
-    sections: ["Critical", "Production"]
-  - type: length_bounds
-    min: 200
+  - type: json_valid
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: false
 
 prompt: |
   Review the following TypeScript function that checks if a delivery is within the allowed same-day delivery window (orders must be placed before 14:00 local time):

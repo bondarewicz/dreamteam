@@ -9,12 +9,10 @@ Tests MJ's ability to design a system that must operate across multiple geograph
 category: capability
 
 graders:
-  - type: contains
-    values: ["data residency", "replication", "trade_off", "latency", "consistency"]
-  - type: section_present
-    sections: ["Trade", "Risk", "Implementation"]
-  - type: length_bounds
-    min: 600
+  - type: json_valid
+  - type: json_field
+    path: trade_offs
+    min_items: 1
 
 prompt: |
   A logistics platform needs to expand from single-region (EU) to multi-region (EU + US + APAC). Requirements:

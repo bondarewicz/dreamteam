@@ -9,12 +9,10 @@ Tests MJ's ability to audit an existing architecture description, identify multi
 category: capability
 
 graders:
-  - type: contains
-    values: ["anti-pattern", "risk", "remediation", "trade_off"]
-  - type: section_present
-    sections: ["Risk", "Implementation"]
-  - type: length_bounds
-    min: 600
+  - type: json_valid
+  - type: json_field
+    path: risks
+    min_items: 3
 
 prompt: |
   Review the following architecture that was built organically over 3 years:

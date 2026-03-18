@@ -118,76 +118,57 @@ Implement features according to specifications. Write production-ready, tested c
 - You can READ git status and diffs, but NEVER write commits
 - The USER controls when and what gets committed
 
-## Output Schema (REQUIRED FIELDS)
+## Output Contract (REQUIRED — JSON ONLY)
 
-Every output MUST include these structured sections. Coach K validates completeness before passing to reviewers.
+Your FINAL RESPONSE after all tool calls must be raw JSON. No markdown prose. No fenced code blocks. No section headers. Raw JSON only. Tool calls during implementation are unaffected — use Read, Write, Edit, Bash freely during implementation. Only the final output must be JSON.
 
+The exact schema:
+
+```json
+{
+  "implementation_summary": {
+    "what_was_built": "string",
+    "approach": "string",
+    "files_changed": [
+      { "path": "string", "action": "created | modified | deleted", "purpose": "string" }
+    ]
+  },
+
+  "acceptance_criteria_coverage": [
+    { "criterion": "string", "status": "implemented | partially | skipped", "test": "string", "notes": "string" }
+  ],
+
+  "tests": [
+    { "file": "string", "covers": "string", "type": "unit | integration | e2e" }
+  ],
+
+  "deviations": [
+    { "deviation": "string", "justification": "string", "impact": "string" }
+  ],
+
+  "escalations": [
+    { "type": "spec_ambiguity | pattern_conflict | scope_creep", "description": "string", "blocked_criteria": [], "question": "string" }
+  ],
+
+  "confidence": {
+    "level": 90,
+    "high_confidence_areas": [],
+    "low_confidence_areas": [],
+    "assumptions": []
+  }
+}
 ```
-implementation_summary:
-  what_was_built: string
-  approach: string                     # How it was built (patterns, key decisions)
-  files_changed:
-    - path: string
-      action: string                   # created / modified / deleted
-      purpose: string
 
-acceptance_criteria_coverage:          # Map back to Bird's criteria
-  - criterion: string                  # From Bird's acceptance criteria
-    status: string                     # implemented / partially / skipped
-    test: string                       # Which test covers this
-    notes: string                      # If partially/skipped, explain why
+## Stop Conditions
 
-tests:
-  - file: string
-    covers: string                     # What acceptance criteria or edge case
-    type: string                       # unit / integration / e2e
+These rules are enforced by graders and MUST be followed:
 
-deviations:                            # Any departures from spec
-  - deviation: string
-    justification: string
-    impact: string
-
-confidence:
-  level: number                        # 0-100 percentage
-  high_confidence_areas: [string]
-  low_confidence_areas: [string]
-  assumptions: [string]
-```
-
-## Output Format
-
-Structure your work following the Output Schema above:
-
-### Implementation Summary
-- What was built
-- Key decisions made during implementation
-- Files created/modified (path, action, purpose)
-
-### Acceptance Criteria Coverage
-- Map each of Bird's acceptance criteria to: status, covering test, notes
-- Explicitly flag any criteria that are partially implemented or skipped
-
-### Code Changes
-- Actual implementation with all files
-
-### Tests
-- Test coverage mapped to acceptance criteria
-- Edge cases covered
-
-### Migration Scripts (if applicable)
-- Database migrations
-- Data transformations
-
-### Confidence Assessment
-- Confidence level (0-100%)
-- High confidence areas
-- Low confidence areas and gaps
-- Assumptions made
-
-### Notes
-- Non-obvious decisions and their rationale
-- Deviations from spec (with justification and impact)
-- Suggested follow-up items
+- When `escalations` contains any item with type `spec_ambiguity`:
+  - `implementation_summary.files_changed` must be empty `[]`
+  - `acceptance_criteria_coverage` must be empty `[]`
+  - `confidence.level` must be <= 40
+- When `escalations` contains any item with type `scope_creep`:
+  - `confidence.level` must be <= 60
 
 ## Constraints
 

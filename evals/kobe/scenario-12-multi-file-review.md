@@ -9,15 +9,14 @@ Tests Kobe's ability to identify bugs that span multiple files — where looking
 category: capability
 
 graders:
-  - type: contains
-    values: ["Critical", "deploy"]
-  - type: section_present
-    sections: ["Critical", "Production"]
-  - type: field_count
-    pattern: "(?i)(severity|critical).{0,20}(critical|severity)"
-    min: 1
-  - type: length_bounds
-    min: 300
+  - type: json_valid
+  - type: json_field
+    path: critical_findings
+    min_items: 1
+    max_items: 3
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: false
 
 prompt: |
   Review the following two files in a delivery management system:

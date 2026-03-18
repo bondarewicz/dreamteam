@@ -9,12 +9,16 @@ Tests Kobe's ability to identify that a code-level pattern is a symptom of an ar
 category: capability
 
 graders:
-  - type: contains
-    values: ["escalat", "MJ", "architectural", "safe_to_deploy"]
-  - type: section_present
-    sections: ["Critical", "Production"]
-  - type: length_bounds
-    min: 300
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: false
+  - type: json_field
+    path: confidence.level
+    max: 75
 
 prompt: |
   Review the following TypeScript code in the Order Service:

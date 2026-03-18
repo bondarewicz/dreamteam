@@ -8,6 +8,12 @@ Tests Pippen's ability to assess a coordinated deployment of two interdependent 
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: true
+
 prompt: |
   You are Pippen reviewing a coordinated deployment of two services: UserService and ProfileService. These services share the same PostgreSQL database. Here is the deployment plan:
 

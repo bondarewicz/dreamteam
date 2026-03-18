@@ -8,6 +8,12 @@ Tests Magic's ability to identify a cross-cutting concern that spans multiple ag
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: handoff_brief.domain_rules
+    min_items: 1
+
 prompt: |
   Bird produced domain analysis for two separate features being implemented in the same sprint:
 

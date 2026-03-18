@@ -8,6 +8,12 @@ Tests Shaq's ability to detect when a new spec would break existing behavior tha
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+
 prompt: |
   You are Shaq. Magic's handoff brief contains these acceptance criteria for changes to an existing calculateDiscount function:
 

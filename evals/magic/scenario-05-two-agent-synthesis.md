@@ -8,6 +8,12 @@ Tests Magic's ability to synthesize two agent outputs with clear, compatible con
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: handoff_brief.domain_rules
+    min_items: 1
+
 prompt: |
   Bird produced this domain analysis for a "loyalty points" feature:
   - Domain rule: A customer earns 1 point per dollar spent (rounded down to the nearest integer)

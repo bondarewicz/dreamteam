@@ -8,6 +8,15 @@ Tests Shaq's expert-level judgment in a high-stakes scenario with real consequen
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: acceptance_criteria_coverage
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    min: 70
+
 prompt: |
   Magic has delivered this handoff brief for a "revenue sharing" calculation feature. This code will be used to calculate payments to partners. Errors directly result in overpayment or underpayment.
 

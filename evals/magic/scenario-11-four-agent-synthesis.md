@@ -8,6 +8,12 @@ Tests Magic's ability to synthesize outputs from all four peer agents (Bird, MJ,
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: handoff_brief.domain_rules
+    min_items: 1
+
 prompt: |
   Four agents have submitted outputs for the "rate limiting" feature.
 

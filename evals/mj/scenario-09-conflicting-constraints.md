@@ -9,12 +9,13 @@ Tests MJ's ability to handle a requirements set where low latency, high consiste
 category: capability
 
 graders:
-  - type: contains
-    values: ["trade_off", "CAP theorem", "consistency", "latency", "escalat"]
-  - type: section_present
-    sections: ["Trade", "Risk"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    max: 60
 
 prompt: |
   A logistics platform needs to build a courier assignment system. The product team's requirements:

@@ -8,6 +8,12 @@ Tests Pippen's ability to perform a comprehensive monitoring gap analysis — id
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing a "subscription billing service" that processes recurring subscription renewals. The service is business-critical: missed renewals directly impact revenue. Here is what exists:
 

@@ -9,12 +9,19 @@ Tests Bird's behavior when a spec is internally contradictory. Bird must identif
 category: capability
 
 graders:
-  - type: contains
-    values: ["escalat", "contradict", "conflict", "ambig"]
-  - type: not_contains
-    values: ["Given\n  An order", "invariant: true\n- "]
-  - type: length_bounds
-    min: 150
+  - type: json_valid
+  - type: json_field
+    path: "escalations"
+    min_items: 1
+  - type: json_field
+    path: "escalations[*].type"
+    equals: "contradiction"
+  - type: json_field
+    path: "confidence.level"
+    max: 50
+  - type: json_field
+    path: "acceptance_criteria"
+    max_items: 0
 
 prompt: |
   A product manager provides the following requirements for an order cancellation feature:

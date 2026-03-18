@@ -8,6 +8,15 @@ Tests Shaq's discipline to STOP and escalate rather than implement when acceptan
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    max: 40
+
 prompt: |
   Bird has provided these acceptance criteria for a discount engine:
 

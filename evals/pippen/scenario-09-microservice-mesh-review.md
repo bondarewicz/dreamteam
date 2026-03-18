@@ -8,6 +8,12 @@ Tests Pippen's ability to assess a multi-service integration scenario where the 
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing a three-service integration for a "checkout" flow before it ships to production.
 

@@ -9,12 +9,13 @@ Tests MJ's ability to design a safe migration strategy from one technology to an
 category: capability
 
 graders:
-  - type: contains
-    values: ["migration", "rollback", "strangler", "risk", "trade_off"]
-  - type: section_present
-    sections: ["Trade", "Risk", "Implementation"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: trade_offs
+    min_items: 1
+  - type: json_field
+    path: risks
+    min_items: 1
 
 prompt: |
   The platform currently uses MongoDB for all data storage. The team wants to migrate the Order Management domain to PostgreSQL for the following reasons: need for ACID transactions across order and payment records; complex join queries for reporting; need for foreign key constraints to prevent orphaned records.

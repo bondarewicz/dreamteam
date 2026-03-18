@@ -8,6 +8,12 @@ Tests Magic's ability to detect and resolve terminology mismatches where Bird an
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: handoff_brief.terminology_alignment
+    min_items: 1
+
 prompt: |
   Bird produced this domain analysis for a user authentication feature:
   - Domain rule: A "session" is valid for 30 minutes from last user activity

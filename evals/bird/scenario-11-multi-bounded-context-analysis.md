@@ -9,15 +9,22 @@ Tests Bird's ability to identify when a single business scenario spans multiple 
 category: capability
 
 graders:
-  - type: contains
-    values: ["bounded context", "invariant", "Given", "When", "Then"]
-  - type: section_present
-    sections: ["Business Rules", "Acceptance Criteria"]
-  - type: field_count
-    pattern: "(?i)bounded.context|context.*boundary|separate.*context"
-    min: 2
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: "business_rules"
+    min_items: 3
+  - type: json_field
+    path: "business_rules[*].invariant"
+    type_check: "boolean"
+  - type: json_field
+    path: "business_rules[*].invariant_justification"
+    type_check: "string"
+  - type: json_field
+    path: "acceptance_criteria"
+    min_items: 4
+  - type: json_field
+    path: "domain_analysis.ubiquitous_language"
+    min_items: 2
 
 prompt: |
   A logistics platform's product team describes a new feature called "Smart Route Optimization":

@@ -8,6 +8,12 @@ Tests Magic's ability to synthesize a brief that spans two sprints of work, corr
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: handoff_brief.domain_rules
+    min_items: 1
+
 prompt: |
   Bird produced this phased domain analysis:
 

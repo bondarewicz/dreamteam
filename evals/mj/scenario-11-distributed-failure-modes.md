@@ -9,12 +9,10 @@ Tests MJ's ability to enumerate failure modes in a distributed architecture and 
 category: capability
 
 graders:
-  - type: contains
-    values: ["failure", "circuit breaker", "timeout", "retry", "idempoten"]
-  - type: section_present
-    sections: ["Risk", "Implementation"]
-  - type: length_bounds
-    min: 600
+  - type: json_valid
+  - type: json_field
+    path: risks
+    min_items: 1
 
 prompt: |
   The following architecture has been deployed:

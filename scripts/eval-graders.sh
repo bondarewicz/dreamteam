@@ -142,11 +142,19 @@ def extract_graders_from_scenario(scenario_text):
             # Unescape: scenario files store regex patterns with \\s meaning \s
             val = val_raw[1:-1].replace('\\\\', '\\')
         else:
-            # Try int
+            # Try int, then float, then boolean, then string
             try:
                 val = int(val_raw)
             except ValueError:
-                val = val_raw
+                try:
+                    val = float(val_raw)
+                except ValueError:
+                    if val_raw.lower() == 'true':
+                        val = True
+                    elif val_raw.lower() == 'false':
+                        val = False
+                    else:
+                        val = val_raw
 
         current[key] = val
 
@@ -288,6 +296,174 @@ def run_grader(grader, output):
             return False, f'output length {length} below minimum {min_len}'
         if max_len is not None and length > max_len:
             return False, f'output length {length} above maximum {max_len}'
+        return True, 'passed'
+
+    elif gtype == 'json_field':
+        path = grader.get('path', '')
+        min_val = grader.get('min', None)
+        max_val = grader.get('max', None)
+        min_items = grader.get('min_items', None)
+        max_items = grader.get('max_items', None)
+        type_check = grader.get('type_check', None)
+        exists_check = grader.get('exists', True)
+        equals_val = grader.get('equals', None)
+
+        # Extract JSON from output (Bird outputs raw JSON now)
+        parsed = None
+        try:
+            parsed = json.loads(output.strip())
+        except Exception:
+            # Try to find a JSON object in the output
+            for m in re.finditer(r'[\[{]', output):
+                depth = 0
+                start = m.start()
+                for i in range(start, len(output)):
+                    if output[i] in '{[':
+                        depth += 1
+                    elif output[i] in '}]':
+                        depth -= 1
+                    if depth == 0:
+                        try:
+                            parsed = json.loads(output[start:i + 1])
+                        except Exception:
+                            pass
+                        break
+                if parsed is not None:
+                    break
+
+        if parsed is None:
+            return False, f'no valid JSON found in output (needed for json_field path: {path})'
+
+        # Resolve dot-path with optional wildcard [*]
+        def resolve_path(obj, parts):
+            """
+            Resolve a dot-path like ['business_rules', '[*]', 'invariant'].
+            Returns a list of resolved values (always a list for uniformity).
+            Wildcard [*] expands arrays.
+            """
+            results = [obj]
+            for part in parts:
+                next_results = []
+                for r in results:
+                    if part == '[*]':
+                        if isinstance(r, list):
+                            next_results.extend(r)
+                        else:
+                            return None  # wildcard on non-list
+                    elif isinstance(r, dict):
+                        if part in r:
+                            next_results.append(r[part])
+                        else:
+                            return None  # key missing
+                    elif isinstance(r, list):
+                        # numeric index
+                        try:
+                            idx = int(part)
+                            next_results.append(r[idx])
+                        except (ValueError, IndexError):
+                            return None
+                    else:
+                        return None
+                results = next_results
+                if not results:
+                    return None
+            return results
+
+        # Parse path: split on '.' but treat '[*]' as a part
+        raw_parts = re.split(r'\.(?![^[]*\])', path)  # split on dots not inside brackets
+        parts = []
+        for rp in raw_parts:
+            # Further split on [*] patterns
+            sub = re.split(r'(\[\*\])', rp)
+            for s in sub:
+                if s == '[*]':
+                    parts.append('[*]')
+                elif s:
+                    parts.append(s)
+
+        is_wildcard = '[*]' in parts
+        resolved = resolve_path(parsed, parts)
+
+        # exists check
+        if not exists_check:
+            if resolved is None:
+                return True, f'field {path} correctly absent'
+            return False, f'field {path} exists but should not'
+
+        if resolved is None:
+            return False, f'field {path} not found in JSON'
+
+        # For wildcard paths, resolved is a list of values from each array item
+        # For non-wildcard paths, resolved is a list with one value
+        if is_wildcard:
+            values_to_check = resolved
+        else:
+            values_to_check = resolved  # still a list, usually one element
+
+        # min/max (numeric, on the single resolved value for non-wildcard)
+        if min_val is not None or max_val is not None:
+            if is_wildcard:
+                return False, f'min/max not supported on wildcard paths (use min_items/max_items)'
+            val = values_to_check[0] if values_to_check else None
+            if val is None:
+                return False, f'field {path} is null, cannot apply min/max'
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                return False, f'field {path} is not a number (got {type(val).__name__})'
+            if min_val is not None and val < min_val:
+                return False, f'field {path} value {val} is below min {min_val}'
+            if max_val is not None and val > max_val:
+                return False, f'field {path} value {val} is above max {max_val}'
+
+        # min_items/max_items (array length)
+        if min_items is not None or max_items is not None:
+            if is_wildcard:
+                return False, f'min_items/max_items not supported on wildcard paths'
+            val = values_to_check[0] if values_to_check else None
+            if not isinstance(val, list):
+                return False, f'field {path} is not an array (got {type(val).__name__})'
+            count = len(val)
+            if min_items is not None and count < min_items:
+                return False, f'field {path} has {count} items, below min_items {min_items}'
+            if max_items is not None and count > max_items:
+                return False, f'field {path} has {count} items, above max_items {max_items}'
+
+        # type_check
+        if type_check is not None:
+            def check_type(v, tc):
+                if tc == 'boolean':
+                    return isinstance(v, bool)
+                elif tc == 'number':
+                    # Explicitly exclude booleans (Python: isinstance(True, int) is True)
+                    if isinstance(v, bool):
+                        return False
+                    return isinstance(v, (int, float))
+                elif tc == 'string':
+                    return isinstance(v, str)
+                elif tc == 'array':
+                    return isinstance(v, list)
+                elif tc == 'object':
+                    return isinstance(v, dict)
+                return False
+
+            failed_items = []
+            for v in values_to_check:
+                if not check_type(v, type_check):
+                    failed_items.append(repr(v))
+            if failed_items:
+                return False, f'field {path} type_check "{type_check}" failed for values: {", ".join(failed_items[:5])}'
+
+        # equals
+        if equals_val is not None:
+            if is_wildcard:
+                # All values in wildcard must match
+                failed_items = [repr(v) for v in values_to_check if v != equals_val]
+                if failed_items:
+                    return False, f'field {path} equals check failed: expected {repr(equals_val)}, got values: {", ".join(failed_items[:5])}'
+            else:
+                val = values_to_check[0] if values_to_check else None
+                if val != equals_val:
+                    return False, f'field {path} equals check failed: expected {repr(equals_val)}, got {repr(val)}'
+
         return True, 'passed'
 
     else:

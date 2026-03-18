@@ -9,12 +9,10 @@ Expert-level: MJ is given an architecture that has multiple subtle problems — 
 category: capability
 
 graders:
-  - type: contains
-    values: ["trade_off", "risk", "bottleneck", "coupling"]
-  - type: section_present
-    sections: ["risks"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: risks
+    min_items: 3
 
 prompt: |
   Review the following architecture and identify all risks, hidden coupling, and future scalability problems:

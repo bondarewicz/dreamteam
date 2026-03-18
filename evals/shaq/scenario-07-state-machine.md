@@ -8,6 +8,12 @@ Tests Shaq's ability to implement a finite state machine with valid and invalid 
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: acceptance_criteria_coverage
+    min_items: 1
+
 prompt: |
   Bird has defined these acceptance criteria for an order state machine:
 

@@ -8,6 +8,12 @@ Tests Pippen's ability to assess whether a service's observability is sufficient
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing an "order state machine service" from an incident response readiness perspective. The service manages order state transitions.
 

@@ -9,12 +9,10 @@ Tests MJ's ability to recommend a correct service decomposition strategy, identi
 category: capability
 
 graders:
-  - type: contains
-    values: ["trade_off", "risk", "flexibility", "bounded context"]
-  - type: section_present
-    sections: ["Trade", "Risk", "Implementation"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: trade_offs
+    min_items: 1
 
 prompt: |
   A courier platform currently has a monolithic backend. The team (8 engineers) wants to move to microservices. The platform has these capabilities:

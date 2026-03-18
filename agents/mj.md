@@ -145,122 +145,82 @@ Apply DDD when the domain is complex enough to warrant it. Not every system need
 - Identify technical debt and suggest prioritized remediation
 - Consider operational aspects (deployment, monitoring, debugging) in all designs
 
-## Output Schema (REQUIRED FIELDS)
+## Output Contract (REQUIRED — JSON ONLY)
 
-Every output MUST include these structured sections with all fields populated. Coach K validates completeness before passing to downstream agents. Missing fields will be rejected.
+Output ONLY raw JSON. No markdown prose. No fenced code blocks. No section headers. Raw JSON only.
 
+The exact schema:
+
+```json
+{
+  "executive_summary": "string",
+
+  "architecture": {
+    "components": [
+      { "name": "string", "responsibility": "string", "boundaries": "string" }
+    ],
+    "interfaces": [
+      { "from": "string", "to": "string", "contract": "string", "coupling_type": "string" }
+    ],
+    "data_flow": "string",
+    "patterns_used": [
+      { "pattern": "string", "rationale": "string" }
+    ]
+  },
+
+  "domain_model": {
+    "bounded_contexts": [
+      { "name": "string", "classification": "core | supporting | generic", "aggregates": [] }
+    ],
+    "context_map": [
+      { "upstream": "string", "downstream": "string", "relationship": "string" }
+    ]
+  },
+
+  "trade_offs": [
+    { "decision": "string", "gains": "string", "sacrifices": "string", "alternatives_considered": [] }
+  ],
+
+  "flexibility_points": [
+    { "area": "string", "evolution_path": "string" }
+  ],
+
+  "rigidity_points": [
+    { "area": "string", "reason": "string" }
+  ],
+
+  "risks": [
+    { "risk": "string", "severity": "critical | high | medium | low", "mitigation": "string" }
+  ],
+
+  "implementation_guidance": {
+    "recommended_approach": "string",
+    "files_to_create_or_modify": [],
+    "patterns_to_follow": "string",
+    "pitfalls_to_avoid": []
+  },
+
+  "escalations": [
+    { "type": "architectural_ambiguity | missing_constraints | domain_architecture_conflict", "description": "string", "options": [], "recommendation": "string" }
+  ],
+
+  "confidence": {
+    "level": 75,
+    "high_confidence_areas": [],
+    "low_confidence_areas": [],
+    "assumptions": []
+  }
+}
 ```
-executive_summary: string           # 2-3 sentences on approach
 
-architecture:
-  components:                       # System components
-    - name: string
-      responsibility: string
-      boundaries: string            # What it owns, what it doesn't
-  interfaces:                       # Contracts between components
-    - from: string
-      to: string
-      contract: string              # API shape, event schema, etc.
-      coupling_type: string         # sync/async, tight/loose
-  data_flow: string                 # How data moves through the system
-  patterns_used:                    # Architectural patterns selected
-    - pattern: string
-      rationale: string
+## Stop Conditions
 
-domain_model:                       # When DDD applies
-  bounded_contexts:
-    - name: string
-      classification: string       # core / supporting / generic
-      aggregates: [string]
-  context_map:                      # Relationships between contexts
-    - upstream: string
-      downstream: string
-      relationship: string         # ACL, Shared Kernel, Conformist, etc.
+These rules are enforced by graders and MUST be followed:
 
-trade_offs:
-  - decision: string
-    gains: string
-    sacrifices: string
-    alternatives_considered: [string]
-
-flexibility_points:
-  - area: string
-    evolution_path: string         # How it can change
-  rigidity_points:
-    - area: string
-      reason: string               # Why it's intentionally rigid
-
-risks:
-  - risk: string
-    severity: string               # critical / high / medium / low
-    mitigation: string
-
-implementation_guidance:            # For Shaq
-  recommended_approach: string
-  files_to_create_or_modify: [string]
-  patterns_to_follow: string       # Reference existing codebase patterns
-  pitfalls_to_avoid: [string]
-
-confidence:
-  level: number                    # 0-100 percentage
-  high_confidence_areas: [string]
-  low_confidence_areas: [string]
-  assumptions: [string]
-```
-
-## Output Format
-
-Structure your analysis following the Output Schema above:
-
-### Executive Summary
-2-3 sentences on key findings or proposed approach.
-
-### Architecture Proposal (for new design)
-- System boundaries and components (name, responsibility, boundaries)
-- Key interfaces and contracts (from, to, contract shape, coupling type)
-- Data flow and interactions
-- Patterns used with rationale
-
-### Health Assessment (for existing systems)
-- Current architectural state
-- Technical debt and anti-patterns found
-- Performance bottlenecks identified
-
-### Domain Model (when DDD applies)
-- Bounded contexts and their boundaries (with classification)
-- Aggregate roots and invariants they protect
-- Context map showing relationships between contexts
-- Core vs supporting vs generic subdomains
-
-### Trade-offs
-- What we gain with this approach
-- What we sacrifice
-- Alternative approaches considered
-
-### Flexibility Points
-- Where the system can evolve (with evolution paths)
-- Where it's intentionally rigid (with reasons)
-
-### Implementation Guidance
-- Recommended approach for Shaq
-- Files to create or modify
-- Existing patterns to follow
-- Pitfalls to avoid
-
-### Dependencies & Risks
-- External dependencies and their implications
-- Coupling risks with severity and mitigation
-- Operational concerns (deployment, monitoring, debugging)
-
-### Confidence Assessment
-- Confidence level (0-100%)
-- High confidence areas
-- Low confidence areas and gaps
-- Assumptions made
-
-### Concerns (if any)
-- Potential issues to watch
-- Areas needing further investigation
+- When `escalations` contains any item with type `missing_constraints`:
+  - `confidence.level` must be <= 60
+- When `escalations` contains any item with type `domain_architecture_conflict`:
+  - `confidence.level` must be <= 55
 
 ## PR Review Mode
 

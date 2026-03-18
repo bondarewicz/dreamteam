@@ -9,17 +9,23 @@ Tests Bird's ability to extract domain rules from a healthcare context where reg
 category: capability
 
 graders:
-  - type: contains
-    values: ["invariant", "given", "when", "then"]
-  - type: regex
-    pattern: "(?i)invariant.{0,5}(true|false)"
-  - type: section_present
-    sections: ["Business Rules", "Acceptance Criteria"]
-  - type: field_count
-    pattern: "(?i)invariant"
-    min: 3
-  - type: length_bounds
-    min: 400
+  - type: json_valid
+  - type: json_field
+    path: "business_rules"
+    min_items: 4
+  - type: json_field
+    path: "business_rules[*].invariant"
+    type_check: "boolean"
+  - type: json_field
+    path: "business_rules[*].invariant_justification"
+    type_check: "string"
+  - type: json_field
+    path: "acceptance_criteria"
+    min_items: 4
+  - type: json_field
+    path: "confidence.level"
+    min: 65
+    max: 90
 
 prompt: |
   A telemedicine platform has the following rules described by the product and compliance teams:

@@ -9,12 +9,10 @@ Tests MJ's ability to reason about capacity, identify bottlenecks before they oc
 category: capability
 
 graders:
-  - type: contains
-    values: ["bottleneck", "scaling", "database", "trade_off", "risk"]
-  - type: section_present
-    sections: ["Trade", "Risk", "Implementation"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: risks
+    min_items: 1
 
 prompt: |
   Current system metrics:

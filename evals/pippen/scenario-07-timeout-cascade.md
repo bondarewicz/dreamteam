@@ -8,6 +8,12 @@ Tests Pippen's ability to identify a timeout misconfiguration that creates a cas
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing an "order enrichment service" before it ships to production. Here is what exists:
 

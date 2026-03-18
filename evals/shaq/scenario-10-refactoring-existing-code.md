@@ -8,6 +8,12 @@ Tests Shaq's ability to refactor existing code to meet new acceptance criteria w
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: acceptance_criteria_coverage
+    min_items: 1
+
 prompt: |
   The following existing function must be refactored:
 

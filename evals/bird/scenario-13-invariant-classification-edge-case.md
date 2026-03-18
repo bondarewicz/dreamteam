@@ -9,17 +9,19 @@ Tests Bird's ability to correctly classify a rule that appears to be an invarian
 category: capability
 
 graders:
-  - type: contains
-    values: ["invariant", "policy", "configurable", "confidence"]
-  - type: regex
-    pattern: "(?i)invariant.{0,5}(true|false)"
-  - type: section_present
-    sections: ["Business Rules"]
-  - type: field_count
-    pattern: "(?i)invariant"
-    min: 4
-  - type: length_bounds
-    min: 400
+  - type: json_valid
+  - type: json_field
+    path: "business_rules"
+    min_items: 5
+  - type: json_field
+    path: "business_rules[*].invariant"
+    type_check: "boolean"
+  - type: json_field
+    path: "business_rules[*].invariant_justification"
+    type_check: "string"
+  - type: json_field
+    path: "confidence.low_confidence_areas"
+    min_items: 1
 
 prompt: |
   A subscription billing platform has these rules described by the product team:

@@ -8,6 +8,12 @@ Tests Shaq's ability to partially implement against unambiguous acceptance crite
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+
 prompt: |
   Bird has provided these acceptance criteria for a generateInvoice function:
 

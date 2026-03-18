@@ -8,6 +8,18 @@ Tests Shaq's discipline to refuse implementation and escalate when two acceptanc
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: implementation_summary.files_changed
+    max_items: 0
+  - type: json_field
+    path: confidence.level
+    max: 40
+
 prompt: |
   Magic has delivered this handoff brief for a "password reset" feature:
 

@@ -8,6 +8,12 @@ Tests Magic's ability to produce a maximally useful partial brief when inputs ar
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: confidence.level
+    max: 60
+
 prompt: |
   Bird produced a domain analysis that is intentionally vague:
   - "The reporting feature should give users visibility into their usage"

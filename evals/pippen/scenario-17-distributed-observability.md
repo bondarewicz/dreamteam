@@ -8,6 +8,12 @@ Tests Pippen's ability to assess observability in a distributed system with mult
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing the observability of a five-service order processing system.
 

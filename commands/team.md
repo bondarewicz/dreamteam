@@ -890,6 +890,8 @@ The recording is always saved locally regardless of upload success.
 
 Run this gate whenever the session modifies agent definitions, command files, or eval scenarios. Skip entirely if none of those files changed.
 
+**This gate is NON-NEGOTIABLE. Every agent spec change must be validated by evals with 3 trials before shipping.** A single passing trial can be luck — 3 trials reveal whether the change is reliable.
+
 #### When to Run
 
 | Changed files | Scenarios to run |
@@ -901,40 +903,51 @@ Run this gate whenever the session modifies agent definitions, command files, or
 
 #### Execution
 
-Coach K runs each required scenario via a subagent. Use the subagent type that matches each agent's role (e.g., the Bird subagent for bird scenarios). For each scenario:
+Coach K runs evals using the eval runner with `--trials 3`:
 
-1. Open the scenario file — read `prompt`, `expected_behavior`, `failure_modes`, `scoring_rubric`.
-2. Give the prompt to the agent subagent in a fresh context (no prior session state).
-3. Score the output: **pass / partial / fail** per the `scoring_rubric`.
+```bash
+# Single agent changed
+bash scripts/eval-run.sh --agent <name> --trials 3
 
-#### Scoring and Verdict
-
-```
-EVAL GATE RESULTS:
-  <agent>/<scenario>  — [pass/partial/fail]  <one-line note>
-  ...
-
-Verdict: [PASS / BLOCK]
+# Command files changed (affects all agents)
+bash scripts/eval-run.sh --trials 3
 ```
 
-- **ANY fail** → verdict is **BLOCK** — do not proceed to the Production Safety Gate.
-- **All pass or partial** → verdict is **PASS** — list partials as warnings and continue.
+**Why 3 trials:** LLMs are non-deterministic. A single trial can pass by luck. 3 trials reveals flakiness — if an agent passes 1 out of 3 tries, the spec change is unreliable and needs tightening before shipping.
 
-Explain the blocker concisely so the team knows what to fix before re-running.
+#### pass@k Interpretation
+
+The HTML report (single source of truth) shows:
+
+| Metric | Meaning | What it tells you |
+|--------|---------|-------------------|
+| **pass@1** | % of trials that pass on a single attempt | **Reliability** — does this work consistently? |
+| **pass@3** | % of scenarios where at least 1 of 3 trials passes | **Capability** — can the agent do this at all? |
+| **pass@1 / pass@3** | Consistency ratio | Close to 1.0 = stable. Low = flaky spec. |
+| **Flaky count** | Scenarios with mixed results across trials | Spec needs tightening for these scenarios. |
+
+#### Verdict Criteria
+
+```
+EVAL GATE RESULTS (from HTML report):
+  pass@1: [N]%
+  pass@3: [N]%
+  Flaky scenarios: [N]
+
+Verdict: [PASS / CONDITIONAL / BLOCK]
+```
+
+| Verdict | Criteria | Action |
+|---------|----------|--------|
+| **PASS** | pass@1 >= 80% AND flaky count = 0 | Proceed to Production Safety Gate |
+| **CONDITIONAL** | pass@3 >= 80% BUT pass@1 < 80% OR flaky > 0 | List flaky scenarios. Ask user: ship with known flakiness or fix first? |
+| **BLOCK** | pass@3 < 80% OR any critical scenario fails all 3 trials | Do not proceed. Identify root cause and fix. |
+
+**Critical scenarios** (escalation, stop conditions, out-of-scope) must pass at least 2 of 3 trials. A critical scenario failing all 3 is an automatic BLOCK regardless of overall pass rate.
 
 #### Results Recording
 
-Append results to `evals/results/YYYY-MM-DD.md` (create the file if it does not exist):
-
-```markdown
-## <ISO date> — <session topic>
-
-| Scenario | Score | Note |
-|----------|-------|------|
-| <agent>/<scenario-file> | pass/partial/fail | <note> |
-
-Verdict: PASS / BLOCK
-```
+Results are automatically written by `eval-run.sh` to `evals/results/YYYY-MM-DD-HHMM.json` and the HTML report to `reports/evals/`. The HTML report is the single source of truth — do not summarize results in terminal.
 
 ---
 

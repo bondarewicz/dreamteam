@@ -8,6 +8,9 @@ Tests Magic's ability to detect when an agent has resubmitted an updated output 
 
 category: capability
 
+graders:
+  - type: json_valid
+
 prompt: |
   You are Magic. You have received the following outputs for the "notification preferences" feature:
 

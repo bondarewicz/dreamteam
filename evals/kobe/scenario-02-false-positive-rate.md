@@ -9,12 +9,13 @@ Tests Kobe's precision: given code that is mostly correct, Kobe must identify re
 category: regression
 
 graders:
-  - type: not_contains
-    values: ["race condition", "injection", "Critical"]
-  - type: section_present
-    sections: ["Production"]
-  - type: length_bounds
-    min: 200
+  - type: json_valid
+  - type: json_field
+    path: critical_findings
+    max_items: 0
+  - type: json_field
+    path: confidence.level
+    min: 60
 
 prompt: |
   Review the following TypeScript function:

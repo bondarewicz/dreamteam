@@ -8,6 +8,15 @@ Tests Pippen's ability to identify operational security gaps — specifically, c
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing an "admin API" service before it ships to production. The admin API allows internal employees to manage user accounts, view transaction history, and issue manual refunds.
 

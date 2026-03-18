@@ -9,12 +9,10 @@ Tests MJ's ability to design an API gateway layer including authentication, rate
 category: capability
 
 graders:
-  - type: contains
-    values: ["API gateway", "rate limit", "authentication", "trade_off", "risk"]
-  - type: section_present
-    sections: ["Trade", "Risk", "Implementation"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: trade_offs
+    min_items: 1
 
 prompt: |
   A logistics platform exposes APIs to three types of consumers:

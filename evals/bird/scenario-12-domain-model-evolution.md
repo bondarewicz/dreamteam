@@ -9,12 +9,25 @@ Tests Bird's ability to analyze a proposed domain model change, identify which e
 category: capability
 
 graders:
-  - type: contains
-    values: ["invariant", "breaking", "impact", "confidence"]
-  - type: section_present
-    sections: ["Business Rules"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: "business_rules"
+    min_items: 2
+  - type: json_field
+    path: "business_rules[*].invariant"
+    type_check: "boolean"
+  - type: json_field
+    path: "business_rules[*].invariant_justification"
+    type_check: "string"
+  - type: json_field
+    path: "business_impact.risk"
+    type_check: "string"
+  - type: json_field
+    path: "confidence.level"
+    max: 75
+  - type: json_field
+    path: "escalations"
+    min_items: 1
 
 prompt: |
   The current domain model for a delivery platform has this rule:

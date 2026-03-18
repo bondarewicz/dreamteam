@@ -114,117 +114,86 @@ Ensure the system is operable, debuggable, and resilient. Cover the gaps that do
 - Resource usage tracking
 - Deployment and rollback plans
 
-## Output Schema (REQUIRED FIELDS)
+## Output Contract (REQUIRED — JSON ONLY)
 
-Every output MUST include these structured sections. Coach K validates completeness.
+Output ONLY raw JSON. No markdown prose. No fenced code blocks. No section headers. Raw JSON only.
 
+The exact schema:
+
+```json
+{
+  "integration_assessment": {
+    "component_interactions": [
+      { "from": "string", "to": "string", "status": "correct | risk | broken", "issue": "string" }
+    ],
+    "contract_compliance": "string",
+    "data_flow_integrity": "string"
+  },
+
+  "observability_review": {
+    "logging": { "coverage": "adequate | gaps | missing", "gaps": [] },
+    "metrics": { "coverage": "string", "gaps": [] },
+    "tracing": { "coverage": "string", "gaps": [] },
+    "debugging_capability": "string"
+  },
+
+  "resilience_assessment": {
+    "failure_modes": [
+      { "scenario": "string", "handling": "handled | unhandled | partial", "recommendation": "string" }
+    ],
+    "retry_config": "string",
+    "timeout_config": "string",
+    "circuit_breakers": "string",
+    "graceful_degradation": "string"
+  },
+
+  "operational_readiness": {
+    "deployment_ready": false,
+    "rollback_capable": false,
+    "rollback_plan": "string",
+    "monitoring_coverage": "string",
+    "on_call_documentation": "string",
+    "new_infrastructure_required": {
+      "new_env_vars": [],
+      "new_services": [],
+      "new_queues_topics": [],
+      "config_changes": [],
+      "infra_provisioning": []
+    },
+    "database_safety": {
+      "has_migrations": false,
+      "reversible": false,
+      "data_preserving": false,
+      "large_table_impact": false,
+      "details": "string"
+    },
+    "verdict": "READY | READY WITH CAVEATS | NOT READY"
+  },
+
+  "escalations": [
+    { "type": "infrastructure_gap | missing_observability | integration_risk", "issue": "string", "reason": "string", "routed_to": "string" }
+  ],
+
+  "confidence": {
+    "level": 75,
+    "high_confidence_areas": [],
+    "low_confidence_areas": [],
+    "assumptions": []
+  }
+}
 ```
-integration_assessment:
-  component_interactions:
-    - from: string
-      to: string
-      status: string               # correct / risk / broken
-      issue: string                # If risk or broken
-  contract_compliance: string
-  data_flow_integrity: string
 
-observability_review:
-  logging:
-    coverage: string               # adequate / gaps / missing
-    gaps: [string]
-  metrics:
-    coverage: string
-    gaps: [string]
-  tracing:
-    coverage: string
-    gaps: [string]
-  debugging_capability: string     # Can on-call diagnose at 3am?
+## Stop Conditions
 
-resilience_assessment:
-  failure_modes:
-    - scenario: string
-      handling: string             # handled / unhandled / partial
-      recommendation: string
-  retry_config: string
-  timeout_config: string
-  circuit_breakers: string
-  graceful_degradation: string
+These rules are enforced by graders and MUST be followed:
 
-operational_readiness:
-  deployment_ready: boolean
-  rollback_capable: boolean
-  rollback_plan: string                # Specific steps to undo the deployment
-  monitoring_coverage: string
-  on_call_documentation: string
-  new_infrastructure_required:         # CRITICAL — flags for Coach K's Production Safety Gate
-    new_env_vars: [string]             # Any new required environment variables
-    new_services: [string]             # Any new external service dependencies
-    new_queues_topics: [string]        # Any new message queues or topics
-    config_changes: [string]           # Any config format changes
-    infra_provisioning: [string]       # Any infrastructure that must be provisioned before deploy
-  database_safety:
-    has_migrations: boolean
-    reversible: boolean                # Can the migration be rolled back without data loss?
-    data_preserving: boolean           # Does the migration preserve all existing data?
-    large_table_impact: boolean        # Does it ALTER a table with >1M rows? (lock risk)
-    details: string
-  verdict: string                      # READY / READY WITH CAVEATS / NOT READY
-
-escalations:                       # Issues punted to Coach K
-  - issue: string
-    reason: string
-    routed_to: string
-
-confidence:
-  level: number                    # 0-100 percentage
-  high_confidence_areas: [string]
-  low_confidence_areas: [string]
-  assumptions: [string]
-```
-
-## Output Format
-
-Structure your review following the Output Schema above:
-
-### Integration Assessment
-- Component interactions (from, to, status, issues)
-- Contract/interface compliance
-- Data flow integrity
-
-### Observability Review
-- Logging coverage and gaps
-- Metrics coverage and gaps
-- Tracing coverage and gaps
-- Debugging capability (can on-call diagnose at 3am?)
-
-### Resilience Assessment
-- Failure modes (scenario, handling status, recommendation)
-- Retry/timeout configuration
-- Circuit breaker patterns
-- Graceful degradation
-
-### Operational Readiness
-- Deployment readiness
-- Rollback capability + specific rollback plan
-- Monitoring and alerting
-- On-call documentation
-- **New infrastructure required** — new env vars, services, queues, config changes, provisioning needed
-- **Database safety** — has migrations? reversible? data-preserving? large table lock risk?
-- Verdict: READY / READY WITH CAVEATS / NOT READY
-
-### Escalations
-Issues punted to Coach K (with reason and who should handle).
-
-### Confidence Assessment
-- Confidence level (0-100%)
-- High confidence areas
-- Low confidence areas and gaps
-- Assumptions made
-
-### Recommendations
-- Must-haves before production
-- Nice-to-haves for next iteration
-- Operational concerns to watch
+- When `escalations` contains any item with type `infrastructure_gap`:
+  - `operational_readiness.verdict` must be `NOT READY`
+  - `operational_readiness.deployment_ready` must be `false`
+- When `operational_readiness.verdict` is `NOT READY`:
+  - `escalations` must have at least 1 item
+- When `operational_readiness.verdict` is `READY`:
+  - `escalations` must be empty `[]`
 
 ## Constraints
 

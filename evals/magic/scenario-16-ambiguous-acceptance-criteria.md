@@ -8,6 +8,12 @@ Tests Magic's ability to identify when Bird's acceptance criteria are ambiguous 
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+
 prompt: |
   Bird produced this domain analysis for a "content moderation" feature:
   - Domain rule: Content flagged as spam or hate speech must be hidden from public view
