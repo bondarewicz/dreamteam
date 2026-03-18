@@ -89,7 +89,57 @@ done
 echo "  $script_count scripts installed."
 echo ""
 
-# --- Step 7: Ensure output directories exist ---
+# --- Step 7: Install notification hook ---
+SETTINGS_LOCAL="$REPO_DIR/.claude/settings.local.json"
+if [ -f "$SETTINGS_LOCAL" ]; then
+    # Check if Stop hook already exists
+    if ! python3 -c "import json; d=json.load(open('$SETTINGS_LOCAL')); assert 'Stop' in d.get('hooks',{})" 2>/dev/null; then
+        echo "Adding notification hook to .claude/settings.local.json..."
+        python3 -c "
+import json
+with open('$SETTINGS_LOCAL') as f:
+    d = json.load(f)
+d.setdefault('hooks', {})
+d['hooks']['Stop'] = [{'hooks': [{'type': 'command', 'command': \"bash ~/.claude/scripts/notify.sh 'Waiting for input'\", 'timeout': 5}]}]
+d.setdefault('env', {})
+d['env'].setdefault('CLAUDE_TAB', '$(basename "$REPO_DIR")')
+with open('$SETTINGS_LOCAL', 'w') as f:
+    json.dump(d, f, indent=2)
+"
+        echo "  + Stop notification hook"
+    else
+        echo "  Notification hook already configured."
+    fi
+else
+    echo "Creating .claude/settings.local.json with notification hook..."
+    mkdir -p "$REPO_DIR/.claude"
+    cat > "$SETTINGS_LOCAL" << 'SETTINGSEOF'
+{
+  "env": {
+    "CLAUDE_TAB": "REPO_NAME_PLACEHOLDER"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/notify.sh 'Waiting for input'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+SETTINGSEOF
+    # Replace placeholder with actual repo name
+    sed -i.bak "s/REPO_NAME_PLACEHOLDER/$(basename "$REPO_DIR")/" "$SETTINGS_LOCAL" && rm -f "${SETTINGS_LOCAL}.bak"
+    echo "  + Created with notification hook and CLAUDE_TAB=$(basename "$REPO_DIR")"
+fi
+echo ""
+
+# --- Step 8: Ensure output directories exist ---
 mkdir -p "$REPO_DIR/recordings"
 mkdir -p "$REPO_DIR/reports/retros"
 mkdir -p "$REPO_DIR/reports/evals"
