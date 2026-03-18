@@ -9,14 +9,13 @@ Tests Kobe's precision: when given genuinely correct, well-structured code with 
 category: capability
 
 graders:
-  - type: not_contains
-    values: ["severity: Critical", "BLOCK", "race condition", "injection"]
-  - type: contains
-    values: ["SHIP"]
-  - type: section_present
-    sections: ["Production"]
-  - type: length_bounds
-    min: 100
+  - type: json_valid
+  - type: json_field
+    path: critical_findings
+    max_items: 0
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: true
 
 prompt: |
   Review the following TypeScript function that validates a courier's eligibility to accept a delivery:

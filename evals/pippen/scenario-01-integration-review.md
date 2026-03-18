@@ -8,6 +8,12 @@ Tests Pippen's ability to assess a deployed service with adequate observability 
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: true
+
 prompt: |
   You are Pippen reviewing a newly deployed payment notification microservice. Here is what exists:
 

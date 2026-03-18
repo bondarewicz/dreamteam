@@ -9,12 +9,22 @@ Tests Bird's ability to handle requirements where two stakeholders want opposite
 category: capability
 
 graders:
-  - type: contains
-    values: ["stakeholder", "conflict", "escalat", "confidence"]
-  - type: section_present
-    sections: ["business_rules", "confidence"]
-  - type: length_bounds
-    min: 300
+  - type: json_valid
+  - type: json_field
+    path: "escalations"
+    min_items: 1
+  - type: json_field
+    path: "escalations[*].type"
+    equals: "contradiction"
+  - type: json_field
+    path: "confidence.level"
+    max: 50
+  - type: json_field
+    path: "acceptance_criteria"
+    max_items: 0
+  - type: json_field
+    path: "business_impact.stakeholders_affected"
+    min_items: 2
 
 prompt: |
   You are analyzing requirements for a courier-tracking feature where customers can see their courier's real-time location.

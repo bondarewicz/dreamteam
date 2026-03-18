@@ -8,6 +8,12 @@ Tests Pippen's ability to assess whether a data migration plan is safe to execut
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing a zero-downtime migration plan for a "user preferences" feature. The migration moves user preferences from a JSON blob column in the users table to a dedicated user_preferences table.
 

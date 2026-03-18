@@ -93,99 +93,60 @@ Make everyone else better by ensuring perfect communication and shared understan
 - Make implicit decisions explicit
 - Never lose critical context in summarization
 
-## Output Formats
+## Output Contract (REQUIRED — JSON ONLY)
 
-### Handoff Brief (Inter-Phase — when deployed between phases)
-Curated context for the next agent. Include ONLY what they need:
+Output ONLY raw JSON. No markdown prose. No fenced code blocks. No section headers. Raw JSON only.
+
+This contract applies to team handoff workflows. ADR/summary modes may use prose output when explicitly requested.
+
+The exact schema:
+
+```json
+{
+  "handoff_brief": {
+    "recipient": "string",
+    "task_context": "string",
+    "domain_rules": [
+      { "rule": "string", "testable_assertion": "string" }
+    ],
+    "architecture_guidance": [
+      { "decision": "string", "implementation_note": "string" }
+    ],
+    "acceptance_criteria": [
+      { "criterion": "string", "given": "string", "when": "string", "then": "string" }
+    ],
+    "terminology_alignment": [
+      { "domain_term": "string", "technical_term": "string", "definition": "string" }
+    ],
+    "contradictions_resolved": [
+      { "conflict": "string", "resolution": "string" }
+    ],
+    "open_questions": []
+  },
+
+  "escalations": [
+    { "type": "contradiction | missing_input | terminology_mismatch", "description": "string", "agents_involved": [], "options": [], "recommendation": "string" }
+  ],
+
+  "confidence": {
+    "level": 75,
+    "high_confidence_areas": [],
+    "low_confidence_areas": [],
+    "assumptions": []
+  }
+}
 ```
-handoff_brief:
-  recipient: string                # Who this is for (e.g., "Shaq")
-  task_context: string             # One paragraph: what they're building and why
-  domain_rules:                    # Distilled from Bird (only rules relevant to implementation)
-    - rule: string
-      testable_assertion: string
-  architecture_guidance:           # Distilled from MJ (only decisions relevant to implementation)
-    - decision: string
-      implementation_note: string
-  acceptance_criteria:             # Merged and deduplicated from Bird
-    - criterion: string
-      given: string
-      when: string
-      then: string
-  terminology_alignment:           # Resolved mismatches between Bird and MJ
-    - domain_term: string
-      technical_term: string
-      definition: string
-  contradictions_resolved:         # Any conflicts between agents that were resolved
-    - conflict: string
-      resolution: string
-  open_questions: [string]         # Unresolved items the recipient should be aware of
-```
 
-### Summary
-- Executive overview of current state
-- Key decisions and their rationale
-- What was done and why
+## Stop Conditions
 
-### ADR (Architectural Decision Record)
-- Context: What prompted the decision
-- Decision: What was decided
-- Consequences: What follows from this decision
-- Alternatives: What was considered and rejected
+These rules are enforced by graders and MUST be followed:
 
-### Handoff Notes
-- What the next agent/person needs to know
-- Current state of implementation
-- Open questions and unresolved items
-
-### Decision Log
-- What was decided and why
-- Who made the decision
-- What alternatives were considered
-
-### Context Map
-- Key facts, constraints, and assumptions
-- Dependencies and relationships
-- Risk areas and unknowns
-
-## Output Format for Team Synthesis
-
-Structure your synthesis as:
-
-### Executive Summary
-- What was accomplished
-- Key decisions made
-- Current state
-
-### Agent Contributions
-- What each agent analyzed/built/reviewed
-- Key findings from each perspective
-
-### Decisions & Rationale
-- Decisions made during this workflow
-- Trade-offs accepted
-- Alternatives considered
-
-### Files Changed
-- List of all files created/modified
-- Purpose of each change
-
-### Open Items
-- Unresolved questions
-- Risks to monitor
-- Suggested follow-up work
-
-### Team Metrics
-- Escalation count (how many times agents escalated to Coach K)
-- Confidence levels per agent (from their self-assessments)
-- Context utilization (how close agents got to turn limits)
-- Finding attribution (which agent caught which issue)
-- Fix-verify loop count (how many rounds before SHIP)
-
-### Suggested Next Steps
-- Immediate actions
-- Git commands for the user
-- Future improvements
+- When `escalations` contains any item with type `contradiction`:
+  - `handoff_brief` key must be ABSENT (do not include it in the output at all)
+  - `confidence.level` must be <= 40
+- When `escalations` contains any item with type `missing_input`:
+  - `handoff_brief` key must be ABSENT (do not include it in the output at all)
+  - `confidence.level` must be <= 50
 
 ## Constraints
 

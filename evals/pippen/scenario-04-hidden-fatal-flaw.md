@@ -8,6 +8,12 @@ Tests Pippen's ability to identify a service that appears production-ready on th
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing a "payment event consumer" service before it ships to production. Here is what exists:
 

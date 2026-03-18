@@ -9,12 +9,10 @@ Tests Kobe's ability to identify the use of floating-point arithmetic for financ
 category: capability
 
 graders:
-  - type: contains
-    values: ["floating point", "financial", "safe_to_deploy"]
-  - type: section_present
-    sections: ["Critical", "Production"]
-  - type: length_bounds
-    min: 200
+  - type: json_valid
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: false
 
 prompt: |
   Review the following TypeScript function that calculates the total payout for a courier's weekly earnings, including base pay, bonuses, and deductions:

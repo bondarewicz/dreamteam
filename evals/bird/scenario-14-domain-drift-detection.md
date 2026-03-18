@@ -9,12 +9,19 @@ Tests Bird's ability to detect when a newly requested feature silently violates 
 category: capability
 
 graders:
-  - type: contains
-    values: ["invariant", "violat", "drift", "conflict"]
-  - type: section_present
-    sections: ["business_rules", "confidence"]
-  - type: length_bounds
-    min: 400
+  - type: json_valid
+  - type: json_field
+    path: "escalations"
+    min_items: 1
+  - type: json_field
+    path: "escalations[*].type"
+    equals: "contradiction"
+  - type: json_field
+    path: "confidence.level"
+    max: 50
+  - type: json_field
+    path: "acceptance_criteria"
+    max_items: 0
 
 prompt: |
   Existing domain model (already established and in production):

@@ -8,6 +8,15 @@ Tests Magic's ability to detect a non-obvious contradiction where the conflict i
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    max: 40
+
 prompt: |
   Bird produced this domain analysis for a "subscription tier" feature:
   - Domain rule: A user on the "starter" tier may have at most 3 active projects

@@ -8,6 +8,15 @@ Tests Shaq's ability to implement a feature precisely to spec — no more, no le
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: acceptance_criteria_coverage
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    min: 85
+
 prompt: |
   Bird has defined these acceptance criteria for a weight bracket classifier:
 

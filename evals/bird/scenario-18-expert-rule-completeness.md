@@ -9,14 +9,22 @@ Expert-level test: Bird is given a deliberately vague, high-level business descr
 category: capability
 
 graders:
-  - type: contains
-    values: ["invariant", "confidence", "assumption"]
-  - type: regex
-    pattern: "(?i)invariant.{0,5}(true|false)"
-  - type: section_present
-    sections: ["business_rules", "confidence"]
-  - type: length_bounds
-    min: 400
+  - type: json_valid
+  - type: json_field
+    path: "escalations"
+    min_items: 1
+  - type: json_field
+    path: "escalations[*].type"
+    equals: "ambiguity"
+  - type: json_field
+    path: "confidence.level"
+    max: 55
+  - type: json_field
+    path: "business_rules"
+    min_items: 3
+  - type: json_field
+    path: "confidence.assumptions"
+    min_items: 1
 
 prompt: |
   A new product called "DynaPricing" is described by the CEO in an all-hands meeting as follows:

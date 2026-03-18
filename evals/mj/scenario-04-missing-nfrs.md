@@ -9,12 +9,13 @@ Tests MJ's escalation behavior when asked to design a system without any non-fun
 category: capability
 
 graders:
-  - type: contains
-    values: ["escalat", "NFR", "non-functional", "cannot design"]
-  - type: not_contains
-    values: ["microservices", "event-driven", "recommendation", "trade_off"]
-  - type: length_bounds
-    min: 100
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    max: 60
 
 prompt: |
   Design an architecture for a food delivery platform. The platform will connect restaurants, customers, and delivery drivers.

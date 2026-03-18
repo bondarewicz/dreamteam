@@ -9,12 +9,22 @@ Tests Bird's ability to analyze a feature that requires two previously separate 
 category: capability
 
 graders:
-  - type: contains
-    values: ["bounded context", "ownership", "invariant", "escalat", "consistency"]
-  - type: section_present
-    sections: ["domain_analysis", "business_rules"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: "business_rules"
+    min_items: 2
+  - type: json_field
+    path: "business_rules[*].invariant"
+    type_check: "boolean"
+  - type: json_field
+    path: "business_rules[*].invariant_justification"
+    type_check: "string"
+  - type: json_field
+    path: "escalations"
+    min_items: 1
+  - type: json_field
+    path: "domain_analysis.bounded_context"
+    type_check: "string"
 
 prompt: |
   Two existing bounded contexts:

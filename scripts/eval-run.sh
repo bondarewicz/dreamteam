@@ -13,6 +13,7 @@
 #     --resume DIR     Resume from existing raw outputs in DIR
 #     --agent NAME     Run only scenarios for named agent
 #     --phase PHASE    Run only a specific phase: agents|graders|score|all (default: all)
+#     --trials N       Run each scenario N times (default: 1). Enables pass@k reporting.
 #     --dry-run        Show what would run without executing
 #
 # Requirements:
@@ -32,6 +33,7 @@ PARALLEL=10
 RESUME_DIR=""
 AGENT_FILTER=""
 PHASE="all"
+TRIALS=1
 DRY_RUN=""
 
 while [ $# -gt 0 ]; do
@@ -44,6 +46,8 @@ while [ $# -gt 0 ]; do
       AGENT_FILTER="$2"; shift 2 ;;
     --phase)
       PHASE="$2"; shift 2 ;;
+    --trials)
+      TRIALS="$2"; shift 2 ;;
     --dry-run)
       DRY_RUN="yes"; shift ;;
     -h|--help)
@@ -69,6 +73,7 @@ exec python3 - \
   --repo-root "$REPO_ROOT" \
   ${RESUME_DIR:+--resume "$RESUME_DIR"} \
   ${AGENT_FILTER:+--agent "$AGENT_FILTER"} \
+  --trials "$TRIALS" \
   ${DRY_RUN:+--dry-run} \
   << 'PYEOF'
 # Full orchestrator — Python3 stdlib only, macOS compatible
@@ -93,6 +98,7 @@ parser.add_argument('--script-dir',  default='.')
 parser.add_argument('--repo-root',   default='.')
 parser.add_argument('--resume',      default='')
 parser.add_argument('--agent',       default='')
+parser.add_argument('--trials',      type=int,   default=1)
 parser.add_argument('--dry-run',     action='store_true')
 args = parser.parse_args()
 
@@ -102,6 +108,7 @@ SCRIPT_DIR   = args.script_dir
 REPO_ROOT    = args.repo_root
 RESUME_DIR   = args.resume
 AGENT_FILTER = args.agent
+TRIALS       = max(1, args.trials)
 DRY_RUN      = args.dry_run
 
 EVALS_DIR   = os.path.join(REPO_ROOT, 'evals')
@@ -270,25 +277,8 @@ def run_graders(scenario_file, raw_output_file):
 
 # ── Phase 1: Agent Runs ───────────────────────────────────────────────────────
 
-def run_agent_scenario(scenario_file):
-    """Run a single agent scenario. Returns the raw_output_file path."""
-    agent       = os.path.basename(os.path.dirname(scenario_file))
-    scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
-    raw_output  = os.path.join(RAW_DIR, f'{agent}-{scenario_id}.json')
-
-    if os.path.isfile(raw_output):
-        print(f'  SKIP (raw output exists): {agent}/{scenario_id}')
-        return raw_output
-
-    print(f'  Running agent: {agent}/{scenario_id}')
-
-    with open(scenario_file, encoding='utf-8', errors='replace') as f:
-        content = f.read()
-
-    prompt = extract_prompt(content)
-    if not prompt:
-        print(f'  WARN: empty prompt extracted for {agent}/{scenario_id}', file=sys.stderr)
-
+def run_single_agent_call(agent, scenario_id, prompt):
+    """Execute one agent call. Returns a record dict."""
     start_ms  = int(datetime.datetime.now().timestamp() * 1000)
     timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
     error_note = ''
@@ -330,20 +320,58 @@ def run_agent_scenario(scenario_file):
     if error_note:
         record['error'] = error_note
 
+    return record
+
+
+def run_agent_scenario(scenario_file, trial=0):
+    """Run a single agent scenario (one trial). Returns the raw_output_file path."""
+    agent       = os.path.basename(os.path.dirname(scenario_file))
+    scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
+
+    # Trial 0 uses the original filename for backward compat with single-trial runs
+    if trial == 0:
+        raw_output = os.path.join(RAW_DIR, f'{agent}-{scenario_id}.json')
+    else:
+        raw_output = os.path.join(RAW_DIR, f'{agent}-{scenario_id}-t{trial}.json')
+
+    if os.path.isfile(raw_output):
+        trial_label = f' [trial {trial+1}/{TRIALS}]' if TRIALS > 1 else ''
+        print(f'  SKIP (raw output exists): {agent}/{scenario_id}{trial_label}')
+        return raw_output
+
+    trial_label = f' [trial {trial+1}/{TRIALS}]' if TRIALS > 1 else ''
+    print(f'  Running agent: {agent}/{scenario_id}{trial_label}')
+
+    with open(scenario_file, encoding='utf-8', errors='replace') as f:
+        content = f.read()
+
+    prompt = extract_prompt(content)
+    if not prompt:
+        print(f'  WARN: empty prompt extracted for {agent}/{scenario_id}', file=sys.stderr)
+
+    record = run_single_agent_call(agent, scenario_id, prompt)
+
     with open(raw_output, 'w', encoding='utf-8') as f:
         json.dump(record, f, indent=2, ensure_ascii=False)
 
-    print(f'  Done: {agent}/{scenario_id} ({duration_ms}ms)')
+    print(f'  Done: {agent}/{scenario_id}{trial_label} ({record["duration_ms"]}ms)')
     return raw_output
 
 
 def phase_agents():
     print()
-    print(f'=== Phase 1: Agent Runs (parallel={PARALLEL}) ===')
+    trials_label = f', trials={TRIALS}' if TRIALS > 1 else ''
+    print(f'=== Phase 1: Agent Runs (parallel={PARALLEL}{trials_label}) ===')
     os.makedirs(RAW_DIR, exist_ok=True)
 
+    # Build work items: (scenario_file, trial_index) for all trials
+    work_items = []
+    for sf in SCENARIOS:
+        for t in range(TRIALS):
+            work_items.append((sf, t))
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=PARALLEL) as executor:
-        futures = [executor.submit(run_agent_scenario, sf) for sf in SCENARIOS]
+        futures = [executor.submit(run_agent_scenario, sf, t) for sf, t in work_items]
         for future in concurrent.futures.as_completed(futures):
             try:
                 future.result()
@@ -367,60 +395,52 @@ def phase_graders():
     for scenario_file in SCENARIOS:
         agent       = os.path.basename(os.path.dirname(scenario_file))
         scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
-        raw_output  = os.path.join(RAW_DIR, f'{agent}-{scenario_id}.json')
-        key         = f'{agent}-{scenario_id}'
 
-        if not os.path.isfile(raw_output):
-            print(f'  SKIP (no raw output): {agent}/{scenario_id}')
-            GRADER_RESULTS[key]  = []
-            GRADER_OVERRIDE[key] = False
-            continue
+        for t in range(TRIALS):
+            if t == 0:
+                raw_output = os.path.join(RAW_DIR, f'{agent}-{scenario_id}.json')
+                key        = f'{agent}-{scenario_id}'
+            else:
+                raw_output = os.path.join(RAW_DIR, f'{agent}-{scenario_id}-t{t}.json')
+                key        = f'{agent}-{scenario_id}-t{t}'
 
-        grader_results, grader_override = run_graders(scenario_file, raw_output)
-        GRADER_RESULTS[key]  = grader_results
-        GRADER_OVERRIDE[key] = grader_override
+            if not os.path.isfile(raw_output):
+                trial_label = f' [trial {t+1}]' if TRIALS > 1 else ''
+                print(f'  SKIP (no raw output): {agent}/{scenario_id}{trial_label}')
+                GRADER_RESULTS[key]  = []
+                GRADER_OVERRIDE[key] = False
+                continue
 
-        status = 'FAIL' if grader_override else 'PASS'
-        print(f'  {status} (grader): {agent}/{scenario_id}')
+            grader_results, grader_override = run_graders(scenario_file, raw_output)
+            GRADER_RESULTS[key]  = grader_results
+            GRADER_OVERRIDE[key] = grader_override
+
+            trial_label = f' [trial {t+1}]' if TRIALS > 1 else ''
+            status = 'FAIL' if grader_override else 'PASS'
+            print(f'  {status} (grader): {agent}/{scenario_id}{trial_label}')
 
     print()
     print('Phase 2 complete.')
 
 # ── Phase 3: Rubric Scoring ───────────────────────────────────────────────────
 
-def score_single_scenario(scenario_file, scored_dir):
-    """Score a single scenario. Returns the scored_file path or None."""
-    agent       = os.path.basename(os.path.dirname(scenario_file))
-    scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
-    raw_output  = os.path.join(RAW_DIR, f'{agent}-{scenario_id}.json')
-    scored_file = os.path.join(scored_dir, f'{agent}-{scenario_id}.json')
-    key         = f'{agent}-{scenario_id}'
+def score_single_trial(agent, scenario_id, scenario_file, raw_output, scored_file, fields, trial_index=0):
+    """Score a single trial of a scenario. Returns the result dict or None."""
+    key = f'{agent}-{scenario_id}' if trial_index == 0 else f'{agent}-{scenario_id}-t{trial_index}'
 
     if not os.path.isfile(raw_output):
-        print(f'  SKIP (no raw output for scoring): {agent}/{scenario_id}')
+        trial_label = f' [trial {trial_index+1}]' if TRIALS > 1 else ''
+        print(f'  SKIP (no raw output for scoring): {agent}/{scenario_id}{trial_label}')
         return None
 
-    print(f'  Scoring: {agent}/{scenario_id}')
+    trial_label = f' [trial {trial_index+1}/{TRIALS}]' if TRIALS > 1 else ''
+    print(f'  Scoring: {agent}/{scenario_id}{trial_label}')
 
     # Load raw output
     with open(raw_output, encoding='utf-8', errors='replace') as f:
         raw_data = json.load(f)
 
     agent_output = raw_data.get('agent_output', '')
-
-    # Parse scenario fields
-    with open(scenario_file, encoding='utf-8', errors='replace') as f:
-        content = f.read()
-
-    scenario_name, scenario_type, category = parse_scenario_meta(content)
-    fields = {
-        'expected_behavior': extract_field('expected_behavior', content),
-        'failure_modes':     extract_field('failure_modes',     content),
-        'scoring_rubric':    extract_field('scoring_rubric',    content),
-        'scenario_name':     scenario_name,
-        'scenario_type':     scenario_type,
-        'category':          category,
-    }
 
     # Build scoring prompt
     score_prompt = (
@@ -455,7 +475,7 @@ def score_single_scenario(scenario_file, scored_dir):
                 score_json = proc.stdout
                 if proc.returncode != 0:
                     score_error = f'claude scoring exited non-zero: {proc.stderr[:300].replace(chr(10), " ")}'
-                    print(f'  ERROR scoring {agent}/{scenario_id}: {score_error}', file=sys.stderr)
+                    print(f'  ERROR scoring {agent}/{scenario_id}{trial_label}: {score_error}', file=sys.stderr)
             except Exception as e:
                 score_error = f'claude invocation error: {e}'
                 print(f'  ERROR: {score_error}', file=sys.stderr)
@@ -464,8 +484,8 @@ def score_single_scenario(scenario_file, scored_dir):
             if parsed_score is not None:
                 break
             if attempt == 0:
-                print(f'  RETRY scoring parse for {agent}/{scenario_id}')
-                score_json = ''  # will retry
+                print(f'  RETRY scoring parse for {agent}/{scenario_id}{trial_label}')
+                score_json = ''
         else:
             parsed_score = None
     else:
@@ -477,7 +497,6 @@ def score_single_scenario(scenario_file, scored_dir):
         grader_results  = GRADER_RESULTS[key]
         grader_override = GRADER_OVERRIDE.get(key, False)
     else:
-        # Standalone --phase score case: recompute graders
         grader_results, grader_override = run_graders(scenario_file, raw_output)
 
     # Apply grader hard gate
@@ -494,10 +513,6 @@ def score_single_scenario(scenario_file, scored_dir):
         parsed_score.setdefault('confidence_stated', 0)
 
     result = {
-        'agent':                agent,
-        'scenario_id':          scenario_id,
-        'scenario_type':        fields.get('scenario_type', 'happy-path'),
-        'scenario_name':        fields.get('scenario_name', scenario_id),
         'score':                final_score,
         'confidence_stated':    parsed_score.get('confidence_stated', 0),
         'justification':        parsed_score.get('justification', ''),
@@ -512,26 +527,97 @@ def score_single_scenario(scenario_file, scored_dir):
         result['grader_results'] = grader_results
     if grader_override:
         result['grader_override'] = True
-    if fields.get('category'):
-        result['category'] = fields['category']
-
-    with open(scored_file, 'w', encoding='utf-8') as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
 
     score_display = result.get('score', '?')
-    print(f'  Scored: {agent}/{scenario_id} -> {score_display}')
+    print(f'  Scored: {agent}/{scenario_id}{trial_label} -> {score_display}')
+    return result
+
+
+def score_scenario_all_trials(scenario_file, scored_dir):
+    """Score all trials for a scenario. Returns the scored_file path or None."""
+    agent       = os.path.basename(os.path.dirname(scenario_file))
+    scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
+    scored_file = os.path.join(scored_dir, f'{agent}-{scenario_id}.json')
+
+    # Parse scenario fields once
+    with open(scenario_file, encoding='utf-8', errors='replace') as f:
+        content = f.read()
+
+    scenario_name, scenario_type, category = parse_scenario_meta(content)
+    fields = {
+        'expected_behavior': extract_field('expected_behavior', content),
+        'failure_modes':     extract_field('failure_modes',     content),
+        'scoring_rubric':    extract_field('scoring_rubric',    content),
+        'scenario_name':     scenario_name,
+        'scenario_type':     scenario_type,
+        'category':          category,
+    }
+
+    # Score each trial
+    trial_results = []
+    for t in range(TRIALS):
+        if t == 0:
+            raw_output = os.path.join(RAW_DIR, f'{agent}-{scenario_id}.json')
+        else:
+            raw_output = os.path.join(RAW_DIR, f'{agent}-{scenario_id}-t{t}.json')
+
+        result = score_single_trial(agent, scenario_id, scenario_file, raw_output, scored_file, fields, trial_index=t)
+        if result is not None:
+            trial_results.append(result)
+
+    if not trial_results:
+        return None
+
+    # For single trial, use the result directly (backward compat)
+    # For multi-trial, pick the first trial as primary and attach all trials
+    primary = trial_results[0]
+    scored_result = {
+        'agent':                agent,
+        'scenario_id':          scenario_id,
+        'scenario_type':        fields.get('scenario_type', 'happy-path'),
+        'scenario_name':        fields.get('scenario_name', scenario_id),
+        'score':                primary['score'],
+        'confidence_stated':    primary['confidence_stated'],
+        'justification':        primary['justification'],
+        'observations':         primary['observations'],
+        'agent_output_excerpt': primary['agent_output_excerpt'],
+        'duration_ms':          primary['duration_ms'],
+        'tokens_used':          primary['tokens_used'],
+        'timestamp':            primary['timestamp'],
+    }
+
+    if primary.get('grader_results'):
+        scored_result['grader_results'] = primary['grader_results']
+    if primary.get('grader_override'):
+        scored_result['grader_override'] = True
+    if fields.get('category'):
+        scored_result['category'] = fields['category']
+
+    # Attach trials array when multiple trials exist
+    if TRIALS > 1:
+        scored_result['trials'] = trial_results
+        # Compute flaky flag: mixed results across trials
+        scores_set = set(t['score'] for t in trial_results)
+        scored_result['flaky'] = len(scores_set) > 1
+        # pass@k: at least one trial passes
+        scored_result['pass_hat_k'] = any(t['score'] == 'pass' for t in trial_results)
+
+    with open(scored_file, 'w', encoding='utf-8') as f:
+        json.dump(scored_result, f, indent=2, ensure_ascii=False)
+
     return scored_file
 
 
 def phase_score():
     print()
-    print(f'=== Phase 3: Rubric Scoring (parallel={PARALLEL}) ===')
+    trials_label = f', trials={TRIALS}' if TRIALS > 1 else ''
+    print(f'=== Phase 3: Rubric Scoring (parallel={PARALLEL}{trials_label}) ===')
 
     scored_dir = os.path.join(RAW_DIR, 'scored')
     os.makedirs(scored_dir, exist_ok=True)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=PARALLEL) as executor:
-        futures = [executor.submit(score_single_scenario, sf, scored_dir) for sf in SCENARIOS]
+        futures = [executor.submit(score_scenario_all_trials, sf, scored_dir) for sf in SCENARIOS]
         for future in concurrent.futures.as_completed(futures):
             try:
                 future.result()
@@ -638,7 +724,7 @@ def phase_assemble():
         'agent_summaries': agent_summaries,
         'meta': {
             'repo_commit': repo_commit,
-            'trials':      1,
+            'trials':      TRIALS,
             'notes':       'Preliminary scoring by Coach K. Human review pending via HTML report.',
         },
     }
@@ -669,6 +755,7 @@ print(f'  Run datetime : {RUN_DATETIME}')
 print(f'  Raw dir      : {RAW_DIR}')
 print(f'  Phase        : {PHASE}')
 print(f'  Parallel     : {PARALLEL}')
+print(f'  Trials       : {TRIALS}')
 print(f'  Scenarios    : {TOTAL}')
 print()
 

@@ -8,6 +8,12 @@ Tests Pippen's ability to detect missing operational readiness signals in a serv
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing a newly written inventory sync service before it ships to production. Here is what exists:
 

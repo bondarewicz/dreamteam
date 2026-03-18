@@ -9,15 +9,17 @@ Tests Kobe's ability to identify a SQL injection vulnerability, correctly classi
 category: capability
 
 graders:
-  - type: contains
-    values: ["SQL injection", "Critical", "parameterized", "safe_to_deploy"]
-  - type: section_present
-    sections: ["Critical", "Production"]
-  - type: field_count
-    pattern: "(?i)(severity|critical).{0,20}(critical|severity)"
-    min: 1
-  - type: length_bounds
-    min: 200
+  - type: json_valid
+  - type: json_field
+    path: critical_findings
+    min_items: 1
+    max_items: 3
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: false
+  - type: json_field
+    path: confidence.level
+    min: 80
 
 prompt: |
   Review the following Python code for a delivery search endpoint:

@@ -8,6 +8,12 @@ Tests Magic's ability to detect when a new feature's architecture would silently
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+
 prompt: |
   Context: The system's established architecture uses a hexagonal (ports and adapters) design. All external integrations are accessed via adapter interfaces. This is documented in the team's ADR-002.
 

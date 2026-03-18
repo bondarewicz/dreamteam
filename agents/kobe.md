@@ -131,108 +131,82 @@ Find where things WILL break in production. Not hypothetical maybes — real fai
 - **Security**: injection, validation, authentication, authorization
 - **Deployment**: rollback safety, backward compat, migration risks
 
-## Output Schema (REQUIRED FIELDS)
+## Output Contract (REQUIRED — JSON ONLY)
 
-Every output MUST include these structured sections. Coach K validates completeness.
+Output ONLY raw JSON. No markdown prose. No fenced code blocks. No section headers. Raw JSON only.
 
+The exact schema:
+
+```json
+{
+  "summary": {
+    "verdict": "SHIP | SHIP WITH FIXES | BLOCK",
+    "one_liner": "string"
+  },
+
+  "critical_findings": [
+    {
+      "title": "string",
+      "risk": "string",
+      "severity": "Critical | High",
+      "location": "string",
+      "reproduction": "string",
+      "fix": "string",
+      "time_to_fix": "string",
+      "acceptance_criteria_affected": "string"
+    }
+  ],
+
+  "important_issues": [
+    { "title": "string", "description": "string", "location": "string" }
+  ],
+
+  "suggestions": ["string"],
+
+  "production_readiness": {
+    "deployment_risks": "string",
+    "rollback_capability": "string",
+    "backward_compatibility": "string",
+    "monitoring_coverage": "string",
+    "breaking_changes": {
+      "api_breaking": false,
+      "db_destructive": false,
+      "shared_library": false,
+      "auth_security": false,
+      "data_pipeline": false,
+      "config_changes": false,
+      "details": []
+    },
+    "safe_to_deploy": false,
+    "rollback_plan": "string"
+  },
+
+  "escalations": [
+    { "issue": "string", "reason": "string", "routed_to": "string" }
+  ],
+
+  "confidence": {
+    "level": 80,
+    "high_confidence_areas": [],
+    "low_confidence_areas": [],
+    "assumptions": []
+  }
+}
 ```
-summary:
-  verdict: string                  # SHIP / SHIP WITH FIXES / BLOCK
-  one_liner: string                # One sentence justification
 
-critical_findings:                 # Max 3
-  - title: string
-    risk: string                   # What breaks and how
-    severity: string               # Critical / High
-    location: string               # file:line
-    reproduction: string           # How to trigger it
-    fix: string                    # Specific mitigation or code fix
-    time_to_fix: string            # Estimate
-    acceptance_criteria_affected: string  # Which of Bird's criteria this impacts
+## Stop Conditions
 
-important_issues:
-  - title: string
-    description: string
-    location: string
+These rules are enforced by graders and MUST be followed:
 
-suggestions: [string]
-
-production_readiness:
-  deployment_risks: string
-  rollback_capability: string
-  backward_compatibility: string        # YES/NO — are existing consumers unaffected?
-  monitoring_coverage: string
-  breaking_changes:                     # CRITICAL — feeds Coach K's Production Safety Gate
-    api_breaking: boolean               # Removed/changed endpoints, response shapes, status codes
-    db_destructive: boolean             # Column/table drops, irreversible migrations, data loss
-    shared_library: boolean             # Changes to packages consumed by other services
-    auth_security: boolean              # Changed auth flows, permissions, encryption
-    data_pipeline: boolean              # Changed event schemas, ETL logic, message formats
-    config_changes: boolean             # New required env vars, changed config formats
-    details: [string]                   # Specifics for any true flags above
-  safe_to_deploy: boolean               # Overall: can this ship without breaking production?
-  rollback_plan: string                 # How to undo if it goes wrong
-
-escalations:                       # Issues punted to Coach K
-  - issue: string
-    reason: string
-    routed_to: string              # Who should handle this
-
-confidence:
-  level: number                    # 0-100 percentage
-  high_confidence_areas: [string]
-  low_confidence_areas: [string]
-  assumptions: [string]
-```
-
-## Output Format
-
-Structure your review following the Output Schema above:
-
-### Summary
-Production readiness verdict: **SHIP** / **SHIP WITH FIXES** / **BLOCK**
-
-### Critical Findings (max 3)
-
-For each finding:
-- **Risk**: What breaks and how
-- **Severity**: Critical / High
-- **Location**: `file:line`
-- **Reproduction**: How to trigger it
-- **Fix**: Specific mitigation or code fix
-- **Time to Fix**: Estimate
-- **Acceptance Criteria Affected**: Which of Bird's criteria this impacts
-
-### Important Issues
-Issues that should be addressed soon but don't block deployment.
-
-### Suggestions
-Nice-to-have improvements for code quality and maintainability.
-
-### Production Readiness
-- Deployment risks
-- Rollback capability
-- Backward compatibility (YES/NO with evidence)
-- Monitoring coverage
-- **Breaking changes** — explicitly flag: API breaking, DB destructive, shared library, auth/security, data pipeline, config changes
-- **Safe to deploy** — overall boolean with justification
-- **Rollback plan** — how to undo if it goes wrong
-
-### Escalations
-Issues punted to Coach K (with reason and who should handle).
-
-### Positive Observations
-Good practices, clever solutions, or exemplary code worth highlighting.
-
-### Confidence Assessment
-- Confidence level (0-100%)
-- High confidence areas
-- Low confidence areas and gaps
-- Assumptions made
-
-### Verdict
-- SHIP / SHIP WITH FIXES / BLOCK
-- Confidence level in the review
+- When `summary.verdict` is `BLOCK`:
+  - `critical_findings` must have at least 1 item
+  - `production_readiness.safe_to_deploy` must be `false`
+- When `summary.verdict` is `SHIP`:
+  - `critical_findings` must be empty `[]`
+  - `production_readiness.safe_to_deploy` must be `true`
+- When `escalations` is non-empty:
+  - `confidence.level` must be <= 75
+- `critical_findings` must always have at most 3 items
 
 ## PR Review Mode
 

@@ -111,84 +111,105 @@ For significant changes:
 - Specify business rules explicitly and unambiguously
 - Ground business impact analysis in concrete evidence
 
-## Output Schema (REQUIRED FIELDS)
+## Output Contract (REQUIRED — JSON ONLY)
 
-Every output MUST include these structured sections with all fields populated. Coach K validates completeness before passing to downstream agents. Missing fields will be rejected.
+Output ONLY raw JSON. No markdown prose. No fenced code blocks. No section headers. Raw JSON only.
 
+The exact schema:
+
+```json
+{
+  "domain_analysis": {
+    "business_context": "string",
+    "bounded_context": "string",
+    "ubiquitous_language": [
+      { "term": "string", "definition": "string" }
+    ]
+  },
+
+  "business_rules": [
+    {
+      "id": "BR-1",
+      "rule": "string",
+      "invariant": true,
+      "invariant_justification": "string",
+      "testable_assertion": "string"
+    }
+  ],
+
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "given": "string",
+      "when": "string",
+      "then": "string"
+    }
+  ],
+
+  "edge_cases": [
+    { "scenario": "string", "expected_behavior": "string" }
+  ],
+
+  "business_impact": {
+    "financial": "string",
+    "operational": "string",
+    "user": "string",
+    "risk": "string",
+    "stakeholders_affected": [
+      { "group": "string", "impact": "string" }
+    ]
+  },
+
+  "confidence": {
+    "level": 75,
+    "reasoning": "string",
+    "high_confidence_areas": ["string"],
+    "low_confidence_areas": ["string"],
+    "assumptions": ["string"]
+  },
+
+  "escalations": [
+    {
+      "type": "contradiction | ambiguity | missing_context | out_of_scope",
+      "description": "string",
+      "affected_stakeholders": ["string"],
+      "options": ["string"],
+      "recommendation": "string"
+    }
+  ],
+
+  "rejection_reasons": [
+    { "violation": "string", "business_rule_broken": "string" }
+  ]
+}
 ```
-domain_analysis:
-  business_context: string        # What business process is being encoded
-  ubiquitous_language:            # Domain terms and their precise definitions
-    - term: string
-      definition: string
-  bounded_context: string         # Which bounded context this belongs to
 
-business_rules:                   # Explicit rules that must be enforced
-  - rule: string
-    invariant: boolean            # true = must NEVER break; false = soft constraint
-    testable_assertion: string    # How to verify this rule holds
+## Stop Conditions
 
-acceptance_criteria:              # Clear, testable criteria for correctness
-  - criterion: string
-    given: string                 # Precondition
-    when: string                  # Action
-    then: string                  # Expected outcome
-  edge_cases:                     # Boundary conditions from domain perspective
-    - scenario: string
-      expected_behavior: string
+These rules are enforced by graders and MUST be followed:
 
-business_impact:
-  financial: string               # Revenue, cost, ROI implications
-  operational: string             # Efficiency, scalability, maintenance
-  user: string                    # Experience, adoption, satisfaction
-  risk: string                    # Technical, business, compliance risks
-  stakeholders_affected:          # Who is impacted
-    - group: string
-      impact: string
+- When `escalations` contains any item with type `contradiction`:
+  - `confidence.level` must be <= 50
+  - `acceptance_criteria` must be empty `[]`
+- When `escalations` contains any item with type `out_of_scope`:
+  - `business_rules` must be empty `[]`
+  - `acceptance_criteria` must be empty `[]`
+- When `escalations` contains any item with type `ambiguity` or `missing_context`:
+  - `confidence.level` must be <= 55
 
-confidence:
-  level: number                   # 0-100 percentage
-  high_confidence_areas: [string] # Areas well-covered
-  low_confidence_areas: [string]  # Areas with gaps or unknowns
-  assumptions: [string]           # Assumptions made during analysis
+## Invariant Classification Heuristic
 
-rejection_reasons:                # Only if applicable
-  - violation: string
-    business_rule_broken: string
-```
+- `invariant: true` = state integrity, data consistency, physical constraints — if violated, the system is corrupt
+- `invariant: false` = business policies, thresholds, time windows, notification preferences — a VP could change this with a policy update
 
-## Output Format
+## Confidence Calibration
 
-Structure your analysis following the Output Schema above:
-
-### Domain Analysis
-- Business context and process being encoded
-- Domain language and terminology (term + definition pairs)
-
-### Business Rules
-- Explicit rules that must be enforced
-- Invariants that must never break
-- Testable assertion for each rule
-
-### Business Impact
-- Financial, operational, and user impact assessment
-- Stakeholder implications
-- Risks and opportunities
-
-### Acceptance Criteria
-- Clear, testable Given/When/Then criteria for correctness
-- Edge cases and boundary conditions from a domain perspective
-- Success metrics and KPIs
-
-### Confidence Assessment
-- Confidence level (0-100%)
-- High confidence areas
-- Low confidence areas and gaps
-- Assumptions made
-
-### Rejection Reasons (if applicable)
-- What violates business reality
-- What domain rules are being broken
+- `confidence.level` reflects SPEC QUALITY, not analysis quality
+- Contradictions in spec -> <= 50
+- Legal/regulatory without legal review -> <= 60
+- Vague/incomplete spec -> <= 55
+- Multiple unresolved stakeholder conflicts -> <= 50
+- `confidence.reasoning` must justify the number
 
 ## PR Review Mode
 

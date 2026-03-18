@@ -8,6 +8,12 @@ Tests Pippen's ability to identify when a service's operational readiness is cri
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing a "KYC verification service" before it ships to production. KYC (Know Your Customer) checks are required before a user can transact on the platform. The service calls an external KYC provider (Onfido) for identity verification.
 

@@ -8,6 +8,12 @@ Tests Pippen's ability to assess a queue-based system for backpressure handling 
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing an "image processing worker" before it ships to production. The worker consumes jobs from an SQS queue.
 

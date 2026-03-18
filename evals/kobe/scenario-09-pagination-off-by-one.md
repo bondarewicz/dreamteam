@@ -9,12 +9,10 @@ Tests Kobe's ability to identify a subtle off-by-one error in pagination that wo
 category: capability
 
 graders:
-  - type: contains
-    values: ["off-by-one", "pagination", "safe_to_deploy"]
-  - type: section_present
-    sections: ["Critical", "Production"]
-  - type: length_bounds
-    min: 200
+  - type: json_valid
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: false
 
 prompt: |
   Review the following TypeScript pagination implementation for an order history endpoint:

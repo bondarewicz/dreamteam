@@ -9,17 +9,22 @@ Tests Bird's ability to identify domain rules in an e-commerce context with inve
 category: capability
 
 graders:
-  - type: contains
-    values: ["invariant", "given", "when", "then"]
-  - type: regex
-    pattern: "(?i)invariant.{0,5}(true|false)"
-  - type: section_present
-    sections: ["Business Rules", "Acceptance Criteria"]
-  - type: field_count
-    pattern: "(?i)invariant"
-    min: 3
-  - type: length_bounds
-    min: 400
+  - type: json_valid
+  - type: json_field
+    path: "business_rules"
+    min_items: 5
+  - type: json_field
+    path: "business_rules[*].invariant"
+    type_check: "boolean"
+  - type: json_field
+    path: "business_rules[*].invariant_justification"
+    type_check: "string"
+  - type: json_field
+    path: "acceptance_criteria"
+    min_items: 4
+  - type: json_field
+    path: "confidence.assumptions"
+    min_items: 1
 
 prompt: |
   An e-commerce platform's product team describes the following rules:
