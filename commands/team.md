@@ -73,6 +73,13 @@ CAST_FILE="${REPO_ROOT}/recordings/$(date +%Y-%m-%d)-${TOPIC}.cast"
 ```
 The `TOPIC` variable is reused when generating the HTML report (`reports/retros/$(date +%Y-%m-%d)-${TOPIC}.html`).
 
+### Draft Eval Counter (initialize once per session)
+```bash
+DRAFT_COUNTER=0
+REPO_ROOT="$(git rev-parse --show-toplevel)"  # already set above if recording; set here if not
+```
+`DRAFT_COUNTER` increments each time an agent completes. It is used to name draft eval files `draft-YYYY-MM-DD-<TOPIC>-NNN.md`. Initialize it once at session start regardless of whether recording is enabled. The `TOPIC` variable (set when initializing the session) ensures files from different same-day sessions do not collide.
+
 **MANDATORY — Log task context immediately after init (1-5 lines):**
 ```bash
 "$CAST_SCRIPT" event "$CAST_FILE" "TASK CONTEXT: [1-2 sentence plain-language explanation of what this task is and why it matters]"
@@ -142,7 +149,23 @@ When Bird completes, log each finding, rule, and acceptance criterion as a SEPAR
 ```
 Each criterion, rule, finding, edge case, decision, and risk MUST be its own separate `cast.sh agent` call with the full text. A viewer reading only the recording must understand what was found without consulting any external document.
 
-### 1b. Human Approval Checkpoint (MANDATORY)
+### 1b. Write Draft Eval for Bird (Quick Fix)
+After logging Bird's findings, write a draft eval file capturing this interaction:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+DRAFT_DIR="${REPO_ROOT}/evals/bird/drafts"
+mkdir -p "$DRAFT_DIR"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders:
+- `<AgentName>` → `Bird`
+- `<Brief Description>` → a 3-5 word summary of the task
+- `<date>` → today's date
+- `<EXACT prompt Coach K sent to the agent — verbatim, no paraphrasing>` → the verbatim prompt you sent to Bird
+- `<The actual output the agent returned during this session>` → Bird's complete output
+
+### 1c. Human Approval Checkpoint (MANDATORY)
 
 Log: `"$CAST_SCRIPT" phase "$CAST_FILE" "Checkpoint — awaiting user approval"`
 
@@ -183,6 +206,17 @@ When Shaq completes, log what was built:
 # ... one line per file changed
 ```
 
+### 2b. Write Draft Eval for Shaq (Quick Fix)
+After logging Shaq's deliverables, write a draft eval file:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+DRAFT_DIR="${REPO_ROOT}/evals/shaq/drafts"
+mkdir -p "$DRAFT_DIR"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Shaq`, set `<EXACT prompt...>` to the verbatim prompt you sent to Shaq, and set `<The actual output...>` to Shaq's complete output.
+
 ### 3. Kobe — Quality Review
 Log: `"$CAST_SCRIPT" phase "$CAST_FILE" "Review: Kobe"`
 
@@ -215,6 +249,17 @@ When Kobe completes, log verdict and each finding:
 # ... one line per finding
 ```
 
+### 3b. Write Draft Eval for Kobe (Quick Fix)
+After logging Kobe's verdict and findings, write a draft eval file:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+DRAFT_DIR="${REPO_ROOT}/evals/kobe/drafts"
+mkdir -p "$DRAFT_DIR"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Kobe`, set `<EXACT prompt...>` to the verbatim prompt you sent to Kobe, and set `<The actual output...>` to Kobe's complete output.
+
 ### 4. Magic — Synthesis
 Log: `"$CAST_SCRIPT" phase "$CAST_FILE" "Synthesis: Magic"`
 
@@ -239,6 +284,17 @@ Log your retro content as cast events so the HTML exporter can include it:
 Coach K will run export-html after finish to generate the HTML retro.
 ```
 
+### 4b. Write Draft Eval for Magic (Quick Fix)
+After Magic completes, write a draft eval file:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+DRAFT_DIR="${REPO_ROOT}/evals/magic/drafts"
+mkdir -p "$DRAFT_DIR"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Magic`, set `<EXACT prompt...>` to the verbatim prompt you sent to Magic, and set `<The actual output...>` to Magic's complete output.
+
 ### Quick Fix Context Rule
 **Coach K curates context for each agent.** Instead of dumping all prior outputs:
 - **Shaq** gets a focused brief with only the domain rules, acceptance criteria, and terms needed for implementation
@@ -250,6 +306,10 @@ This prevents context bloat while ensuring each agent has what they need.
 **If Kobe reports findings requiring fixes:** Do NOT fix them yourself (Coach K). Re-launch Shaq with the findings, then re-launch Kobe to verify. Only proceed to Magic after Kobe says SHIP.
 
 Log each loop iteration: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
+
+After each Shaq fix-iteration completes, write a draft eval (read `evals/draft-template.md`, use the Write tool, increment counter, use `evals/shaq/drafts/`, include `${TOPIC}` in the filename).
+After each Kobe verification completes, write a draft eval (read `evals/draft-template.md`, use the Write tool, increment counter, use `evals/kobe/drafts/`, include `${TOPIC}` in the filename).
+Each fix-verify loop produces separate draft files — they are distinct interactions capturing different prompt/output pairs.
 
 ---
 
@@ -359,6 +419,31 @@ Log each agent with individual findings:
 # ... one line per finding
 
 "$CAST_SCRIPT" phase "$CAST_FILE" "Synthesis: Coach K"
+```
+
+### 3b. Write Draft Evals for PR Review Agents
+After all three PR Review agents complete, write one draft eval per agent (3 total). For each agent, read the template at `evals/draft-template.md` and use the Write tool to create the file at the computed path, substituting actual values for all `<...>` placeholders.
+```bash
+# Bird draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/bird/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/bird/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Bird, prompt=verbatim prompt sent to Bird, output=Bird's complete output
+
+# MJ draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/mj/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/mj/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=MJ, prompt=verbatim prompt sent to MJ, output=MJ's complete output
+
+# Kobe draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/kobe/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/kobe/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Kobe, prompt=verbatim prompt sent to Kobe, output=Kobe's complete output
 ```
 
 After all three agents complete:
@@ -499,6 +584,24 @@ Log completions with individual findings — one `cast.sh agent` call per item, 
 ```
 Every finding, rule, AC, decision, risk, and edge case MUST be its own separate `cast.sh agent` call with the full text. NEVER log a count or summary. The recording must be self-contained — a viewer must understand what was found without reading any external document.
 
+### Phase 1 Draft Evals: Bird + MJ (Full Team)
+After logging Bird's and MJ's findings, write one draft eval per agent. For each agent, read the template at `evals/draft-template.md` and use the Write tool to create the file at the computed path, substituting actual values for all `<...>` placeholders.
+```bash
+# Bird draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/bird/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/bird/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Bird, prompt=verbatim prompt sent to Bird, output=Bird's complete output
+
+# MJ draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/mj/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/mj/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=MJ, prompt=verbatim prompt sent to MJ, output=MJ's complete output
+```
+
 ### Phase 1b: Context Curation (Magic — inter-phase handoff)
 
 Log: `"$CAST_SCRIPT" phase "$CAST_FILE" "Phase 1b: Context Curation — Magic"`
@@ -528,6 +631,16 @@ When done, message Coach K (the lead) with the Handoff Brief.
 ```
 
 **Wait for Magic to complete before proceeding to Phase 2.**
+
+### Phase 1b Draft Eval: Magic Context Curation (Full Team)
+After Magic completes the handoff brief, write a draft eval:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/magic/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/magic/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Magic`, set `<EXACT prompt...>` to the verbatim prompt you sent to Magic, and set `<The actual output...>` to Magic's complete output.
 
 ### Phase 2: Checkpoint — USER APPROVAL REQUIRED
 
@@ -594,6 +707,16 @@ When done, message Coach K (the lead) with your complete output following your O
 **When Shaq submits his plan for approval, review it and forward to the user if needed. Only approve if the approach matches what was requested (correct language, framework, patterns).**
 
 **Wait for Shaq to complete implementation before proceeding to Phase 4.**
+
+### Phase 3 Draft Eval: Shaq (Full Team)
+After Shaq completes, write a draft eval before proceeding to Phase 4:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/shaq/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/shaq/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Shaq`, set `<EXACT prompt...>` to the verbatim prompt you sent to Shaq, and set `<The actual output...>` to Shaq's complete output.
 
 ### Phase 4: Review (Kobe + Pippen in parallel)
 
@@ -685,6 +808,24 @@ Log reviewer verdicts with individual findings:
 # ... one line per finding
 ```
 
+### Phase 4 Draft Evals: Kobe + Pippen (Full Team)
+After logging Kobe's and Pippen's verdicts, write one draft eval per agent. For each agent, read the template at `evals/draft-template.md` and use the Write tool to create the file at the computed path, substituting actual values for all `<...>` placeholders.
+```bash
+# Kobe draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/kobe/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/kobe/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Kobe, prompt=verbatim prompt sent to Kobe, output=Kobe's complete output
+
+# Pippen draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/pippen/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/pippen/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Pippen, prompt=verbatim prompt sent to Pippen, output=Pippen's complete output
+```
+
 **If Kobe or Pippen report findings that require fixes (verdict is SHIP WITH FIXES or BLOCK):**
 
 Log each loop: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
@@ -702,7 +843,7 @@ Log each loop: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
 
    NEVER commit or push. Run build and tests after all fixes.
    ```
-3. **Wait for Shaq to complete the fixes.**
+3. **Wait for Shaq to complete the fixes.** Write a draft eval for Shaq: read `evals/draft-template.md`, use the Write tool, increment counter, filename `draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md`, use `evals/shaq/drafts/`.
 4. **Re-launch Kobe and Pippen in parallel** to VERIFY their specific findings are resolved:
    ```
    You are [Kobe/Pippen], verifying that your findings have been correctly fixed.
@@ -716,6 +857,7 @@ Log each loop: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
    - State VERIFIED or NOT VERIFIED for each finding
    - Final verdict: SHIP or BLOCK
    ```
+   After each verification completes, write a draft eval per agent: read `evals/draft-template.md`, use the Write tool, increment counter, include `${TOPIC}` in the filename, use `evals/kobe/drafts/` and `evals/pippen/drafts/`. Each fix-verify iteration produces separate drafts.
 5. **If any finding is NOT VERIFIED**, repeat from step 2. Do not proceed to Magic until all reviewers say SHIP.
 6. **Only when both Kobe and Pippen verify SHIP**, proceed to Phase 5.
 
@@ -770,6 +912,16 @@ Coach K will run `export-html` after `finish` to generate the HTML retro.
 
 When done, message Coach K (the lead) with the final synthesis.
 ```
+
+### Phase 5 Draft Eval: Magic Synthesis (Full Team)
+After Magic completes synthesis, write a draft eval:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/magic/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/magic/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Magic`, set `<EXACT prompt...>` to the verbatim prompt you sent to Magic, and set `<The actual output...>` to Magic's complete output.
 
 ### Mid-Flight Redirects — Kill + Respawn Protocol
 
