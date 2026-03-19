@@ -504,7 +504,7 @@ for r in results:
 for r in results:
     score = r.get('score', '')
     conf = r.get('confidence_stated')
-    if score == 'fail' and conf is not None and conf >= 70:
+    if score == 'fail' and conf is not None and conf >= 85:
         agent_name = r.get('agent', 'unknown')
         sname = r.get('scenario_name', r.get('scenario_id', 'unknown'))
         sid = r.get('scenario_id', 'unknown')
@@ -1472,7 +1472,20 @@ CSS = '''
     display: flex;
     align-items: center;
     gap: 10px;
+    cursor: pointer;
+    list-style: none;
   }
+  .focus-title::-webkit-details-marker { display: none; }
+  .focus-title::marker { display: none; }
+  .focus details { border: none; }
+  .focus details summary .chevron {
+    margin-left: auto;
+    transition: transform 0.2s;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .focus details summary .chevron::after { content: '▸'; }
+  .focus details[open] summary .chevron::after { content: '▾'; }
 
   /* ── Trend verdict ── */
   .trend-verdict {
@@ -2002,6 +2015,98 @@ if not current_run:
         f.write(html_content)
     sys.exit(0)
 
+# ── CALIBRATION METRICS ──────────────────────────────────────────────────────
+
+if agent_summaries:
+    emit(f'''
+  <div class="section">
+    <div class="section-title">
+      Calibration Metrics
+      <span class="section-badge">stated confidence vs. actual pass rate</span>
+    </div>
+''')
+    emit('''    <table class="cal-table">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Avg Stated Conf</th>
+          <th>Actual Pass Rate</th>
+          <th>Calibration Gap</th>
+          <th>Worst Fail Conf</th>
+          <th>Flag</th>
+        </tr>
+      </thead>
+      <tbody>
+''')
+    for agent in all_agents:
+        summ = agent_summaries.get(agent, {})
+        a_conf = summ.get('avg_confidence_stated')
+        # Recompute pass_rate from actual results
+        ar = results_by_agent.get(agent, [])
+        if ar:
+            a_pr = sum(1 for r in ar if r.get('score') == 'pass') / len(ar)
+        else:
+            a_pr = summ.get('pass_rate')
+        # Recompute calibration_gap from actual data
+        conf_values = [r.get('confidence_stated') for r in ar if r.get('confidence_stated') is not None]
+        if conf_values and ar:
+            a_conf = sum(conf_values) / len(conf_values)
+            actual_score = sum(score_numeric(r.get('score', 'fail')) for r in ar) / len(ar)
+            a_gap = a_conf - actual_score
+        else:
+            a_gap = summ.get('calibration_gap')
+        agent_cls = agent_class(agent)
+
+        # Worst-case calibration: highest confidence on a fail-scored scenario
+        fail_results = [r for r in ar if r.get('score') == 'fail' and r.get('confidence_stated') is not None]
+        if fail_results:
+            worst_fail = max(fail_results, key=lambda r: r.get('confidence_stated', 0))
+            worst_fail_conf = worst_fail.get('confidence_stated', 0)
+            worst_fail_scenario = worst_fail.get('scenario_name', worst_fail.get('scenario_id', ''))
+            worst_fail_display = f"{round(worst_fail_conf)}%"
+            worst_fail_cls = 'over' if worst_fail_conf >= 85 else 'ok'
+        else:
+            worst_fail_conf = None
+            worst_fail_scenario = ''
+            worst_fail_display = '&mdash;'
+            worst_fail_cls = 'ok'
+
+        conf_display = f"{round(a_conf)}%" if a_conf is not None else "n/a"
+        pr_display = f"{round((a_pr or 0) * 100)}%" if a_pr is not None else "n/a"
+        gap_display = cal_gap_label(a_gap)
+        gap_cls = cal_gap_class(a_gap)
+        flag_label = cal_flag_label(a_gap)
+
+        # Override flag if worst-case fail confidence is dangerously high
+        if worst_fail_conf is not None and worst_fail_conf >= 85:
+            flag_label = 'Blind Spot'
+            gap_cls = 'over'
+
+        # Bar width: clamp gap magnitude to 0-100%
+        if a_gap is not None:
+            bar_width = min(abs(a_gap), 100)
+        else:
+            bar_width = 0
+
+        emit(f'''        <tr>
+          <td><span class="{agent_cls}" style="font-weight:600">{h(agent.capitalize())}</span></td>
+          <td>{h(conf_display)}</td>
+          <td>{h(pr_display)}</td>
+          <td>
+            <div class="gap-bar">
+              <span class="gap-val" style="color:var(--{'fail' if gap_cls == 'over' else 'partial' if gap_cls == 'under' else 'pass'})">{h(gap_display)}</span>
+              <div class="gap-indicator"><div class="gap-fill {gap_cls}" style="width:{bar_width}%"></div></div>
+            </div>
+          </td>
+          <td>{f'<span class="cal-flag {worst_fail_cls}" title="{h(worst_fail_scenario)}">{worst_fail_display}</span>' if worst_fail_conf is not None else '<span class="cal-flag ok">&mdash;</span>'}</td>
+          <td><span class="cal-flag {gap_cls}">{h(flag_label)}</span></td>
+        </tr>
+''')
+    emit('''      </tbody>
+    </table>
+''')
+    emit('  </div>')
+
 # ── FOCUS SECTION ─────────────────────────────────────────────────────────────
 
 arrow_dir = {'improved': 'up', 'stable': 'flat', 'regressed': 'down'}[focus_trend_direction]
@@ -2009,10 +2114,12 @@ arrow_char = {'up': '&#8593;', 'flat': '&#8594;', 'down': '&#8595;'}[arrow_dir]
 
 emit(f'''
   <div class="focus">
-    <div class="focus-title">
+    <details open>
+    <summary class="focus-title">
       Focus
       <span class="section-badge">what changed &middot; what to do</span>
-    </div>
+      <span class="chevron"></span>
+    </summary>
 
     <div class="trend-verdict {focus_trend_direction}">
       <div class="trend-arrow {arrow_dir}">{arrow_char}</div>
@@ -2071,99 +2178,8 @@ if agent_change_chips:
       </div>''')
     emit('    </div>')
 
+emit('  </details>')
 emit('  </div>')
-
-# ── CALIBRATION METRICS ──────────────────────────────────────────────────────
-
-if agent_summaries:
-    emit(f'''
-  <div class="section">
-    <div class="section-title">
-      Calibration Metrics
-      <span class="section-badge">stated confidence vs. actual pass rate</span>
-    </div>
-''')
-    emit('''    <table class="cal-table">
-      <thead>
-        <tr>
-          <th>Agent</th>
-          <th>Avg Stated Conf</th>
-          <th>Actual Pass Rate</th>
-          <th>Calibration Gap</th>
-          <th>Worst Fail Conf</th>
-          <th>Flag</th>
-        </tr>
-      </thead>
-      <tbody>
-''')
-    for agent in all_agents:
-        summ = agent_summaries.get(agent, {})
-        a_conf = summ.get('avg_confidence_stated')
-        # Recompute pass_rate from actual results
-        ar = results_by_agent.get(agent, [])
-        if ar:
-            a_pr = sum(1 for r in ar if r.get('score') == 'pass') / len(ar)
-        else:
-            a_pr = summ.get('pass_rate')
-        # Recompute calibration_gap from actual data
-        conf_values = [r.get('confidence_stated') for r in ar if r.get('confidence_stated') is not None]
-        if conf_values and ar:
-            a_conf = sum(conf_values) / len(conf_values)
-            actual_score = sum(score_numeric(r.get('score', 'fail')) for r in ar) / len(ar)
-            a_gap = a_conf - actual_score
-        else:
-            a_gap = summ.get('calibration_gap')
-        agent_cls = agent_class(agent)
-
-        # Worst-case calibration: highest confidence on a fail-scored scenario
-        fail_results = [r for r in ar if r.get('score') == 'fail' and r.get('confidence_stated') is not None]
-        if fail_results:
-            worst_fail = max(fail_results, key=lambda r: r.get('confidence_stated', 0))
-            worst_fail_conf = worst_fail.get('confidence_stated', 0)
-            worst_fail_scenario = worst_fail.get('scenario_name', worst_fail.get('scenario_id', ''))
-            worst_fail_display = f"{round(worst_fail_conf)}%"
-            worst_fail_cls = 'over' if worst_fail_conf >= 70 else 'ok'
-        else:
-            worst_fail_conf = None
-            worst_fail_scenario = ''
-            worst_fail_display = '&mdash;'
-            worst_fail_cls = 'ok'
-
-        conf_display = f"{round(a_conf)}%" if a_conf is not None else "n/a"
-        pr_display = f"{round((a_pr or 0) * 100)}%" if a_pr is not None else "n/a"
-        gap_display = cal_gap_label(a_gap)
-        gap_cls = cal_gap_class(a_gap)
-        flag_label = cal_flag_label(a_gap)
-
-        # Override flag if worst-case fail confidence is dangerously high
-        if worst_fail_conf is not None and worst_fail_conf >= 70:
-            flag_label = 'Blind Spot'
-            gap_cls = 'over'
-
-        # Bar width: clamp gap magnitude to 0-100%
-        if a_gap is not None:
-            bar_width = min(abs(a_gap), 100)
-        else:
-            bar_width = 0
-
-        emit(f'''        <tr>
-          <td><span class="{agent_cls}" style="font-weight:600">{h(agent.capitalize())}</span></td>
-          <td>{h(conf_display)}</td>
-          <td>{h(pr_display)}</td>
-          <td>
-            <div class="gap-bar">
-              <span class="gap-val" style="color:var(--{'fail' if gap_cls == 'over' else 'partial' if gap_cls == 'under' else 'pass'})">{h(gap_display)}</span>
-              <div class="gap-indicator"><div class="gap-fill {gap_cls}" style="width:{bar_width}%"></div></div>
-            </div>
-          </td>
-          <td>{f'<span class="cal-flag {worst_fail_cls}" title="{h(worst_fail_scenario)}">{worst_fail_display}</span>' if worst_fail_conf is not None else '<span class="cal-flag ok">&mdash;</span>'}</td>
-          <td><span class="cal-flag {gap_cls}">{h(flag_label)}</span></td>
-        </tr>
-''')
-    emit('''      </tbody>
-    </table>
-''')
-    emit('  </div>')
 
 # ── AGENT SECTIONS ────────────────────────────────────────────────────────────
 
@@ -2385,10 +2401,12 @@ flaky_results = [r for r in results if has_trials(r) and is_flaky(r)]
 if flaky_results:
     emit(f'''
   <div class="section">
-    <div class="section-title">
+    <details open>
+    <summary class="section-title">
       Flaky Scenarios
       <span class="section-badge">{len(flaky_results)} scenario{"s" if len(flaky_results) != 1 else ""} with mixed results across k trials</span>
-    </div>
+      <span class="chevron"></span>
+    </summary>
 
     <table class="data-table">
       <thead>
@@ -2448,6 +2466,7 @@ if flaky_results:
 ''')
     emit('''      </tbody>
     </table>
+  </details>
   </div>
 ''')
 

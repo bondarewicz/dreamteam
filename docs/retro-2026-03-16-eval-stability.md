@@ -24,7 +24,7 @@ Used simple pass_rate instead of weighted score (pass=100, partial=50, fail=0). 
 ### 4. Blind spot metric was missing from calibration (FIXED — prior commit)
 An agent could be "Calibrated" on average while stating 90% confidence on a scenario it failed. The average smoothed out individual catastrophic miscalibrations.
 
-**Fix:** Added "Worst Fail Conf" column to calibration table. Overrides flag to "Blind Spot" when any fail has >= 70% confidence. Also added P1 action items for high-confidence fails.
+**Fix:** Added "Worst Fail Conf" column to calibration table. Overrides flag to "Blind Spot" when any fail has >= 85% confidence. Also added P1 action items for high-confidence fails. Threshold was originally 70% but raised to 85% on 2026-03-19 — at 70% it flagged 5/6 agents as Blind Spot, producing noise rather than signal. Research supports 85%: practical AI deployments use 85% as the boundary between autonomous operation and human escalation, and LLMs are systematically overconfident (84% of scenarios per academic benchmarks), making lower thresholds impractical.
 
 ### 5. Token usage and costs were empty (FIXED)
 Re-scored runs from saved raw outputs had `tokens_used: 0` because original runs didn't capture token metadata. Fresh runs now capture real token/duration data from agent calls.
