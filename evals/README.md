@@ -15,10 +15,7 @@ evals/
   README.md     This file
 ```
 
-Each agent directory contains 3 scenario files covering:
-- Scenario 01: Happy path (correct behavior under normal conditions)
-- Scenario 02: Edge case (correct behavior under unusual or ambiguous conditions)
-- Scenario 03: Escalation case (correct behavior when the agent must stop and escalate rather than proceed)
+Each agent directory contains 20+ scenario files covering happy paths, edge cases, escalation cases, adversarial inputs, and domain-specific challenges.
 
 ## Scenario File Format
 
@@ -39,7 +36,7 @@ scoring_rubric:    How to grade the output (pass / partial / fail criteria)
 4. Score using the scoring_rubric: pass / partial / fail.
 5. Record the result with a brief note on what the agent got right or wrong.
 
-There is no automated runner. Evals are designed for manual review by a human evaluator who can exercise judgment about whether the agent's output satisfies the spirit of the expected_behavior, not just its letter.
+Use `scripts/eval-run.sh` for automated runs (see `--help`), or run manually for human review.
 
 ## Scoring
 
@@ -51,20 +48,20 @@ Each scenario is scored on a three-point scale:
 | partial | Output satisfies some but not all criteria; the main structure is present but incomplete |
 | fail    | Output is missing key criteria or contains a failure mode from the failure_modes field |
 
-A full eval run across all 18 scenarios gives an agent quality baseline. Regressions (scenarios that previously passed now failing) after a model or prompt change indicate a quality regression.
+A full eval run across all 125 scenarios gives an agent quality baseline. Regressions (scenarios that previously passed now failing) after a model or prompt change indicate a quality regression.
 
 ## Agent Coverage
 
-| Agent  | Scenarios | Happy Path | Edge Case | Escalation |
-|--------|-----------|------------|-----------|------------|
-| bird   | 3         | scenario-01 | scenario-02 | scenario-03 |
-| mj     | 3         | scenario-01 | scenario-02 | scenario-03 |
-| shaq   | 3         | scenario-01 | scenario-02 | scenario-03 |
-| magic  | 3         | scenario-01 | scenario-02 | scenario-03 |
-| kobe   | 3         | scenario-01 | scenario-02 | scenario-03 |
-| pippen | 3         | scenario-01 | scenario-02 | scenario-03 |
+| Agent  | Scenarios |
+|--------|-----------|
+| bird   | 20        |
+| mj     | 20        |
+| shaq   | 20        |
+| magic  | 25        |
+| kobe   | 20        |
+| pippen | 20        |
 
-Total: 18 scenarios across 6 agents.
+Total: 125 scenarios across 6 agents.
 
 ## Adding New Scenarios
 
@@ -83,3 +80,70 @@ Each scenario is grounded in the agent's definition file at `agents/<name>.md`. 
 - Their guardrails and decision authority
 
 Scenarios that test behaviors not described in the agent definition are not valid evals.
+
+## Workbench Export
+
+The `scripts/eval-export-workbench.sh` script exports eval scenarios into a CSV that can be imported directly into Anthropic Workbench for batch evaluation.
+
+### End-to-End Workflow
+
+**Step 1 — Run the export script**
+
+```bash
+# Export a single agent
+scripts/eval-export-workbench.sh bird
+
+# Export all agents (one CSV per agent)
+scripts/eval-export-workbench.sh --all
+
+# Include scoring rubric as a second column
+scripts/eval-export-workbench.sh bird --with-rubric
+scripts/eval-export-workbench.sh --all --with-rubric
+```
+
+Output files are written to `evals/<agent>/workbench-import.csv`.
+
+**Step 2 — Configure Workbench**
+
+In Anthropic Workbench:
+1. Open a new prompt session.
+2. Set the **System Prompt** to the agent definition file (`agents/<name>.md`).
+3. Set the **User Message** to the template variable `{{scenario_input}}` — exactly as written, with double curly braces.
+
+**Step 3 — Import the CSV**
+
+1. Go to the **Evaluate** tab in Workbench.
+2. Click **Import Test Cases**.
+3. Select the `workbench-import.csv` file for the agent you want to evaluate.
+4. Workbench will expand the `scenario_input` column into individual test cases.
+
+**Step 4 — Score results**
+
+Each scenario is graded on a five-point scale that maps to the three-point rubric used in manual evals:
+
+| Workbench score | Manual rubric |
+|-----------------|---------------|
+| 1–2             | fail          |
+| 3               | partial       |
+| 4–5             | pass          |
+
+**Step 5 — Optional: use scoring_rubric as a grading prompt**
+
+When you export with `--with-rubric`, the CSV contains a second column `scoring_rubric`. You can paste the rubric text into Workbench's grading prompt field to instruct an LLM judge to apply the same pass/partial/fail criteria used in manual evals.
+
+### CSV Format
+
+The exported CSV follows RFC 4180 escaping (produced by Python's `csv.writer`), which correctly handles prompts that contain quotes, commas, and newlines.
+
+| Column            | Always present | Description                                  |
+|-------------------|----------------|----------------------------------------------|
+| `scenario_input`  | yes            | The full prompt text for the scenario        |
+| `scoring_rubric`  | with --with-rubric only | The scoring rubric for the scenario |
+
+Headers never contain curly braces and are always lowercase with underscores.
+
+### Warnings and Errors
+
+- If a scenario file has no extractable `prompt` field, the script prints a warning to stderr and skips that row. No empty rows are written.
+- If an agent name does not match an existing directory, the script exits with a non-zero status and an error message.
+- All other scenarios in the batch are still exported when one is skipped.
