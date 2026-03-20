@@ -2253,6 +2253,7 @@ for agent in all_agents:
         conf = r.get('confidence_stated')
         duration_ms = r.get('duration_ms')
         tokens_used = r.get('tokens_used')
+        cost_usd_actual = r.get('cost_usd')
         category = r.get('category', '')
         grader_results = r.get('grader_results', [])
 
@@ -2363,9 +2364,17 @@ for agent in all_agents:
                 metrics_parts.append(f'{tokens_used/1000:.1f}k tok')
             else:
                 metrics_parts.append(f'{tokens_used} tok')
+        # Prefer actual cost from envelope; fall back to COST_PER_MTOK for legacy data
+        # Decoupled from tokens_used so zero-token runs with valid cost still display cost
+        if cost_usd_actual:
+            display_cost = cost_usd_actual
+        elif tokens_used:
             rate = COST_PER_MTOK.get(agent, COST_DEFAULT)
-            cost_usd = tokens_used * rate / 1_000_000
-            metrics_parts.append(f'${cost_usd:.3f}')
+            display_cost = tokens_used * rate / 1_000_000
+        else:
+            display_cost = None
+        if display_cost is not None:
+            metrics_parts.append(f'${display_cost:.3f}')
         metrics_html = ''
         if metrics_parts:
             metrics_html = f'<div class="b-mismatch" style="color:var(--text-2);font-weight:400">{" &middot; ".join(metrics_parts)}</div>'
