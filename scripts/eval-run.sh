@@ -298,19 +298,40 @@ def run_single_agent_call(agent, scenario_id, prompt):
     error_note = ''
     agent_output = ''
 
+    tokens_used    = 0
+    input_tokens   = 0
+    output_tokens  = 0
+    cost_usd       = 0.0
+
     if shutil.which('claude'):
         try:
             proc = subprocess.run(
-                ['claude', '-p', '--agent', agent],
+                ['claude', '-p', '--agent', agent, '--output-format', 'json'],
                 input=prompt,
                 capture_output=True,
                 text=True
             )
-            agent_output = proc.stdout
+            raw_stdout = proc.stdout
             if proc.returncode != 0:
                 stderr_head = proc.stderr[:300].replace('\n', ' ')
                 error_note  = f'claude exited non-zero: {stderr_head}'
                 print(f'  ERROR running claude for {agent}/{scenario_id}: {error_note}', file=sys.stderr)
+            # Parse JSON envelope — CRITICAL: agent_output must come from envelope['result'],
+            # never from raw_stdout, to prevent the full JSON leaking into scoring.
+            try:
+                envelope   = json.loads(raw_stdout)
+                raw_result = envelope.get('result', '')
+                agent_output = raw_result if isinstance(raw_result, str) else json.dumps(raw_result)
+                usage = envelope.get('usage', {})
+                input_tokens  = usage.get('input_tokens', 0) or 0
+                output_tokens = usage.get('output_tokens', 0) or 0
+                tokens_used   = input_tokens + output_tokens
+                cost_usd      = envelope.get('total_cost_usd') or 0.0
+            except (json.JSONDecodeError, ValueError) as parse_err:
+                # Fallback: preserve whatever came out, but no token/cost data
+                agent_output = raw_stdout
+                error_note   = (error_note + ' | ' if error_note else '') + f'JSON parse error: {parse_err}'
+                print(f'  ERROR parsing claude JSON envelope for {agent}/{scenario_id}: {parse_err}', file=sys.stderr)
         except Exception as e:
             error_note   = f'claude invocation error: {e}'
             agent_output = ''
@@ -328,7 +349,10 @@ def run_single_agent_call(agent, scenario_id, prompt):
         'agent_output':        agent_output,
         'agent_output_excerpt': agent_output[:500],
         'duration_ms':         duration_ms,
-        'tokens_used':         0,
+        'tokens_used':         tokens_used,
+        'input_tokens':        input_tokens,
+        'output_tokens':       output_tokens,
+        'cost_usd':            cost_usd,
         'timestamp':           timestamp,
     }
     if error_note:
@@ -534,6 +558,9 @@ def score_single_trial(agent, scenario_id, scenario_file, raw_output, scored_fil
         'agent_output_excerpt': raw_data.get('agent_output_excerpt', agent_output[:500]),
         'duration_ms':          raw_data.get('duration_ms', 0),
         'tokens_used':          raw_data.get('tokens_used', 0),
+        'input_tokens':         raw_data.get('input_tokens', 0),
+        'output_tokens':        raw_data.get('output_tokens', 0),
+        'cost_usd':             raw_data.get('cost_usd', 0.0),
         'timestamp':            raw_data.get('timestamp', ''),
     }
 
@@ -597,6 +624,9 @@ def score_scenario_all_trials(scenario_file, scored_dir):
         'agent_output_excerpt': primary['agent_output_excerpt'],
         'duration_ms':          primary['duration_ms'],
         'tokens_used':          primary['tokens_used'],
+        'input_tokens':         primary.get('input_tokens', 0),
+        'output_tokens':        primary.get('output_tokens', 0),
+        'cost_usd':             primary.get('cost_usd', 0.0),
         'timestamp':            primary['timestamp'],
     }
 
