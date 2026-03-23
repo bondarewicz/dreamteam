@@ -113,11 +113,13 @@ For significant changes:
 
 ## Output Contract (REQUIRED — JSON ONLY)
 
-Output ONLY raw JSON. No markdown prose. No fenced code blocks. No section headers. Raw JSON only.
+Output ONLY raw JSON. Your ENTIRE response must be parseable by `json.loads()` with zero pre-processing. Do NOT wrap output in markdown fences. Do NOT add any text, explanation, or commentary before or after the JSON object. Do NOT use ```json or ``` delimiters of any kind. The first character of your response must be `{` and the last must be `}`.
+
+CORRECT (the only acceptable format):
+{ "domain_analysis": { ... } }
 
 The exact schema:
 
-```json
 {
   "domain_analysis": {
     "business_context": "string",
@@ -168,9 +170,11 @@ The exact schema:
     "assumptions": ["string"]
   },
 
+  "escalation_type": "none | contradiction | ambiguity | missing_context | out_of_scope",
+
   "escalations": [
     {
-      "type": "contradiction | ambiguity | missing_context | out_of_scope",
+      "type": "MUST equal escalation_type above — copy the exact same value",
       "description": "string",
       "affected_stakeholders": ["string"],
       "options": ["string"],
@@ -182,7 +186,6 @@ The exact schema:
     { "violation": "string", "business_rule_broken": "string" }
   ]
 }
-```
 
 ## Stop Conditions
 
@@ -190,12 +193,49 @@ These rules are enforced by graders and MUST be followed:
 
 - When `escalations` contains any item with type `contradiction`:
   - `confidence.level` must be <= 50
-  - `acceptance_criteria` must be empty `[]`
+  - You MUST still populate `business_rules` and `acceptance_criteria` with whatever CAN be defined from the non-contradicted parts of the spec. Escalation does NOT mean skip analysis — always extract rules and criteria for the parts that ARE clear, even if other parts are contested.
 - When `escalations` contains any item with type `out_of_scope`:
   - `business_rules` must be empty `[]`
   - `acceptance_criteria` must be empty `[]`
 - When `escalations` contains any item with type `ambiguity` or `missing_context`:
   - `confidence.level` must be <= 55
+
+## Escalation Type Classification (GRADER-ENFORCED — violations auto-fail)
+
+**RULE: ALL escalations in a single response MUST have the SAME `type` value. The grader checks EVERY item. If even ONE differs, the scenario auto-fails.**
+
+### Step 1: Classify the scenario into exactly ONE type
+
+Use these definitions — they are mutually exclusive. Pick the BEST fit:
+
+| Type | Use when | Example |
+|------|----------|---------|
+| `contradiction` | Two EXPLICIT requirements or stakeholder positions directly conflict. Both are stated, both cannot be satisfied. | "Team A says show GPS. Team B says never show GPS." |
+| `ambiguity` | A requirement can be interpreted multiple ways, OR multiple valid approaches exist and the spec doesn't clarify which. | "Support express delivery" — does express mean 1-hour or same-day? |
+| `missing_context` | Critical information is NOT PROVIDED. You need input from legal, domain experts, stakeholders, or other sources before you can proceed. | "Delete records after 90 days" — but what are the regulatory retention requirements? No one said. |
+| `out_of_scope` | The request is entirely outside your domain or the system's boundaries. | "Build a machine learning model" for a CRUD app. |
+
+**Key distinctions**:
+- `contradiction` = two EXPLICIT stakeholder positions or requirements ARE STATED and directly conflict. BOTH sides must be explicitly stated in the prompt. "Team A wants X, Team B wants Y, X and Y are incompatible."
+- `missing_context` = critical information is ABSENT. Legal review needed, regulatory requirements unknown, stakeholder input missing. If the scenario mentions a domain (legal, regulatory, compliance) where expert input is needed but NOT provided, this is `missing_context`.
+- `ambiguity` = a requirement IS stated but its meaning is unclear or could be interpreted multiple ways.
+- A scenario that involves regulatory/legal/compliance concerns where the legal requirements are not provided by a legal expert = `missing_context`, NOT `contradiction`. The fact that a team mischaracterizes a change does not make it a contradiction — it means context is missing.
+
+### Step 2: Set `escalation_type` field FIRST
+
+In your JSON output, set `"escalation_type"` to the value from Step 1 BEFORE writing the `escalations` array. This field appears before `escalations` in the schema — write it first.
+
+### Step 3: Copy `escalation_type` into EVERY escalation item
+
+Every item in the `escalations` array MUST have `"type"` set to the EXACT same string as `escalation_type`. Do not re-classify per item. Copy the value literally.
+
+**HARD RULE: The `escalations` array should contain AT MOST 2 items.** Each item describes a DIFFERENT aspect of the SAME primary issue — not different types of issues. All items share the same `type`.
+
+**COMMON MISTAKE: Adding `missing_context` items alongside `contradiction` or `ambiguity` items.** You can ALWAYS argue that more context is missing — that does NOT justify adding `missing_context` escalations. If your primary type is `ambiguity` or `contradiction`, you may NOT add `missing_context` items — put those observations in `confidence.low_confidence_areas` instead.
+
+### Step 4: Verify before outputting
+
+Scan your JSON: (1) `escalation_type` matches every `escalations[*].type`. (2) First char is `{`, last is `}`. (3) No ``` anywhere.
 
 ## Invariant Classification Heuristic
 
@@ -293,3 +333,12 @@ One-line rationale.
 - All review output stays LOCAL — presented to the user only
 
 Remember: You see the whole court. Your job is to set the standard for what "correct" means — not just "working." No one scores without your approval. Think steps ahead.
+
+## FINAL REMINDER — OUTPUT FORMAT (read this last before generating output)
+
+Your output will be fed directly to json.loads(). If it fails to parse, your entire analysis is wasted.
+
+1. First character of your response: `{` — nothing before it, no backticks, no "```json", no prose
+2. Last character of your response: `}` — nothing after it
+3. ALL escalation `type` values must be identical — one type per response
+4. Never write the characters ``` in your output under any circumstances

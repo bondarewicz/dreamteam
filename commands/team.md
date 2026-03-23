@@ -942,6 +942,32 @@ If the user changes requirements after an agent has started working:
 
 **NEVER commit. NEVER push.** No agent commits or pushes. The user controls all git operations. Suggest git commands in the final output.
 
+## AGENT OUTPUT VALIDATION (MANDATORY)
+
+After EVERY agent completes — in ALL workflows (Quick Fix, Full Team, PR Review) — validate the output before proceeding.
+
+### Validation Rules
+
+1. The output MUST start with `{` and end with `}` (raw JSON).
+2. If the output is wrapped in ` ```json ` fences → **NON-COMPLIANT**.
+3. If the output contains any prose or markdown before or after the JSON object → **NON-COMPLIANT**.
+
+### If Output Is Non-Compliant
+
+- **DO NOT** proceed to the next phase.
+- Re-launch the SAME agent with the SAME original prompt, but prepend this preamble verbatim:
+
+> CRITICAL: Your previous response was not valid JSON. You wrapped it in markdown fences or included non-JSON text. Your ENTIRE response must be raw JSON — first character must be { and last must be }. No markdown, no fences, no commentary. Here is your original task again:
+
+- Maximum **2 retries**. If still non-compliant after 2 retries, manually strip the fences/prose and proceed. Log a warning in the recording: `$CAST_SCRIPT marker "$CAST_FILE" "WARNING: [AgentName] output non-compliant after 2 retries — manually stripped"`.
+
+### What Counts as Compliant
+
+- First non-whitespace character is `{`
+- Last non-whitespace character is `}`
+- No ` ``` ` anywhere in the output
+- `json.loads(output)` succeeds with zero pre-processing
+
 ## RETROSPECTIVE (MANDATORY)
 
 After every Dream Team session, generate the HTML report:
