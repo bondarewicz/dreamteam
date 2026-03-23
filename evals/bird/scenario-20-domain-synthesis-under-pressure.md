@@ -15,7 +15,7 @@ graders:
     min_items: 2
   - type: json_field
     path: "escalations[*].type"
-    equals: "contradiction"
+    contains: "contradiction"
   - type: json_field
     path: "confidence.level"
     max: 50

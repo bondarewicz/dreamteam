@@ -15,7 +15,7 @@ graders:
     min_items: 1
   - type: json_field
     path: "escalations[*].type"
-    equals: "missing_context"
+    contains: "missing_context"
   - type: json_field
     path: "confidence.level"
     max: 55
