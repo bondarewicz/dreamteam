@@ -883,6 +883,7 @@ CSS = '''
 
   @media print {
     details > * { display: block !important; }
+    .action-item, .agent-change-chip, .section { display: block !important; }
   }
 
   /* ── TRIAGE BAR ─────────────────────────────────────── */
@@ -1486,6 +1487,41 @@ CSS = '''
   }
   .focus details summary .chevron::after { content: '▸'; }
   .focus details[open] summary .chevron::after { content: '▾'; }
+
+  /* ── Focus filter chips ── */
+  .focus-filter {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 10px 0 14px 0;
+  }
+
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+    line-height: 1.6;
+  }
+
+  .filter-chip:hover {
+    border-color: var(--border-subtle);
+    color: var(--text);
+  }
+
+  .filter-chip.active {
+    background: var(--surface-3);
+    border-color: var(--text-muted);
+    color: var(--text);
+  }
 
   /* ── Trend verdict ── */
   .trend-verdict {
@@ -2120,7 +2156,18 @@ emit(f'''
       <span class="section-badge">what changed &middot; what to do</span>
       <span class="chevron"></span>
     </summary>
+''')
 
+# Filter chips — one per agent with data
+filter_chips_html = '<div class="focus-filter"><button class="filter-chip active" data-filter="all">All</button>'
+for agent in all_agents:
+    agent_results_for_filter = results_by_agent.get(agent, [])
+    if agent_results_for_filter:
+        filter_chips_html += f'<button class="filter-chip" data-filter="{h(agent)}">{h(agent.capitalize())}</button>'
+filter_chips_html += '</div>'
+emit(filter_chips_html)
+
+emit(f'''
     <div class="trend-verdict {focus_trend_direction}">
       <div class="trend-arrow {arrow_dir}">{arrow_char}</div>
       <div class="trend-body">
@@ -2154,7 +2201,7 @@ emit('    </div>')
 if action_items:
     emit('    <ul class="action-list">')
     for item in action_items:
-        emit(f'''      <li class="action-item {item['level']}">
+        emit(f'''      <li class="action-item {item['level']}" data-agent="{h(item['agent'])}">
         <span class="action-priority {item['priority']}">{item['priority'].upper()}</span>
         <div>
           <div class="action-text">{item['text']}</div>
@@ -2170,7 +2217,7 @@ if agent_change_chips:
     emit('    <div class="agent-changes">')
     for chip in agent_change_chips:
         note_html = f'<span class="change-note">{h(chip["note"])}</span>' if chip['note'] else ''
-        emit(f'''      <div class="agent-change-chip">
+        emit(f'''      <div class="agent-change-chip" data-agent="{h(chip['agent'])}">
         <div class="change-dot" style="background:var({chip['color_var']})"></div>
         <span class="change-name">{h(chip['agent'].capitalize())}</span>
         <span class="change-delta {chip['delta_cls']}">{h(chip['delta_label'])}</span>
@@ -2844,6 +2891,50 @@ emit('''<script>
 window.addEventListener('beforeprint', function() {
   document.querySelectorAll('details').forEach(function(d) { d.open = true; });
 });
+
+// ── Agent filter chips ────────────────────────────────────────────────────────
+(function() {
+  function applyFilter(agent) {
+    var isAll = agent === 'all';
+
+    // Action items
+    document.querySelectorAll('.action-item').forEach(function(el) {
+      el.style.display = (isAll || el.dataset.agent === agent) ? '' : 'none';
+    });
+
+    // Agent change chips
+    document.querySelectorAll('.agent-change-chip').forEach(function(el) {
+      el.style.display = (isAll || el.dataset.agent === agent) ? '' : 'none';
+    });
+
+    // Agent sections (each has id equal to agent name)
+    document.querySelectorAll('.section[id]').forEach(function(el) {
+      el.style.display = (isAll || el.id === agent) ? '' : 'none';
+    });
+  }
+
+  document.addEventListener('click', function(e) {
+    var chip = e.target.closest('.filter-chip');
+    if (!chip) return;
+
+    var filter = chip.dataset.filter;
+    var wasActive = chip.classList.contains('active');
+
+    // Deselect all chips first
+    document.querySelectorAll('.filter-chip').forEach(function(c) {
+      c.classList.remove('active');
+    });
+
+    if (wasActive && filter !== 'all') {
+      // Deselecting an agent chip — return to All
+      document.querySelector('.filter-chip[data-filter="all"]').classList.add('active');
+      applyFilter('all');
+    } else {
+      chip.classList.add('active');
+      applyFilter(filter);
+    }
+  });
+})();
 </script>
 </body>
 </html>''')
