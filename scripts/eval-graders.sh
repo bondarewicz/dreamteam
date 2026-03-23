@@ -307,6 +307,7 @@ def run_grader(grader, output):
         type_check = grader.get('type_check', None)
         exists_check = grader.get('exists', True)
         equals_val = grader.get('equals', None)
+        contains_val = grader.get('contains', None)
 
         # Extract JSON from output (Bird outputs raw JSON now)
         parsed = None
@@ -463,6 +464,16 @@ def run_grader(grader, output):
                 val = values_to_check[0] if values_to_check else None
                 if val != equals_val:
                     return False, f'field {path} equals check failed: expected {repr(equals_val)}, got {repr(val)}'
+
+        # contains — at least one value matches (use instead of equals for wildcard paths)
+        if contains_val is not None:
+            if is_wildcard:
+                if not any(v == contains_val for v in values_to_check):
+                    return False, f'field {path} contains check failed: expected at least one {repr(contains_val)}, got values: {", ".join(repr(v) for v in values_to_check[:5])}'
+            else:
+                val = values_to_check[0] if values_to_check else None
+                if val != contains_val:
+                    return False, f'field {path} contains check failed: expected {repr(contains_val)}, got {repr(val)}'
 
         return True, 'passed'
 
