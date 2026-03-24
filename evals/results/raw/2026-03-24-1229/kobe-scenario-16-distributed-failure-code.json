@@ -1,0 +1,255 @@
+{
+  "agent": "kobe",
+  "scenario_id": "scenario-16-distributed-failure-code",
+  "agent_output": "{\"summary\":{\"verdict\":\"BLOCK\",\"one_liner\":\"Distributed transaction with no compensation — partial failures leave courier reserved, order inconsistent, and customer uninformed.\"},\"critical_findings\":[{\"title\":\"No compensation/rollback on partial failure — courier leaked on step 2+ failure\",\"risk\":\"If `orderService.updateStatus` or either notification call throws, the courier remains reserved (step 1 succeeded) but the order is never marked ASSIGNED. The courier is now in limbo: reserved but never dispatched, blocking them from receiving other orders. There is no `courierService.release()` or saga rollback.\",\"severity\":\"Critical\",\"location\":\"assignAndDispatch — between steps 1-4\",\"reproduction\":\"1. Call assignAndDispatch('order-123'). 2. courierService.reserve succeeds, returns 'courier-A'. 3. orderService.updateStatus throws (DB timeout, constraint violation). 4. Function rejects. courier-A is permanently reserved with no order to fulfill. Repeat N times under degraded DB conditions → N couriers locked out of the fleet.\",\"fix\":\"Wrap steps 2-4 in a try/catch. On failure, call `courierService.release(courierId)` in the catch block (or a finally-based compensation). Better: implement a saga pattern where each step registers its compensating action. Minimal fix:\\n\\n```typescript\\nasync function assignAndDispatch(orderId: string): Promise<void> {\\n  const courierId = await courierService.reserve(orderId);\\n  try {\\n    await orderService.updateStatus(orderId, 'ASSIGNED', courierId);\\n    await notificationService.sendDispatchAlert(courierId, orderId);\\n    await notificationService.sendCustomerAlert(orderId, courierId);\\n  } catch (err) {\\n    await courierService.release(courierId).catch(() => {});\\n    throw err;\\n  }\\n}\\n```\",\"time_to_fix\":\"30 minutes\",\"acceptance_criteria_affected\":\"Courier must not be permanently reserved when downstream steps fail\"},{\"title\":\"No idempotency guard — retries or duplicate events double-reserve couriers\",\"risk\":\"If this function is triggered by a message queue or webhook, at-least-once delivery means it can be called twice for the same orderId. Each call reserves a NEW courier. Now two couriers are dispatched to one order, or one courier is reserved and forgotten.\",\"severity\":\"Critical\",\"location\":\"assignAndDispatch — entry point, step 1\",\"reproduction\":\"1. Queue delivers orderId 'order-456' twice (standard at-least-once behavior). 2. First call: reserves courier-A, updates order, dispatches. 3. Second call: reserves courier-B, tries to update order (may fail on status check or succeed and overwrite courier-A). 4. courier-A is now dispatched but no longer associated with the order.\",\"fix\":\"Add an idempotency check before reserving. Either: (a) check order status first and bail if already ASSIGNED, (b) use an idempotency key with the courier service, or (c) use a distributed lock on orderId. Minimal:\\n\\n```typescript\\nconst order = await orderService.getStatus(orderId);\\nif (order.status === 'ASSIGNED') return; // already processed\\n```\\nNote: this is a TOCTOU check so a distributed lock or DB-level unique constraint is the robust solution.\",\"time_to_fix\":\"1 hour\",\"acceptance_criteria_affected\":\"Each order must have exactly one courier assigned\"},{\"title\":\"Notification failure blocks entire assignment — customer gets no update, but courier IS reserved and order IS assigned\",\"risk\":\"Steps 3 and 4 are non-critical side effects (notifications) but are executed in the same sequential chain as the critical state mutations (steps 1-2). If sendDispatchAlert throws, the order is ASSIGNED in the DB but the courier never receives the dispatch alert and the customer is never notified. Worse: the catch block (if added per finding 1) would RELEASE the courier, rolling back a successful assignment.\",\"severity\":\"High\",\"location\":\"assignAndDispatch — steps 3 and 4\",\"reproduction\":\"1. Steps 1-2 succeed. Order is ASSIGNED, courier reserved. 2. notificationService.sendDispatchAlert throws (push service down). 3. Function rejects. If compensation is added, courier is released despite the order being marked ASSIGNED → inconsistent state. If no compensation, courier and customer are never notified.\",\"fix\":\"Separate critical state mutations from best-effort notifications. Notifications should be fire-and-forget or queued independently:\\n\\n```typescript\\nawait orderService.updateStatus(orderId, 'ASSIGNED', courierId);\\n// Critical path done — notifications are best-effort\\nawait Promise.allSettled([\\n  notificationService.sendDispatchAlert(courierId, orderId),\\n  notificationService.sendCustomerAlert(orderId, courierId),\\n]);\\n```\\nOr better: emit an `OrderAssigned` event and let notification handlers process it asynchronously.\",\"time_to_fix\":\"30 minutes\",\"acceptance_criteria_affected\":\"Notification failure must not block or rollback a successful assignment\"}],\"important_issues\":[{\"title\":\"No timeouts on external service calls\",\"description\":\"Each await can hang indefinitely if a downstream service is unresponsive. Under load, this stacks up open connections and exhausts the caller's resources (thread pool, connection pool). Every external call should have a timeout.\",\"location\":\"All four await calls\"},{\"title\":\"Sequential execution where parallel is possible\",\"description\":\"Steps 3 and 4 (dispatch alert + customer alert) are independent of each other but run sequentially. Using Promise.all or Promise.allSettled would cut latency.\",\"location\":\"Steps 3-4\"}],\"suggestions\":[\"Emit a domain event (e.g., OrderAssigned) after step 2 and let notifications be handled by separate consumers — this decouples critical path from side effects\",\"Add structured logging at each step boundary so partial failures are diagnosable in production\",\"Consider wrapping the entire flow in a saga orchestrator if more steps are added in the future\"],\"production_readiness\":{\"deployment_risks\":\"Any retry mechanism (queue, cron) that calls this function will create duplicate courier reservations and inconsistent state under partial failure — this is a production data corruption risk, not just a degraded experience.\",\"rollback_capability\":\"No rollback mechanism exists. A failed mid-flow execution requires manual intervention to release the reserved courier.\",\"backward_compatibility\":\"N/A — new function\",\"monitoring_coverage\":\"No logging or metrics instrumentation. Partial failures will be silent — no way to detect courier leaks without manual DB audits.\",\"breaking_changes\":{\"api_breaking\":false,\"db_destructive\":false,\"shared_library\":false,\"auth_security\":false,\"data_pipeline\":false,\"config_changes\":false,\"details\":[]},\"safe_to_deploy\":false,\"rollback_plan\":\"Cannot safely deploy. Fix compensation logic and idempotency before shipping. If already deployed, add a scheduled job to detect and release orphaned courier reservations.\"},\"escalations\":[],\"confidence\":{\"level\":95,\"high_confidence_areas\":[\"Partial failure / compensation gap is deterministic — not speculative\",\"Idempotency gap is standard distributed systems concern\",\"Notification coupling is evident from the sequential structure\"],\"low_confidence_areas\":[\"Cannot verify whether courierService.reserve is itself idempotent (might already handle duplicate orderId internally)\",\"Cannot verify whether orderService.updateStatus has a status guard that rejects duplicate assignments\"],\"assumptions\":[\"courierService.reserve allocates a scarce resource that must be explicitly released\",\"No external saga orchestrator or outbox pattern wraps this function\",\"This function can be invoked more than once per orderId (queue/retry semantics)\"]}}",
+  "agent_output_excerpt": "{\"summary\":{\"verdict\":\"BLOCK\",\"one_liner\":\"Distributed transaction with no compensation — partial failures leave courier reserved, order inconsistent, and customer uninformed.\"},\"critical_findings\":[{\"title\":\"No compensation/rollback on partial failure — courier leaked on step 2+ failure\",\"risk\":\"If `orderService.updateStatus` or either notification call throws, the courier remains reserved (step 1 succeeded) but the order is never marked ASSIGNED. The courier is now in limbo: reserved but never",
+  "duration_ms": 52423,
+  "tokens_used": 2008,
+  "input_tokens": 3,
+  "output_tokens": 2005,
+  "cost_usd": 0.067334,
+  "timestamp": "2026-03-24T11:33:09Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "63f063d1-adf4-48d5-b0e6-a95a038e0d6e",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "frontend-design:frontend-design"
+      ],
+      "plugins": [
+        {
+          "name": "frontend-design",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/frontend-design/79caa0d824ac"
+        },
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "32aa63e3-f561-4b87-967e-d52dd138bdbb",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01J2dDEEjrMXDmf6sRUjFvhu",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants me to review a TypeScript courier assignment flow and produce my full output schema. This is a code review of a provided snippet, not a PR or file on disk. Let me analyze it directly.\n\nKey issues with this code:\n\n1. **No error handling / no compensation logic**: If any step fails after step 1, the courier remains reserved but the order may not be updated, creating an inconsistent state. This is a distributed transaction problem without saga/compensation.\n\n2. **Race condition on courier reservation**: No idempotency guard — if this function is called twice for the same order (retry, duplicate event), two couriers could be reserved.\n\n\n3. **Missing resilience patterns**: The external service calls lack timeouts, retries, and circuit breaker protection, leaving the system vulnerable to cascading failures.",
+            "signature": "Er4HCkYIDBgCKkCfcPZoDdTDo3YLstilKG68+6bhGakhNpgOu9XXcB4F6UyujsGbQJXNss6Y6rlPmOn1r1AXymNX6pIQmxme6gewEgwSs+CMXzLBEIhCLj8aDADHfmNO+WM5ya74VSIwz0xsL2RLIKSbFSMGbmbvVSTa7BtM4Kb1p9hhmuwds86NTEfIpy+EUIWsjAGfO7EiKqUGm9fmEBhUp2BeYI+j/bqcqFZUlYc6jD4mcSCl9Z5O3Tr7dHRdU7kmxUpqmIEjFnNRG3M5/3JOAIA3Pqzv8ztzzcqag16TA92PoSlcAFf6DXFfJOuB5OjdsGM5Zs10MQOKpe0nYNu3fCNVFa4zgGCARr1mfM6TmTsXdnffG968sD/IxPC8LtQhDNniD8n2PUGOGz0NPHM5EthX3XV+QXh2A8d75FgbZYTxpUUuh5p6USoefGlL4Tst/yn+hXxBOjNo8e5ErltJJIlWJ3j/NDJiAertY6eLODHpv50pYHzOYStbu3NimFcNjs2pS0D9jJr0koaKZoQd8VZvk99GwLPtjTJS/kuu/BV+jObR+OGWS7NyoLIbTJWUfQpYI7SqH0Ga4/CazzDSPciOUtsHQpOKNz0ypIqMynP4ZZBQ9W+X4+wKqlCNpOKoze7SWrrmK1zaDRxZYdU+gx1CO/iXKq9tZekRpCwX/8tcJZ9t2bkeaoINmY6Xkvdv+XRxZBBgKaCuYBx/lt3ghWch7SGbhNoI66szXaj93LBtquGcwcVEaiO7F12fy3EDG6+BJ9GRGAJWM01nzd5dJnSrRwc+21GDhahfO6uaZQ4TAC8umZcNQyNx0VaneQ59IxtkDVHDW+xOnTHk0ZFHan7LKBrHEAcrt9sOabLwlnaTCl01yQAjkGwFviLFcQ/uN8LLUiiE5uSTtDm+rNWCT7eBxAbyvACfJVp5rD03DbCszVs1PadbhHs3BPVkdhcovk2wPb+AHcdnve6S2Tdfj3lurAmlMbv8pH8Tn3OoGRiulrNZtksNgKTECNeezcxoxZCGnH2Q/3xWojxRyNxuS8Vz0EsCDgxKn74nMlcXuncGz4YahXMpxacXZ4/iWidyaCxXdSdj8HrCqSesfewLITueyexgQ5lkcqX7kOtJbz1LlsnY3W0I72YtqqCphlQbH00RJL0VCGylYttaxid+ayOzxxg/Xi1YiDY/cIOTsDj4pqeC7vRO1THe9FdM/+BCCDHQDR2f5UggAUVCAttXhiXUgQ8s7msjdQTUeAkrbOdQ4APIdc7ODyZODuZFqhgB"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2240,
+          "cache_read_input_tokens": 6388,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2240
+          },
+          "output_tokens": 33,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "63f063d1-adf4-48d5-b0e6-a95a038e0d6e",
+      "uuid": "7281fce9-41d5-4fb3-84d4-d95ed1557450"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01J2dDEEjrMXDmf6sRUjFvhu",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"summary\":{\"verdict\":\"BLOCK\",\"one_liner\":\"Distributed transaction with no compensation — partial failures leave courier reserved, order inconsistent, and customer uninformed.\"},\"critical_findings\":[{\"title\":\"No compensation/rollback on partial failure — courier leaked on step 2+ failure\",\"risk\":\"If `orderService.updateStatus` or either notification call throws, the courier remains reserved (step 1 succeeded) but the order is never marked ASSIGNED. The courier is now in limbo: reserved but never dispatched, blocking them from receiving other orders. There is no `courierService.release()` or saga rollback.\",\"severity\":\"Critical\",\"location\":\"assignAndDispatch — between steps 1-4\",\"reproduction\":\"1. Call assignAndDispatch('order-123'). 2. courierService.reserve succeeds, returns 'courier-A'. 3. orderService.updateStatus throws (DB timeout, constraint violation). 4. Function rejects. courier-A is permanently reserved with no order to fulfill. Repeat N times under degraded DB conditions → N couriers locked out of the fleet.\",\"fix\":\"Wrap steps 2-4 in a try/catch. On failure, call `courierService.release(courierId)` in the catch block (or a finally-based compensation). Better: implement a saga pattern where each step registers its compensating action. Minimal fix:\\n\\n```typescript\\nasync function assignAndDispatch(orderId: string): Promise<void> {\\n  const courierId = await courierService.reserve(orderId);\\n  try {\\n    await orderService.updateStatus(orderId, 'ASSIGNED', courierId);\\n    await notificationService.sendDispatchAlert(courierId, orderId);\\n    await notificationService.sendCustomerAlert(orderId, courierId);\\n  } catch (err) {\\n    await courierService.release(courierId).catch(() => {});\\n    throw err;\\n  }\\n}\\n```\",\"time_to_fix\":\"30 minutes\",\"acceptance_criteria_affected\":\"Courier must not be permanently reserved when downstream steps fail\"},{\"title\":\"No idempotency guard — retries or duplicate events double-reserve couriers\",\"risk\":\"If this function is triggered by a message queue or webhook, at-least-once delivery means it can be called twice for the same orderId. Each call reserves a NEW courier. Now two couriers are dispatched to one order, or one courier is reserved and forgotten.\",\"severity\":\"Critical\",\"location\":\"assignAndDispatch — entry point, step 1\",\"reproduction\":\"1. Queue delivers orderId 'order-456' twice (standard at-least-once behavior). 2. First call: reserves courier-A, updates order, dispatches. 3. Second call: reserves courier-B, tries to update order (may fail on status check or succeed and overwrite courier-A). 4. courier-A is now dispatched but no longer associated with the order.\",\"fix\":\"Add an idempotency check before reserving. Either: (a) check order status first and bail if already ASSIGNED, (b) use an idempotency key with the courier service, or (c) use a distributed lock on orderId. Minimal:\\n\\n```typescript\\nconst order = await orderService.getStatus(orderId);\\nif (order.status === 'ASSIGNED') return; // already processed\\n```\\nNote: this is a TOCTOU check so a distributed lock or DB-level unique constraint is the robust solution.\",\"time_to_fix\":\"1 hour\",\"acceptance_criteria_affected\":\"Each order must have exactly one courier assigned\"},{\"title\":\"Notification failure blocks entire assignment — customer gets no update, but courier IS reserved and order IS assigned\",\"risk\":\"Steps 3 and 4 are non-critical side effects (notifications) but are executed in the same sequential chain as the critical state mutations (steps 1-2). If sendDispatchAlert throws, the order is ASSIGNED in the DB but the courier never receives the dispatch alert and the customer is never notified. Worse: the catch block (if added per finding 1) would RELEASE the courier, rolling back a successful assignment.\",\"severity\":\"High\",\"location\":\"assignAndDispatch — steps 3 and 4\",\"reproduction\":\"1. Steps 1-2 succeed. Order is ASSIGNED, courier reserved. 2. notificationService.sendDispatchAlert throws (push service down). 3. Function rejects. If compensation is added, courier is released despite the order being marked ASSIGNED → inconsistent state. If no compensation, courier and customer are never notified.\",\"fix\":\"Separate critical state mutations from best-effort notifications. Notifications should be fire-and-forget or queued independently:\\n\\n```typescript\\nawait orderService.updateStatus(orderId, 'ASSIGNED', courierId);\\n// Critical path done — notifications are best-effort\\nawait Promise.allSettled([\\n  notificationService.sendDispatchAlert(courierId, orderId),\\n  notificationService.sendCustomerAlert(orderId, courierId),\\n]);\\n```\\nOr better: emit an `OrderAssigned` event and let notification handlers process it asynchronously.\",\"time_to_fix\":\"30 minutes\",\"acceptance_criteria_affected\":\"Notification failure must not block or rollback a successful assignment\"}],\"important_issues\":[{\"title\":\"No timeouts on external service calls\",\"description\":\"Each await can hang indefinitely if a downstream service is unresponsive. Under load, this stacks up open connections and exhausts the caller's resources (thread pool, connection pool). Every external call should have a timeout.\",\"location\":\"All four await calls\"},{\"title\":\"Sequential execution where parallel is possible\",\"description\":\"Steps 3 and 4 (dispatch alert + customer alert) are independent of each other but run sequentially. Using Promise.all or Promise.allSettled would cut latency.\",\"location\":\"Steps 3-4\"}],\"suggestions\":[\"Emit a domain event (e.g., OrderAssigned) after step 2 and let notifications be handled by separate consumers — this decouples critical path from side effects\",\"Add structured logging at each step boundary so partial failures are diagnosable in production\",\"Consider wrapping the entire flow in a saga orchestrator if more steps are added in the future\"],\"production_readiness\":{\"deployment_risks\":\"Any retry mechanism (queue, cron) that calls this function will create duplicate courier reservations and inconsistent state under partial failure — this is a production data corruption risk, not just a degraded experience.\",\"rollback_capability\":\"No rollback mechanism exists. A failed mid-flow execution requires manual intervention to release the reserved courier.\",\"backward_compatibility\":\"N/A — new function\",\"monitoring_coverage\":\"No logging or metrics instrumentation. Partial failures will be silent — no way to detect courier leaks without manual DB audits.\",\"breaking_changes\":{\"api_breaking\":false,\"db_destructive\":false,\"shared_library\":false,\"auth_security\":false,\"data_pipeline\":false,\"config_changes\":false,\"details\":[]},\"safe_to_deploy\":false,\"rollback_plan\":\"Cannot safely deploy. Fix compensation logic and idempotency before shipping. If already deployed, add a scheduled job to detect and release orphaned courier reservations.\"},\"escalations\":[],\"confidence\":{\"level\":95,\"high_confidence_areas\":[\"Partial failure / compensation gap is deterministic — not speculative\",\"Idempotency gap is standard distributed systems concern\",\"Notification coupling is evident from the sequential structure\"],\"low_confidence_areas\":[\"Cannot verify whether courierService.reserve is itself idempotent (might already handle duplicate orderId internally)\",\"Cannot verify whether orderService.updateStatus has a status guard that rejects duplicate assignments\"],\"assumptions\":[\"courierService.reserve allocates a scarce resource that must be explicitly released\",\"No external saga orchestrator or outbox pattern wraps this function\",\"This function can be invoked more than once per orderId (queue/retry semantics)\"]}}"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2240,
+          "cache_read_input_tokens": 6388,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2240
+          },
+          "output_tokens": 33,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "63f063d1-adf4-48d5-b0e6-a95a038e0d6e",
+      "uuid": "d2ae43ae-b68d-41f4-aa04-5f3486fb697a"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774357200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "2f8bccdb-4d7e-4280-9ec7-d066730121e3",
+      "session_id": "63f063d1-adf4-48d5-b0e6-a95a038e0d6e"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 51686,
+      "duration_api_ms": 51671,
+      "num_turns": 1,
+      "result": "{\"summary\":{\"verdict\":\"BLOCK\",\"one_liner\":\"Distributed transaction with no compensation — partial failures leave courier reserved, order inconsistent, and customer uninformed.\"},\"critical_findings\":[{\"title\":\"No compensation/rollback on partial failure — courier leaked on step 2+ failure\",\"risk\":\"If `orderService.updateStatus` or either notification call throws, the courier remains reserved (step 1 succeeded) but the order is never marked ASSIGNED. The courier is now in limbo: reserved but never dispatched, blocking them from receiving other orders. There is no `courierService.release()` or saga rollback.\",\"severity\":\"Critical\",\"location\":\"assignAndDispatch — between steps 1-4\",\"reproduction\":\"1. Call assignAndDispatch('order-123'). 2. courierService.reserve succeeds, returns 'courier-A'. 3. orderService.updateStatus throws (DB timeout, constraint violation). 4. Function rejects. courier-A is permanently reserved with no order to fulfill. Repeat N times under degraded DB conditions → N couriers locked out of the fleet.\",\"fix\":\"Wrap steps 2-4 in a try/catch. On failure, call `courierService.release(courierId)` in the catch block (or a finally-based compensation). Better: implement a saga pattern where each step registers its compensating action. Minimal fix:\\n\\n```typescript\\nasync function assignAndDispatch(orderId: string): Promise<void> {\\n  const courierId = await courierService.reserve(orderId);\\n  try {\\n    await orderService.updateStatus(orderId, 'ASSIGNED', courierId);\\n    await notificationService.sendDispatchAlert(courierId, orderId);\\n    await notificationService.sendCustomerAlert(orderId, courierId);\\n  } catch (err) {\\n    await courierService.release(courierId).catch(() => {});\\n    throw err;\\n  }\\n}\\n```\",\"time_to_fix\":\"30 minutes\",\"acceptance_criteria_affected\":\"Courier must not be permanently reserved when downstream steps fail\"},{\"title\":\"No idempotency guard — retries or duplicate events double-reserve couriers\",\"risk\":\"If this function is triggered by a message queue or webhook, at-least-once delivery means it can be called twice for the same orderId. Each call reserves a NEW courier. Now two couriers are dispatched to one order, or one courier is reserved and forgotten.\",\"severity\":\"Critical\",\"location\":\"assignAndDispatch — entry point, step 1\",\"reproduction\":\"1. Queue delivers orderId 'order-456' twice (standard at-least-once behavior). 2. First call: reserves courier-A, updates order, dispatches. 3. Second call: reserves courier-B, tries to update order (may fail on status check or succeed and overwrite courier-A). 4. courier-A is now dispatched but no longer associated with the order.\",\"fix\":\"Add an idempotency check before reserving. Either: (a) check order status first and bail if already ASSIGNED, (b) use an idempotency key with the courier service, or (c) use a distributed lock on orderId. Minimal:\\n\\n```typescript\\nconst order = await orderService.getStatus(orderId);\\nif (order.status === 'ASSIGNED') return; // already processed\\n```\\nNote: this is a TOCTOU check so a distributed lock or DB-level unique constraint is the robust solution.\",\"time_to_fix\":\"1 hour\",\"acceptance_criteria_affected\":\"Each order must have exactly one courier assigned\"},{\"title\":\"Notification failure blocks entire assignment — customer gets no update, but courier IS reserved and order IS assigned\",\"risk\":\"Steps 3 and 4 are non-critical side effects (notifications) but are executed in the same sequential chain as the critical state mutations (steps 1-2). If sendDispatchAlert throws, the order is ASSIGNED in the DB but the courier never receives the dispatch alert and the customer is never notified. Worse: the catch block (if added per finding 1) would RELEASE the courier, rolling back a successful assignment.\",\"severity\":\"High\",\"location\":\"assignAndDispatch — steps 3 and 4\",\"reproduction\":\"1. Steps 1-2 succeed. Order is ASSIGNED, courier reserved. 2. notificationService.sendDispatchAlert throws (push service down). 3. Function rejects. If compensation is added, courier is released despite the order being marked ASSIGNED → inconsistent state. If no compensation, courier and customer are never notified.\",\"fix\":\"Separate critical state mutations from best-effort notifications. Notifications should be fire-and-forget or queued independently:\\n\\n```typescript\\nawait orderService.updateStatus(orderId, 'ASSIGNED', courierId);\\n// Critical path done — notifications are best-effort\\nawait Promise.allSettled([\\n  notificationService.sendDispatchAlert(courierId, orderId),\\n  notificationService.sendCustomerAlert(orderId, courierId),\\n]);\\n```\\nOr better: emit an `OrderAssigned` event and let notification handlers process it asynchronously.\",\"time_to_fix\":\"30 minutes\",\"acceptance_criteria_affected\":\"Notification failure must not block or rollback a successful assignment\"}],\"important_issues\":[{\"title\":\"No timeouts on external service calls\",\"description\":\"Each await can hang indefinitely if a downstream service is unresponsive. Under load, this stacks up open connections and exhausts the caller's resources (thread pool, connection pool). Every external call should have a timeout.\",\"location\":\"All four await calls\"},{\"title\":\"Sequential execution where parallel is possible\",\"description\":\"Steps 3 and 4 (dispatch alert + customer alert) are independent of each other but run sequentially. Using Promise.all or Promise.allSettled would cut latency.\",\"location\":\"Steps 3-4\"}],\"suggestions\":[\"Emit a domain event (e.g., OrderAssigned) after step 2 and let notifications be handled by separate consumers — this decouples critical path from side effects\",\"Add structured logging at each step boundary so partial failures are diagnosable in production\",\"Consider wrapping the entire flow in a saga orchestrator if more steps are added in the future\"],\"production_readiness\":{\"deployment_risks\":\"Any retry mechanism (queue, cron) that calls this function will create duplicate courier reservations and inconsistent state under partial failure — this is a production data corruption risk, not just a degraded experience.\",\"rollback_capability\":\"No rollback mechanism exists. A failed mid-flow execution requires manual intervention to release the reserved courier.\",\"backward_compatibility\":\"N/A — new function\",\"monitoring_coverage\":\"No logging or metrics instrumentation. Partial failures will be silent — no way to detect courier leaks without manual DB audits.\",\"breaking_changes\":{\"api_breaking\":false,\"db_destructive\":false,\"shared_library\":false,\"auth_security\":false,\"data_pipeline\":false,\"config_changes\":false,\"details\":[]},\"safe_to_deploy\":false,\"rollback_plan\":\"Cannot safely deploy. Fix compensation logic and idempotency before shipping. If already deployed, add a scheduled job to detect and release orphaned courier reservations.\"},\"escalations\":[],\"confidence\":{\"level\":95,\"high_confidence_areas\":[\"Partial failure / compensation gap is deterministic — not speculative\",\"Idempotency gap is standard distributed systems concern\",\"Notification coupling is evident from the sequential structure\"],\"low_confidence_areas\":[\"Cannot verify whether courierService.reserve is itself idempotent (might already handle duplicate orderId internally)\",\"Cannot verify whether orderService.updateStatus has a status guard that rejects duplicate assignments\"],\"assumptions\":[\"courierService.reserve allocates a scarce resource that must be explicitly released\",\"No external saga orchestrator or outbox pattern wraps this function\",\"This function can be invoked more than once per orderId (queue/retry semantics)\"]}}",
+      "stop_reason": "end_turn",
+      "session_id": "63f063d1-adf4-48d5-b0e6-a95a038e0d6e",
+      "total_cost_usd": 0.067334,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 2240,
+        "cache_read_input_tokens": 6388,
+        "output_tokens": 2005,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 2240,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2005,
+          "cacheReadInputTokens": 6388,
+          "cacheCreationInputTokens": 2240,
+          "webSearchRequests": 0,
+          "costUSD": 0.067334,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "0575d035-956e-4a6b-9865-04d34a762862"
+    }
+  ]
+}
