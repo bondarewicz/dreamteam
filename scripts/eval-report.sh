@@ -81,11 +81,12 @@ cmd_generate() {
   echo "  Reading results from: $RESULTS_DIR"
   echo "  Output: $output_file"
 
-  python3 - "$RESULTS_DIR" "$output_file" << 'PYEOF'
-import json, os, sys, glob, datetime, html
+  python3 - "$RESULTS_DIR" "$output_file" "$REPORTS_DIR" << 'PYEOF'
+import json, os, sys, glob, datetime, html, uuid, re
 
 results_dir = sys.argv[1]
 output_file = sys.argv[2]
+reports_dir = sys.argv[3] if len(sys.argv) > 3 else os.path.dirname(output_file)
 
 # ── Load all result files ──────────────────────────────────────────────────
 
@@ -602,6 +603,732 @@ if prior_baseline and current_run:
             'delta_label': delta_label,
             'note': note,
         })
+
+# ── Trace page generation ────────────────────────────────────────────────────
+
+TRACE_CSS = '''
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface-2: #1c2128;
+    --surface-3: #21262d;
+    --border: #30363d;
+    --border-subtle: #21262d;
+    --text: #e6edf3;
+    --text-dim: #7d8590;
+    --text-muted: #484f58;
+    --pass: #4ade80;
+    --pass-bg: rgba(74,222,128,0.10);
+    --pass-border: rgba(74,222,128,0.30);
+    --partial: #fbbf24;
+    --partial-bg: rgba(251,191,36,0.10);
+    --partial-border: rgba(251,191,36,0.30);
+    --fail: #f87171;
+    --fail-bg: rgba(248,113,113,0.10);
+    --fail-border: rgba(248,113,113,0.30);
+    --bird: #3fb950;
+    --mj: #58a6ff;
+    --shaq: #bc8cff;
+    --kobe: #f85149;
+    --pippen: #39d2c0;
+    --magic: #d29922;
+    --accent: #388bfd;
+    --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Courier New', monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --trace-user: #388bfd;
+    --trace-assistant: #bc8cff;
+    --trace-tool-call: #d29922;
+    --trace-tool-result: #39d2c0;
+    --trace-system: #7d8590;
+    --trace-thinking: #8b949e;
+    --trace-meta: #484f58;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.6; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 32px 16px; }
+  .back-link { font-size: 12px; font-family: var(--mono); color: var(--accent); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; margin-bottom: 20px; }
+  .back-link:hover { text-decoration: underline; }
+  h1 { font-size: 18px; font-weight: 700; margin-bottom: 6px; letter-spacing: -0.3px; }
+  .trace-meta { font-size: 12px; font-family: var(--mono); color: var(--text-dim); margin-bottom: 24px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .trace-meta-item { display: flex; align-items: center; gap: 6px; }
+  .score-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .score-badge.pass { background: var(--pass-bg); border: 1px solid var(--pass-border); color: var(--pass); }
+  .score-badge.partial { background: var(--partial-bg); border: 1px solid var(--partial-border); color: var(--partial); }
+  .score-badge.fail { background: var(--fail-bg); border: 1px solid var(--fail-border); color: var(--fail); }
+
+  /* ── Session info panel ─────────────────────────────── */
+  .session-info {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px 24px;
+  }
+  .info-group { display: flex; flex-direction: column; gap: 4px; }
+  .info-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-family: var(--mono); }
+  .info-value { font-size: 13px; font-family: var(--mono); color: var(--text-dim); }
+  .info-value.highlight { color: var(--text); font-weight: 600; }
+  .info-value .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--surface-3); border: 1px solid var(--border); color: var(--text-dim); margin: 1px 2px; }
+  .info-value .tag.ok { color: var(--pass); border-color: var(--pass-border); background: var(--pass-bg); }
+  .info-value .tag.warn { color: var(--fail); border-color: var(--fail-border); background: var(--fail-bg); }
+
+  /* ── Trace section ──────────────────────────────────── */
+  .trace-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .trace-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-bottom: 1px solid var(--border-subtle); }
+  .trace-header-title { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .trace-stats { font-family: var(--mono); font-size: 11px; color: var(--text-muted); display: flex; gap: 16px; }
+  .trace-legend { display: flex; gap: 16px; padding: 8px 20px 12px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
+  .legend-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .trace-timeline { padding: 0 20px 16px; }
+  .trace-step { display: flex; gap: 12px; padding: 10px 0; position: relative; }
+  .trace-step + .trace-step { border-top: 1px solid var(--border-subtle); }
+  .step-gutter { display: flex; flex-direction: column; align-items: center; width: 28px; flex-shrink: 0; padding-top: 2px; }
+  .step-number { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--text-muted); width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+  .step-line { width: 1px; flex: 1; background: var(--border-subtle); margin-top: 4px; }
+  .step-content { flex: 1; min-width: 0; }
+  .step-label { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .step-label .step-type-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .step-label.user { color: var(--trace-user); }
+  .step-label.user .step-type-dot { background: var(--trace-user); }
+  .step-label.assistant { color: var(--trace-assistant); }
+  .step-label.assistant .step-type-dot { background: var(--trace-assistant); }
+  .step-label.tool-call { color: var(--trace-tool-call); }
+  .step-label.tool-call .step-type-dot { background: var(--trace-tool-call); }
+  .step-label.tool-result { color: var(--trace-tool-result); }
+  .step-label.tool-result .step-type-dot { background: var(--trace-tool-result); }
+  .step-label.system { color: var(--trace-system); }
+  .step-label.system .step-type-dot { background: var(--trace-system); }
+  .step-preview { font-family: var(--mono); font-size: 12px; color: var(--text-dim); line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
+  .step-text-output { font-family: var(--mono); font-size: 12px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto; }
+  .step-tool-name { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .step-tool-name .tool-fn { color: var(--trace-tool-call); }
+  .tool-input { font-family: var(--mono); font-size: 11px; background: var(--surface-2); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px 12px; margin-top: 4px; color: var(--text-dim); line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
+  .tool-input .key { color: var(--trace-tool-call); }
+  .tool-input .val { color: var(--text); }
+  .tool-result-box { font-family: var(--mono); font-size: 11px; background: var(--surface-2); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px 12px; color: var(--text-dim); line-height: 1.6; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+
+  /* ── Thinking block ─────────────────────────────────── */
+  .thinking-block { font-family: var(--mono); font-size: 12px; color: var(--trace-thinking); font-style: italic; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; border-left: 2px solid var(--border); padding-left: 12px; margin-top: 4px; }
+  .thinking-label { font-size: 10px; font-weight: 600; color: var(--trace-thinking); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-style: normal; }
+
+  /* ── Per-step metadata chip bar ─────────────────────── */
+  .step-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .meta-chip { font-family: var(--mono); font-size: 10px; padding: 2px 8px; border-radius: 4px; background: var(--surface-3); border: 1px solid var(--border); color: var(--text-muted); }
+  .meta-chip .chip-label { color: var(--text-muted); }
+  .meta-chip .chip-value { color: var(--text-dim); margin-left: 4px; }
+  .meta-chip.cache-hit .chip-value { color: var(--pass); }
+  .meta-chip.cache-miss .chip-value { color: var(--fail); }
+  .meta-chip.denied { border-color: var(--fail-border); background: var(--fail-bg); }
+  .meta-chip.denied .chip-value { color: var(--fail); }
+
+  /* ── First-failure marker ───────────────────────────── */
+  .trace-step.first-failure { background: var(--fail-bg); border-radius: 8px; margin: 0 -8px; padding: 10px 8px; }
+  .trace-step.first-failure + .trace-step { border-top: none; }
+  .first-failure-badge { font-size: 9px; font-weight: 700; color: var(--fail); background: var(--fail-bg); border: 1px solid var(--fail-border); border-radius: 4px; padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.5px; margin-left: 8px; }
+
+  /* ── Result summary grid ────────────────────────────── */
+  .result-summary { background: var(--surface-2); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 12px 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px 16px; }
+  .result-item { display: flex; flex-direction: column; }
+  .result-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-family: var(--mono); }
+  .result-value { font-size: 13px; font-family: var(--mono); color: var(--text); }
+
+  @media (max-width: 640px) { .trace-stats { display: none; } .session-info { grid-template-columns: 1fr 1fr; } .result-summary { grid-template-columns: 1fr 1fr; } }
+'''
+
+AGENT_COLORS = {
+    'bird': '#3fb950', 'mj': '#58a6ff', 'shaq': '#bc8cff',
+    'kobe': '#f85149', 'pippen': '#39d2c0', 'magic': '#d29922',
+}
+
+def extract_prompt(content):
+    """Extract the prompt field from scenario file content, stopping at known next fields."""
+    m = re.search(
+        r'^prompt:\s*\|?\s*\n(.*?)(?=\n(?:expected_behavior|failure_modes|scoring_rubric|graders|category|reference_output):)',
+        content, re.DOTALL | re.MULTILINE
+    )
+    if m:
+        # Dedent: strip common leading whitespace (YAML block scalar indentation)
+        lines = m.group(1).split('\n')
+        stripped = [l[2:] if l.startswith('  ') else l for l in lines]
+        return '\n'.join(stripped).rstrip()
+    return ''
+
+
+def trace_filename(agent, scenario_id, trial_index, timestamp):
+    """Generate a unique trace page filename. BR-10: includes agent, scenario, trial, uuid4."""
+    uid = uuid.uuid4()
+    if trial_index == 0:
+        return f'{agent}-{scenario_id}-{uid}.html'
+    else:
+        return f'{agent}-{scenario_id}-t{trial_index}-{uid}.html'
+
+TOOL_RESULT_CAP = 10000   # chars — tool result content and assistant text output
+TOOL_INPUT_CAP  =  5000   # chars — tool input values and thinking blocks
+
+def truncate(text, cap):
+    """Truncate text to cap chars, appending a visible indicator if truncated."""
+    if len(text) <= cap:
+        return text
+    remaining = len(text) - cap
+    return text[:cap] + f'\n... ({remaining} more chars)'
+
+def render_trace_event(event, step_num, is_last_before_result, is_failing):
+    """Render a single NDJSON event as HTML step. Returns (html_string, steps_rendered) tuple."""
+    etype = event.get('type', '')
+    parts_html = []
+    local_step = step_num  # tracks actual step number as we emit multiple blocks
+
+    failure_cls = ' first-failure' if (is_last_before_result and is_failing) else ''
+    failure_badge = ' <span class="first-failure-badge">first failure</span>' if (is_last_before_result and is_failing) else ''
+
+    if etype == 'system':
+        # System init
+        sys_text = ''
+        if isinstance(event.get('system'), str):
+            sys_text = event['system']
+        elif isinstance(event.get('system'), dict):
+            sys_text = json.dumps(event['system'])
+        elif isinstance(event.get('message'), dict):
+            sys_text = json.dumps(event['message'])
+        parts_html.append(f'''  <div class="trace-step{failure_cls}">
+    <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
+    <div class="step-content">
+      <div class="step-label system"><div class="step-type-dot"></div>System{failure_badge}</div>
+      <div class="step-preview">{h(sys_text) if sys_text else '<span style="color:var(--text-muted)">(system init)</span>'}</div>
+    </div>
+  </div>''')
+        local_step += 1
+
+    elif etype == 'rate_limit_event':
+        # Not useful for debugging — skip entirely
+        return ('', 0)
+
+    elif etype == 'assistant':
+        # Parse message.content array — render thinking, text, and tool_use blocks
+        message = event.get('message', {})
+        content = message.get('content', []) if isinstance(message, dict) else []
+        if not isinstance(content, list):
+            content = []
+
+        thinking_blocks = [c for c in content if isinstance(c, dict) and c.get('type') == 'thinking']
+        text_blocks = [c for c in content if isinstance(c, dict) and c.get('type') == 'text']
+        tool_blocks = [c for c in content if isinstance(c, dict) and c.get('type') == 'tool_use']
+
+        for tb in thinking_blocks:
+            thinking_text = truncate(tb.get('thinking', ''), TOOL_INPUT_CAP)
+            parts_html.append(f'''  <div class="trace-step">
+    <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
+    <div class="step-content">
+      <div class="step-label assistant"><div class="step-type-dot"></div>Assistant</div>
+      <div class="thinking-label">Thinking</div>
+      <div class="thinking-block">{h(thinking_text)}</div>
+    </div>
+  </div>''')
+            local_step += 1
+
+        if text_blocks:
+            raw_text = '\n'.join(c.get('text', '') for c in text_blocks)
+            # If text looks like JSON, pretty-print it
+            stripped = raw_text.strip()
+            if stripped.startswith('{') or stripped.startswith('['):
+                try:
+                    parsed = json.loads(stripped)
+                    display_text = json.dumps(parsed, indent=2)
+                except (json.JSONDecodeError, ValueError):
+                    display_text = raw_text
+            else:
+                display_text = raw_text
+            display_text = truncate(display_text, TOOL_RESULT_CAP)
+            # Build per-step metadata chips from message.usage
+            usage = message.get('usage', {}) if isinstance(message, dict) else {}
+            meta_chips_html = ''
+            if usage:
+                in_tok = usage.get('input_tokens', 0) or 0
+                out_tok = usage.get('output_tokens', 0) or 0
+                cache_read = usage.get('cache_read_input_tokens', 0) or 0
+                cache_created = usage.get('cache_creation_input_tokens', 0) or 0
+                total_in = in_tok + cache_read + cache_created
+                cache_pct = int(round(100 * cache_read / total_in)) if total_in > 0 else 0
+                cache_cls = 'cache-hit' if cache_read > 0 else 'cache-miss'
+                stop_reason = message.get('stop_reason', '') if isinstance(message, dict) else ''
+                service_tier = message.get('service_tier', '') if isinstance(message, dict) else ''
+                chips = []
+                chips.append(f'<div class="meta-chip"><span class="chip-label">in:</span><span class="chip-value">{in_tok:,}</span></div>')
+                chips.append(f'<div class="meta-chip"><span class="chip-label">out:</span><span class="chip-value">{out_tok:,}</span></div>')
+                chips.append(f'<div class="meta-chip {cache_cls}"><span class="chip-label">cache:</span><span class="chip-value">{cache_read:,} ({cache_pct}%)</span></div>')
+                if service_tier:
+                    chips.append(f'<div class="meta-chip"><span class="chip-label">tier:</span><span class="chip-value">{h(service_tier)}</span></div>')
+                if stop_reason:
+                    chips.append(f'<div class="meta-chip"><span class="chip-label">stop:</span><span class="chip-value">{h(stop_reason)}</span></div>')
+                meta_chips_html = '<div class="step-meta">' + ''.join(chips) + '</div>'
+            parts_html.append(f'''  <div class="trace-step{failure_cls}">
+    <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
+    <div class="step-content">
+      <div class="step-label assistant"><div class="step-type-dot"></div>Assistant{failure_badge}</div>
+      <div class="step-text-output">{h(display_text)}</div>
+      {meta_chips_html}
+    </div>
+  </div>''')
+            local_step += 1
+
+        for tc in tool_blocks:
+            tool_name = tc.get('name', 'unknown')
+            tool_input = tc.get('input', {})
+            tool_use_id = tc.get('id', '')
+            # Format tool input as key: value lines
+            if isinstance(tool_input, dict):
+                input_lines = []
+                for k, v in list(tool_input.items())[:10]:
+                    val_str = json.dumps(v) if not isinstance(v, str) else v
+                    val_str = truncate(val_str, TOOL_INPUT_CAP)
+                    input_lines.append(f'<span class="key">{h(k)}:</span> <span class="val">{h(val_str)}</span>')
+                input_html = '\n'.join(input_lines)
+            else:
+                input_html = h(truncate(str(tool_input), TOOL_INPUT_CAP))
+            tool_id_chip = ''
+            if tool_use_id:
+                tool_id_chip = f'<div class="step-meta"><div class="meta-chip"><span class="chip-label">tool_use_id:</span><span class="chip-value">{h(tool_use_id)}</span></div></div>'
+            parts_html.append(f'''  <div class="trace-step">
+    <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
+    <div class="step-content">
+      <div class="step-label tool-call"><div class="step-type-dot"></div>Tool Call</div>
+      <div class="step-tool-name"><span class="tool-fn">{h(tool_name)}</span></div>
+      <div class="tool-input">{input_html}</div>
+      {tool_id_chip}
+    </div>
+  </div>''')
+            local_step += 1
+
+        if not thinking_blocks and not text_blocks and not tool_blocks:
+            raw_content = json.dumps(content)[:400] if content else '(empty)'
+            parts_html.append(f'''  <div class="trace-step{failure_cls}">
+    <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
+    <div class="step-content">
+      <div class="step-label assistant"><div class="step-type-dot"></div>Assistant{failure_badge}</div>
+      <div class="step-preview">{h(raw_content)}</div>
+    </div>
+  </div>''')
+            local_step += 1
+
+    elif etype == 'user':
+        # Tool results fed back
+        message = event.get('message', {})
+        content = message.get('content', []) if isinstance(message, dict) else []
+        if not isinstance(content, list):
+            content = []
+        tool_results = [c for c in content if isinstance(c, dict) and c.get('type') == 'tool_result']
+        if tool_results:
+            for tr in tool_results:
+                tr_content = tr.get('content', '')
+                if isinstance(tr_content, list):
+                    tr_text = '\n'.join(c.get('text', '') for c in tr_content if isinstance(c, dict) and c.get('type') == 'text')
+                else:
+                    tr_text = str(tr_content)
+                result_len = len(tr_text)
+                tr_text = truncate(tr_text, TOOL_RESULT_CAP)
+                len_label = f'{result_len} chars' if result_len < 10000 else f'{result_len // 1000}k chars'
+                parent_id = tr.get('tool_use_id', '')
+                parent_chip = ''
+                if parent_id:
+                    parent_chip = f'<div class="step-meta"><div class="meta-chip"><span class="chip-label">parent:</span><span class="chip-value">{h(parent_id)}</span></div></div>'
+                parts_html.append(f'''  <div class="trace-step">
+    <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
+    <div class="step-content">
+      <div class="step-label tool-result"><div class="step-type-dot"></div>Tool Result <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:4px">{h(len_label)}</span></div>
+      <div class="tool-result-box">{h(tr_text)}</div>
+      {parent_chip}
+    </div>
+  </div>''')
+                local_step += 1
+        else:
+            raw_msg = json.dumps(message)[:400] if message else '(empty)'
+            parts_html.append(f'''  <div class="trace-step">
+    <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
+    <div class="step-content">
+      <div class="step-label tool-result"><div class="step-type-dot"></div>Tool Result</div>
+      <div class="tool-result-box">{h(raw_msg)}</div>
+    </div>
+  </div>''')
+            local_step += 1
+
+    elif etype == 'result':
+        stop_reason = event.get('stop_reason', 'end_turn')
+        num_turns = event.get('num_turns', '')
+        duration_api_ms = event.get('duration_api_ms', 0) or 0
+        duration_ms_ev = event.get('duration_ms', 0) or 0
+        usage = event.get('usage', {}) or {}
+        in_tok = usage.get('input_tokens', 0) or 0
+        out_tok = usage.get('output_tokens', 0) or 0
+        cache_read = usage.get('cache_read_input_tokens', 0) or 0
+        cache_created = usage.get('cache_creation_input_tokens', 0) or 0
+        cost = event.get('total_cost_usd') or 0.0
+        context_window = event.get('context_window') or ''
+        max_output = event.get('max_output_tokens') or ''
+        permission_denials = event.get('permission_denials', []) or []
+        denial_count = len(permission_denials)
+        denial_val_style = 'color:var(--pass)' if denial_count == 0 else 'color:var(--fail)'
+        denial_display = 'none' if denial_count == 0 else str(denial_count)
+        dur_s = f'{duration_ms_ev / 1000:.1f}s' if duration_ms_ev else '—'
+        api_s = f'{duration_api_ms / 1000:.1f}s' if duration_api_ms else '—'
+        ctx_display = f'{context_window // 1000}k' if isinstance(context_window, int) and context_window > 0 else (str(context_window) if context_window else '—')
+        max_out_display = f'{max_output // 1000}k' if isinstance(max_output, int) and max_output > 0 else (str(max_output) if max_output else '—')
+        cache_read_style = 'color:var(--pass)' if cache_read > 0 else ''
+        parts_html.append(f'''  <div class="trace-step">
+    <div class="step-gutter"><div class="step-number">{local_step}</div></div>
+    <div class="step-content">
+      <div class="step-label system"><div class="step-type-dot"></div>Result</div>
+      <div class="result-summary">
+        <div class="result-item"><span class="result-label">Stop Reason</span><span class="result-value">{h(stop_reason)}</span></div>
+        <div class="result-item"><span class="result-label">Turns</span><span class="result-value">{h(str(num_turns)) if num_turns != '' else '—'}</span></div>
+        <div class="result-item"><span class="result-label">Duration</span><span class="result-value">{h(dur_s)}</span></div>
+        <div class="result-item"><span class="result-label">API Time</span><span class="result-value">{h(api_s)}</span></div>
+        <div class="result-item"><span class="result-label">Input Tokens</span><span class="result-value">{in_tok:,}</span></div>
+        <div class="result-item"><span class="result-label">Output Tokens</span><span class="result-value">{out_tok:,}</span></div>
+        <div class="result-item"><span class="result-label">Cache Read</span><span class="result-value" style="{cache_read_style}">{cache_read:,}</span></div>
+        <div class="result-item"><span class="result-label">Cache Created</span><span class="result-value">{cache_created:,}</span></div>
+        <div class="result-item"><span class="result-label">Cost</span><span class="result-value">${cost:.4f}</span></div>
+        <div class="result-item"><span class="result-label">Context Window</span><span class="result-value">{h(ctx_display)}</span></div>
+        <div class="result-item"><span class="result-label">Max Output</span><span class="result-value">{h(max_out_display)}</span></div>
+        <div class="result-item"><span class="result-label">Permission Denials</span><span class="result-value" style="{denial_val_style}">{h(denial_display)}</span></div>
+      </div>
+    </div>
+  </div>''')
+        local_step += 1
+
+    else:
+        # Unknown event type
+        raw_event = json.dumps(event)[:300]
+        parts_html.append(f'''  <div class="trace-step">
+    <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
+    <div class="step-content">
+      <div class="step-label system"><div class="step-type-dot"></div>{h(etype)}</div>
+      <div class="step-preview">{h(raw_event)}</div>
+    </div>
+  </div>''')
+        local_step += 1
+
+    return ('\n'.join(parts_html), local_step - step_num)
+
+
+def generate_trace_page(trace, agent, scenario_id, scenario_name, score, duration_ms, cost_usd,
+                        trial_index, report_filename, traces_dir, run_timestamp='', prompt=''):
+    """Generate a standalone trace HTML page. Returns the filename (not full path), or None."""
+    if not trace:
+        return None
+
+    os.makedirs(traces_dir, exist_ok=True)
+
+    # Use the actual run timestamp passed in for uniqueness (ISO string from raw_data['timestamp']).
+    # Fall back to scenario_id if not available — still unique per scenario within a run.
+    timestamp = run_timestamp or scenario_id
+
+    fname = trace_filename(agent, scenario_id, trial_index, timestamp)
+    fpath = os.path.join(traces_dir, fname)
+
+    # Find the last assistant event index before the result event (for first-failure highlight)
+    last_assistant_idx = None
+    result_idx = None
+    for i, ev in enumerate(trace):
+        if ev.get('type') == 'result':
+            result_idx = i
+        elif ev.get('type') == 'assistant' and (result_idx is None):
+            last_assistant_idx = i
+
+    is_failing = score in ('fail', 'partial')
+
+    # Build step HTML
+    step_htmls = []
+    step_num = 1
+
+    # Inject a synthetic User step at the top — the Claude CLI -p mode does not emit the
+    # user prompt as a stream-json event, so we reconstruct it from the scenario file.
+    if prompt:
+        user_step_html = f'''  <div class="trace-step">
+    <div class="step-gutter"><div class="step-number">{step_num}</div><div class="step-line"></div></div>
+    <div class="step-content">
+      <div class="step-label user"><div class="step-type-dot"></div>USER</div>
+      <div class="step-preview">{h(prompt)}</div>
+    </div>
+  </div>'''
+        step_htmls.append(user_step_html)
+        step_num += 1
+
+    for i, ev in enumerate(trace):
+        is_last_before_result = (i == last_assistant_idx)
+        step_html, steps_rendered = render_trace_event(ev, step_num, is_last_before_result, is_failing)
+        if step_html:
+            step_htmls.append(step_html)
+            step_num += steps_rendered
+
+    steps_html = '\n'.join(step_htmls)
+    total_steps = len(step_htmls)
+
+    # Stats from result event
+    result_ev = next((ev for ev in reversed(trace) if ev.get('type') == 'result'), {})
+    usage = result_ev.get('usage', {})
+    out_tokens = usage.get('output_tokens', 0) or 0
+    duration_s = (duration_ms / 1000) if duration_ms else 0
+
+    # Extract system init event for session info panel
+    system_ev = next((ev for ev in trace if ev.get('type') == 'system'), {})
+    sys_model = system_ev.get('model', '') or ''
+    sys_session_id = system_ev.get('session_id', '') or ''
+    sys_session_short = sys_session_id[:13] + '...' if len(sys_session_id) > 13 else sys_session_id
+    sys_version = system_ev.get('claude_code_version', '') or ''
+    sys_perm_mode = system_ev.get('permissionMode', '') or ''
+    sys_tools = system_ev.get('tools', []) or []
+    sys_tools_count = len(sys_tools) if isinstance(sys_tools, list) else 0
+    # context_window and max_output_tokens live on result event's modelUsage, not on system event
+    result_model_usage = result_ev.get('modelUsage', {}) or {}
+    sys_context_window = result_model_usage.get('context_window', '') or ''
+    sys_max_output = result_model_usage.get('max_output_tokens', '') or ''
+    sys_fast_mode = system_ev.get('fast_mode_state', '') if 'fast_mode_state' in system_ev else ''
+    sys_mcp = system_ev.get('mcp_servers', []) or []
+    # Permission denials from result event
+    result_denials = result_ev.get('permission_denials', []) or []
+    denial_count = len(result_denials)
+
+    ctx_display = f'{sys_context_window // 1000}k' if isinstance(sys_context_window, int) and sys_context_window > 0 else (str(sys_context_window) if sys_context_window else '—')
+    max_out_display = f'{sys_max_output // 1000}k tokens' if isinstance(sys_max_output, int) and sys_max_output > 0 else (str(sys_max_output) if sys_max_output else '—')
+    fast_display = 'on' if sys_fast_mode is True else ('off' if sys_fast_mode is False else (str(sys_fast_mode) if sys_fast_mode != '' else '—'))
+
+    # Build MCP server tags
+    mcp_tags_html = ''
+    if isinstance(sys_mcp, list) and sys_mcp:
+        tags = []
+        for srv in sys_mcp:
+            srv_name = srv.get('name', str(srv)) if isinstance(srv, dict) else str(srv)
+            srv_status = srv.get('status', '') if isinstance(srv, dict) else ''
+            label = f'{srv_name} ({srv_status})' if srv_status else srv_name
+            tags.append(f'<span class="tag">{h(label)}</span>')
+        mcp_tags_html = ''.join(tags)
+    else:
+        mcp_tags_html = '<span class="tag">none</span>'
+
+    # Permission denials display
+    if denial_count == 0:
+        denial_html = '<span class="tag ok">none</span>'
+    else:
+        denial_html = f'<span class="tag warn">{denial_count} denied</span>'
+
+    session_info_html = ''
+    if system_ev:
+        rows = []
+        if sys_model:
+            rows.append(f'  <div class="info-group"><span class="info-label">Model</span><span class="info-value highlight">{h(sys_model)}</span></div>')
+        if sys_session_short:
+            rows.append(f'  <div class="info-group"><span class="info-label">Session</span><span class="info-value">{h(sys_session_short)}</span></div>')
+        if sys_version:
+            rows.append(f'  <div class="info-group"><span class="info-label">CLI Version</span><span class="info-value">{h(sys_version)}</span></div>')
+        if sys_perm_mode:
+            rows.append(f'  <div class="info-group"><span class="info-label">Permission Mode</span><span class="info-value">{h(sys_perm_mode)}</span></div>')
+        if sys_tools_count > 0:
+            rows.append(f'  <div class="info-group"><span class="info-label">Tools Available</span><span class="info-value">{sys_tools_count} tools</span></div>')
+        if ctx_display != '—':
+            rows.append(f'  <div class="info-group"><span class="info-label">Context Window</span><span class="info-value">{h(ctx_display)}</span></div>')
+        if max_out_display != '—':
+            rows.append(f'  <div class="info-group"><span class="info-label">Max Output</span><span class="info-value">{h(max_out_display)}</span></div>')
+        if fast_display != '—':
+            rows.append(f'  <div class="info-group"><span class="info-label">Fast Mode</span><span class="info-value">{h(fast_display)}</span></div>')
+        rows.append(f'  <div class="info-group"><span class="info-label">MCP Servers</span><span class="info-value">{mcp_tags_html}</span></div>')
+        rows.append(f'  <div class="info-group"><span class="info-label">Permission Denials</span><span class="info-value">{denial_html}</span></div>')
+        session_info_html = '<div class="session-info">\n' + '\n'.join(rows) + '\n</div>\n'
+
+    agent_color = AGENT_COLORS.get(agent.lower(), '#e6edf3')
+    score_cls = score if score in ('pass', 'partial', 'fail') else 'fail'
+    score_display = score.capitalize() if score else 'Unknown'
+
+    # Back link: one level up from traces/ to reports/evals/
+    back_href = f'../{h(report_filename)}'
+    trial_label = f' (trial {trial_index + 1})' if trial_index > 0 else ''
+
+    page_html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trace: {h(agent)} / {h(scenario_id)}{trial_label} &mdash; Dream Team Evals</title>
+<style>
+{TRACE_CSS}
+</style>
+</head>
+<body>
+<div class="container">
+
+<a class="back-link" href="{back_href}">&#8592; Back to Eval Report</a>
+
+<h1>{h(scenario_name or scenario_id)}</h1>
+<div class="trace-meta">
+  <div class="trace-meta-item">
+    <span style="color:{h(agent_color)};font-weight:600">{h(agent.capitalize())}</span>
+    <span style="color:var(--text-muted)">/</span>
+    <span>{h(scenario_id)}{h(trial_label)}</span>
+  </div>
+  <div class="trace-meta-item">
+    <span class="score-badge {score_cls}">{h(score_display)}</span>
+  </div>
+  <div class="trace-meta-item">{duration_s:.1f}s</div>
+  <div class="trace-meta-item">${cost_usd:.4f}</div>
+</div>
+
+{session_info_html}
+<div class="trace-card">
+  <div class="trace-header">
+    <span class="trace-header-title">Trace</span>
+    <div class="trace-stats">
+      <span>{total_steps} steps</span>
+      <span>{out_tokens:,} output tokens</span>
+      <span>{duration_s:.1f}s total</span>
+    </div>
+  </div>
+  <div class="trace-legend">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--trace-user)"></div>User</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--trace-assistant)"></div>Assistant</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--trace-tool-call)"></div>Tool Call</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--trace-tool-result)"></div>Tool Result</div>
+  </div>
+  <div class="trace-timeline">
+{steps_html}
+  </div>
+</div>
+
+</div>
+</body>
+</html>'''
+
+    with open(fpath, 'w', encoding='utf-8') as f:
+        f.write(page_html)
+
+    return fname
+
+
+# ── Load raw output files for trace data ─────────────────────────────────────
+# Build a map from (agent, scenario_id, trial_index) -> raw_data
+# We only need trace and nothing else from raw files.
+
+traces_dir = os.path.join(reports_dir, 'traces')
+report_filename = os.path.basename(output_file)
+
+# Clear stale trace files from previous runs — traces are always regenerated fresh.
+if os.path.isdir(traces_dir):
+    import glob as _glob
+    for _f in _glob.glob(os.path.join(traces_dir, '*.html')):
+        try:
+            os.remove(_f)
+        except OSError:
+            pass
+
+# Map: (agent, scenario_id, trial_index) -> trace_page_filename
+trace_page_map = {}
+
+if current_run:
+    raw_base_dir = os.path.join(results_dir, 'raw')
+    # Find the raw dir matching the current run datetime
+    run_datetime = current_run.get('run_id', '').replace('eval/run-', '')
+    raw_run_dir = os.path.join(raw_base_dir, run_datetime) if run_datetime else None
+
+    if raw_run_dir and os.path.isdir(raw_run_dir):
+        for result in results:
+            agent_name = result.get('agent', '')
+            scenario_id_r = result.get('scenario_id', '')
+            score_r = result.get('score', 'fail')
+            duration_ms_r = result.get('duration_ms', 0)
+            cost_usd_r = result.get('cost_usd', 0.0)
+            scenario_name_r = result.get('scenario_name', scenario_id_r)
+
+            # Load trial raw files
+            trials_data = result.get('trials')
+            if trials_data and isinstance(trials_data, list) and len(trials_data) > 0:
+                trial_indices = list(range(len(trials_data)))
+            else:
+                trial_indices = [0]
+
+            for t in trial_indices:
+                if t == 0:
+                    raw_fname = f'{agent_name}-{scenario_id_r}.json'
+                else:
+                    raw_fname = f'{agent_name}-{scenario_id_r}-t{t}.json'
+                raw_fpath = os.path.join(raw_run_dir, raw_fname)
+
+                if not os.path.isfile(raw_fpath):
+                    continue
+
+                try:
+                    with open(raw_fpath, encoding='utf-8', errors='replace') as f:
+                        raw_data = json.load(f)
+                except Exception:
+                    continue
+
+                trace = raw_data.get('trace')
+                if not trace or not isinstance(trace, list) or len(trace) == 0:
+                    continue  # AC-2: no trace key = no trace link, no error
+
+                # Use the actual ISO timestamp from raw_data for uniqueness in filename hash
+                raw_timestamp = raw_data.get('timestamp', '')
+
+                # Determine score for this specific trial
+                if trials_data and t < len(trials_data):
+                    trial_score = trials_data[t].get('score', score_r) if isinstance(trials_data[t], dict) else score_r
+                    trial_duration = trials_data[t].get('duration_ms', duration_ms_r) if isinstance(trials_data[t], dict) else duration_ms_r
+                    trial_cost = trials_data[t].get('cost_usd', cost_usd_r) if isinstance(trials_data[t], dict) else cost_usd_r
+                else:
+                    trial_score = score_r
+                    trial_duration = duration_ms_r
+                    trial_cost = cost_usd_r
+
+                # Load the prompt from the scenario file so we can inject a synthetic User step.
+                # Scenario files live at: {repo_root}/evals/{agent}/scenario-{scenario_id}.md
+                # We derive repo_root from results_dir (which is {repo_root}/evals/results).
+                scenario_prompt = ''
+                try:
+                    repo_root_for_prompt = os.path.dirname(os.path.dirname(results_dir))
+                    # scenario_id_r may already contain the full slug (e.g. "scenario-01-foo")
+                    # or just a short id. Try exact match first, then glob for a prefix match.
+                    scenario_file_exact = os.path.join(
+                        repo_root_for_prompt, 'evals', agent_name,
+                        f'{scenario_id_r}.md'
+                    )
+                    if os.path.isfile(scenario_file_exact):
+                        with open(scenario_file_exact, encoding='utf-8', errors='replace') as sf:
+                            scenario_prompt = extract_prompt(sf.read())
+                    else:
+                        # Fallback: glob for any .md whose basename starts with scenario_id_r
+                        pattern = os.path.join(
+                            repo_root_for_prompt, 'evals', agent_name, '*.md'
+                        )
+                        for candidate in glob.glob(pattern):
+                            bname = os.path.splitext(os.path.basename(candidate))[0]
+                            if bname == scenario_id_r or bname.startswith(scenario_id_r + '-') or scenario_id_r.startswith(bname + '-'):
+                                with open(candidate, encoding='utf-8', errors='replace') as sf:
+                                    scenario_prompt = extract_prompt(sf.read())
+                                break
+                except Exception:
+                    scenario_prompt = ''
+
+                trace_fname = generate_trace_page(
+                    trace=trace,
+                    agent=agent_name,
+                    scenario_id=scenario_id_r,
+                    scenario_name=scenario_name_r,
+                    score=trial_score,
+                    duration_ms=trial_duration,
+                    cost_usd=trial_cost,
+                    trial_index=t,
+                    report_filename=report_filename,
+                    traces_dir=traces_dir,
+                    run_timestamp=raw_timestamp,
+                    prompt=scenario_prompt,
+                )
+                if trace_fname:
+                    trace_page_map[(agent_name, scenario_id_r, t)] = trace_fname
+
+    if trace_page_map:
+        print(f'  Generated {len(trace_page_map)} trace page(s) in: {traces_dir}')
+
 
 # ── Build HTML ────────────────────────────────────────────────────────────
 
@@ -1841,6 +2568,31 @@ CSS = '''
   }
 
   /* ══════════════════════════════════════════════════════
+     TRACE LINK
+     ══════════════════════════════════════════════════════ */
+  .b-trace-link {
+    display: inline-block;
+    font-size: 10px;
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--accent);
+    text-decoration: none;
+    background: rgba(56,139,253,0.08);
+    border: 1px solid rgba(56,139,253,0.25);
+    border-radius: 4px;
+    padding: 1px 7px;
+    margin-top: 4px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+
+  .b-trace-link:hover {
+    background: rgba(56,139,253,0.15);
+    border-color: var(--accent);
+    text-decoration: none;
+  }
+
+  /* ══════════════════════════════════════════════════════
      RESPONSIVE
      ══════════════════════════════════════════════════════ */
   @media (max-width: 768px) {
@@ -2392,6 +3144,22 @@ for agent in all_agents:
             else:
                 criteria_html = ''
 
+        # Trace links — one per trial that has trace data. Single trial = "trace",
+        # multi-trial = compact "t1 t2 t3" links.
+        trace_link_html = ''
+        trial_scores_list, _, _, _, _, k_count = compute_trial_stats(r)
+        trace_links = []
+        for t_idx in range(k_count):
+            t_fname = trace_page_map.get((agent, sid, t_idx))
+            if t_fname:
+                if k_count == 1:
+                    label = 'trace'
+                else:
+                    label = f't{t_idx + 1}'
+                trace_links.append(f'<a class="b-trace-link" href="traces/{h(t_fname)}" target="_blank">{label}</a>')
+        if trace_links:
+            trace_link_html = ' '.join(trace_links)
+
         # Metrics line (duration + tokens + cost)
         # PRICING_UPDATE: Keep in sync with scripts/cast.sh MODEL_RATES.
         # Blended cost rates ($/M tokens) using 85% input / 15% output ratio.
@@ -2442,6 +3210,7 @@ for agent in all_agents:
         {criteria_html}
         {mismatch_html}
         {metrics_html}
+        {trace_link_html}
       </div>''')
 
     emit('''    </div>

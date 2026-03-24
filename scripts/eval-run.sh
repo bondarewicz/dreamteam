@@ -303,10 +303,12 @@ def run_single_agent_call(agent, scenario_id, prompt):
     output_tokens  = 0
     cost_usd       = 0.0
 
+    trace = []
+
     if shutil.which('claude'):
         try:
             proc = subprocess.run(
-                ['claude', '-p', '--agent', agent, '--output-format', 'json'],
+                ['claude', '-p', '--agent', agent, '--output-format', 'stream-json', '--verbose'],
                 input=prompt,
                 capture_output=True,
                 text=True
@@ -316,22 +318,41 @@ def run_single_agent_call(agent, scenario_id, prompt):
                 stderr_head = proc.stderr[:300].replace('\n', ' ')
                 error_note  = f'claude exited non-zero: {stderr_head}'
                 print(f'  ERROR running claude for {agent}/{scenario_id}: {error_note}', file=sys.stderr)
-            # Parse JSON envelope — CRITICAL: agent_output must come from envelope['result'],
-            # never from raw_stdout, to prevent the full JSON leaking into scoring.
+            # Parse NDJSON stream — collect all events into trace, extract result from
+            # the final event with type='result'. CRITICAL: agent_output must come from
+            # the result event's 'result' field, never from raw_stdout.
             try:
-                envelope   = json.loads(raw_stdout)
-                raw_result = envelope.get('result', '')
-                agent_output = raw_result if isinstance(raw_result, str) else json.dumps(raw_result)
-                usage = envelope.get('usage', {})
-                input_tokens  = usage.get('input_tokens', 0) or 0
-                output_tokens = usage.get('output_tokens', 0) or 0
-                tokens_used   = input_tokens + output_tokens
-                cost_usd      = envelope.get('total_cost_usd') or 0.0
-            except (json.JSONDecodeError, ValueError) as parse_err:
+                result_event = None
+                for line in raw_stdout.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue  # BR-12: skip blank lines
+                    try:
+                        event = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue  # BR-12: skip non-JSON lines
+                    trace.append(event)
+                    if event.get('type') == 'result':
+                        result_event = event  # keep last result event
+
+                if result_event is not None:
+                    raw_result = result_event.get('result', '')
+                    agent_output = raw_result if isinstance(raw_result, str) else json.dumps(raw_result)
+                    usage = result_event.get('usage', {})
+                    input_tokens  = usage.get('input_tokens', 0) or 0
+                    output_tokens = usage.get('output_tokens', 0) or 0
+                    tokens_used   = input_tokens + output_tokens
+                    cost_usd      = result_event.get('total_cost_usd') or 0.0
+                else:
+                    # No result event found — fallback
+                    agent_output = raw_stdout
+                    error_note   = (error_note + ' | ' if error_note else '') + 'no result event in stream-json output'
+                    print(f'  ERROR: no result event for {agent}/{scenario_id}', file=sys.stderr)
+            except Exception as parse_err:
                 # Fallback: preserve whatever came out, but no token/cost data
                 agent_output = raw_stdout
-                error_note   = (error_note + ' | ' if error_note else '') + f'JSON parse error: {parse_err}'
-                print(f'  ERROR parsing claude JSON envelope for {agent}/{scenario_id}: {parse_err}', file=sys.stderr)
+                error_note   = (error_note + ' | ' if error_note else '') + f'NDJSON parse error: {parse_err}'
+                print(f'  ERROR parsing stream-json for {agent}/{scenario_id}: {parse_err}', file=sys.stderr)
         except Exception as e:
             error_note   = f'claude invocation error: {e}'
             agent_output = ''
@@ -354,6 +375,7 @@ def run_single_agent_call(agent, scenario_id, prompt):
         'output_tokens':       output_tokens,
         'cost_usd':            cost_usd,
         'timestamp':           timestamp,
+        'trace':               trace,
     }
     if error_note:
         record['error'] = error_note
