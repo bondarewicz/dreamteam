@@ -5,11 +5,12 @@
 # matching reports/evals/eval-ux-preview.html exactly.
 #
 # Usage:
-#   eval-report.sh generate          Generate HTML from all result files
-#   eval-report.sh list               List available result runs
+#   eval-report.sh generate                    Generate HTML from most recent run
+#   eval-report.sh generate 2026-03-24-1322    Generate HTML from a specific run
+#   eval-report.sh list                        List available result runs
 #
 # Output:
-#   reports/evals/YYYY-MM-DD-eval-report.html
+#   reports/evals/YYYY-MM-DD-HHMM-eval-report.html
 #
 # Requirements:
 #   - python3 (for all JSON parsing — no jq)
@@ -75,18 +76,41 @@ for fpath in files:
 cmd_generate() {
   mkdir -p "$REPORTS_DIR"
 
-  local output_file="${REPORTS_DIR}/$(date +%Y-%m-%d)-eval-report.html"
+  local run_file=""
+  if [[ -n "${1:-}" ]]; then
+    # If argument looks like a timestamp (e.g. 2026-03-24-1322), find the matching result file
+    if [[ -f "$1" ]]; then
+      run_file="$1"
+    elif [[ -f "${RESULTS_DIR}/${1}.json" ]]; then
+      run_file="${RESULTS_DIR}/${1}.json"
+    else
+      echo "Error: result file not found: $1 (tried $1 and ${RESULTS_DIR}/${1}.json)" >&2
+      return 1
+    fi
+  fi
+
+  local output_file
+  if [[ -n "$run_file" ]]; then
+    # Derive report name from the run file timestamp
+    local run_ts
+    run_ts="$(basename "$run_file" .json)"
+    output_file="${REPORTS_DIR}/${run_ts}-eval-report.html"
+  else
+    output_file="${REPORTS_DIR}/$(date +%Y-%m-%d-%H%M)-eval-report.html"
+  fi
 
   echo "Generating eval report..."
   echo "  Reading results from: $RESULTS_DIR"
+  [[ -n "$run_file" ]] && echo "  Pinned to run: $(basename "$run_file")"
   echo "  Output: $output_file"
 
-  python3 - "$RESULTS_DIR" "$output_file" "$REPORTS_DIR" << 'PYEOF'
+  python3 - "$RESULTS_DIR" "$output_file" "$REPORTS_DIR" ${run_file:+"$run_file"} << 'PYEOF'
 import json, os, sys, glob, datetime, html, uuid, re
 
 results_dir = sys.argv[1]
 output_file = sys.argv[2]
 reports_dir = sys.argv[3] if len(sys.argv) > 3 else os.path.dirname(output_file)
+pinned_run_file = sys.argv[4] if len(sys.argv) > 4 else ''
 
 # ── Load all result files ──────────────────────────────────────────────────
 
@@ -107,8 +131,18 @@ runs.sort(key=lambda r: r.get('date', ''))
 today_str = datetime.date.today().isoformat()
 report_date = today_str
 
-# Most recent run is the "current" run
-current_run = runs[-1] if runs else None
+# If a specific run file is pinned, use it as the current run
+if pinned_run_file:
+    try:
+        with open(pinned_run_file) as f:
+            current_run = json.load(f)
+        print(f'  Pinned current run: {os.path.basename(pinned_run_file)}')
+    except Exception as e:
+        print(f'ERROR: Could not load pinned run file: {e}', file=sys.stderr)
+        current_run = runs[-1] if runs else None
+else:
+    # Most recent run is the "current" run
+    current_run = runs[-1] if runs else None
 
 # Find most recent complete baseline (for regression comparison)
 prior_baseline = None
@@ -1267,15 +1301,8 @@ document.addEventListener('DOMContentLoaded', function() {{
 traces_dir = os.path.join(reports_dir, 'traces')
 report_filename = os.path.basename(output_file)
 
-# Clear stale trace files only when generating from a complete baseline run.
-# Partial runs (single agent/scenario) should not wipe traces from other scenarios.
-if os.path.isdir(traces_dir) and current_run and current_run.get('is_complete_baseline', False):
-    import glob as _glob
-    for _f in _glob.glob(os.path.join(traces_dir, '*.html')):
-        try:
-            os.remove(_f)
-        except OSError:
-            pass
+# Trace files are never deleted — new runs add new files with UUID filenames.
+# Old traces remain on disk for historical reference. Manual cleanup if needed.
 
 # Map: (agent, scenario_id, trial_index) -> trace_page_filename
 trace_page_map = {}
@@ -3781,7 +3808,7 @@ PYEOF
 # ── Main dispatch ──────────────────────────────────────────────────────────────
 
 case "${1:-}" in
-  generate)   cmd_generate ;;
+  generate)   cmd_generate "${2:-}" ;;
   list)        cmd_list ;;
   *)
     echo "Usage: eval-report.sh {generate|list}" >&2
