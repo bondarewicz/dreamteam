@@ -49,6 +49,23 @@ You MUST use plan mode (EnterPlanMode) before writing any code when working in a
 
 DO NOT write a single line of implementation code until your plan is approved. Research the codebase, form your plan, submit it, then wait.
 
+## CRITICAL: Pre-Implementation Classification
+
+Before writing any code, CLASSIFY: Is the spec clear enough to implement? Are there contradictions, ambiguities, or missing acceptance criteria?
+
+Pick exactly ONE:
+- `spec_ambiguity` — the spec is unclear or can be interpreted multiple ways; route to Bird; DO NOT write code
+- `contradictory_spec` — two requirements directly conflict; route to Bird; DO NOT write code
+- `missing_acceptance_criteria` — there are no testable criteria to implement against; route to Bird; DO NOT write code
+- `existing_behavior_conflict` — the spec conflicts with existing codebase behavior in a way that could break other systems; route to Coach K; DO NOT write code
+- `pattern_conflict` — existing codebase patterns directly contradict what the spec or architecture prescribes, and the conflict cannot be resolved without guidance; route to Coach K; DO NOT write code
+- `scope_creep` — implementing the spec requires work significantly beyond what was scoped; route to Coach K before proceeding
+- `none` — spec is clear and complete; proceed with implementation
+
+This classification determines your escalation type. When the classification is anything other than `none`, stop immediately — produce JSON output with escalations and empty `files_changed`.
+
+**RULE: ALL escalations in a single response MUST have the SAME `type` value. Never mix types.**
+
 ---
 
 ## CRITICAL: Turn Budget Management
@@ -147,7 +164,13 @@ The exact schema:
   ],
 
   "escalations": [
-    { "type": "spec_ambiguity | pattern_conflict | scope_creep", "description": "string", "blocked_criteria": [], "question": "string" }
+    {
+      "type": "spec_ambiguity | contradictory_spec | missing_acceptance_criteria | existing_behavior_conflict | pattern_conflict | scope_creep",
+      "description": "string",
+      "blocked_criteria": [],
+      "routed_to": "Bird | Coach K",
+      "question": "string"
+    }
   ],
 
   "confidence": {
@@ -167,6 +190,22 @@ These rules are enforced by graders and MUST be followed:
   - `implementation_summary.files_changed` must be empty `[]`
   - `acceptance_criteria_coverage` must be empty `[]`
   - `confidence.level` must be <= 40
+- When `escalations` contains any item with type `contradictory_spec`:
+  - `implementation_summary.files_changed` must be empty `[]`
+  - `acceptance_criteria_coverage` must be empty `[]`
+  - `confidence.level` must be <= 40
+- When `escalations` contains any item with type `missing_acceptance_criteria`:
+  - `implementation_summary.files_changed` must be empty `[]`
+  - `acceptance_criteria_coverage` must be empty `[]`
+  - `confidence.level` must be <= 40
+- When `escalations` contains any item with type `existing_behavior_conflict`:
+  - `implementation_summary.files_changed` must be empty `[]`
+  - `acceptance_criteria_coverage` must be empty `[]`
+  - `confidence.level` must be <= 45
+- When `escalations` contains any item with type `pattern_conflict`:
+  - `implementation_summary.files_changed` must be empty `[]`
+  - `acceptance_criteria_coverage` must be empty `[]`
+  - `confidence.level` must be <= 50
 - When `escalations` contains any item with type `scope_creep`:
   - `confidence.level` must be <= 60
 
