@@ -180,20 +180,29 @@ def extract_output(raw_file_path):
     return content
 
 
-def _find_json_in_output(output):
+def _extract_json(output):
     """
-    Return True if any valid JSON object or array exists anywhere in output.
-    Uses a brace-depth scanner so nested structures like {"a": {"b": 1}} are
-    correctly detected (Finding 1: replaces flat regex that excluded inner braces).
+    Try to parse a JSON object or array from output using three strategies:
+      1. Direct parse of the full stripped output.
+      2. Strip markdown code fences (```json ... ``` or ``` ... ```) and parse.
+      3. Brace-depth scanner: find the first valid JSON object/array anywhere.
+    Returns the parsed Python object, or None if all strategies fail.
     """
-    # Fast path: entire output is valid JSON
+    # Strategy 1: entire output is valid JSON
     try:
-        json.loads(output.strip())
-        return True
+        return json.loads(output.strip())
     except Exception:
         pass
 
-    # Depth scanner: start at every [ or { and walk to matching closer
+    # Strategy 2: extract content from markdown code fences
+    fence_match = re.search(r'```(?:json)?\s*\n(.*?)\n```', output, re.DOTALL)
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1).strip())
+        except Exception:
+            pass
+
+    # Strategy 3: brace-depth scanner — start at every [ or { and walk to matching closer
     for m in re.finditer(r'[\[{]', output):
         depth = 0
         start = m.start()
@@ -204,12 +213,21 @@ def _find_json_in_output(output):
                 depth -= 1
             if depth == 0:
                 try:
-                    json.loads(output[start:i + 1])
-                    return True
+                    return json.loads(output[start:i + 1])
                 except Exception:
                     pass
                 break
-    return False
+
+    return None
+
+
+def _find_json_in_output(output):
+    """
+    Return True if any valid JSON object or array exists anywhere in output.
+    Delegates to _extract_json which handles direct parse, markdown fence
+    stripping, and brace-depth scanning.
+    """
+    return _extract_json(output) is not None
 
 
 def run_grader(grader, output):
@@ -309,28 +327,8 @@ def run_grader(grader, output):
         equals_val = grader.get('equals', None)
         contains_val = grader.get('contains', None)
 
-        # Extract JSON from output (Bird outputs raw JSON now)
-        parsed = None
-        try:
-            parsed = json.loads(output.strip())
-        except Exception:
-            # Try to find a JSON object in the output
-            for m in re.finditer(r'[\[{]', output):
-                depth = 0
-                start = m.start()
-                for i in range(start, len(output)):
-                    if output[i] in '{[':
-                        depth += 1
-                    elif output[i] in '}]':
-                        depth -= 1
-                    if depth == 0:
-                        try:
-                            parsed = json.loads(output[start:i + 1])
-                        except Exception:
-                            pass
-                        break
-                if parsed is not None:
-                    break
+        # Extract JSON from output — handles raw JSON, markdown fences, and embedded objects
+        parsed = _extract_json(output)
 
         if parsed is None:
             return False, f'no valid JSON found in output (needed for json_field path: {path})'

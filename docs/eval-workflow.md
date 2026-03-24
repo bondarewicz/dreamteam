@@ -116,12 +116,27 @@ The post-change 60% represents higher actual quality than the pre-change 65%, ev
 
 | Failure type | Where it shows | Root cause | Fix |
 |---|---|---|---|
-| JSON invalid | Grader | Agent wrapping JSON in markdown fences | Update agent spec: output raw JSON, no fences |
+| JSON invalid | Grader | Agent wrapping JSON in markdown fences | Grader now handles fences automatically (2026-03-24 fix) |
 | Missing field | Grader | Schema mismatch between spec and grader | Align spec and grader config |
+| Plan mode stall | Grader | Agent enters plan mode and waits for approval in headless eval | Fixed: --append-system-prompt disables plan mode in eval runs |
 | Wrong field value | Grader | Agent not following stop conditions | Tighten stop condition instructions in spec |
 | Semantic content | Rubric | Agent prompt is vague | Rewrite prompt section covering that domain |
 | Flaky (mixed trials) | Multi-trial | Agent is inconsistent on edge cases | Add explicit examples or constraints to spec |
 | Hard fail | Multi-trial | Capability gap | Bigger prompt rewrite or out-of-scope for this agent |
+
+---
+
+## Traces
+
+Every eval run captures a full conversation trace per scenario — every tool call, thinking step, and assistant response. When a scenario fails, click the "trace" link on its card in the HTML report to see exactly where the reasoning went wrong.
+
+Trace pages are standalone HTML files in `reports/evals/traces/`. They show the step-by-step flow with:
+- User prompt, thinking blocks, assistant responses, tool calls + results
+- Per-step metadata (tokens, cache hit ratio, service tier)
+- First-failure highlighting on fail/partial scenarios
+- "Show full output" toggle for truncated content
+
+See `docs/follow-up-2026-03-24.md` for full details on trace capture and rendering.
 
 ---
 
@@ -131,6 +146,9 @@ The post-change 60% represents higher actual quality than the pre-change 65%, ev
 - Scenario files: `evals/<agent>/scenario-NN-<name>.md`
 - Grader configs: embedded in scenario files under `graders:` block
 - Raw results: `evals/results/raw/<timestamp>/`
+- Trace data: embedded in raw results as `trace` array
+- Trace pages: `reports/evals/traces/*.html`
 - HTML report: generated from raw results, opened by `/eval`
 - Eval script: `scripts/eval-run.sh`
+- Report generator: `scripts/eval-report.sh`
 - Grader implementations: `scripts/eval-graders.sh`
