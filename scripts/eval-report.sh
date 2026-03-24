@@ -725,6 +725,11 @@ TRACE_CSS = '''
   .meta-chip.denied { border-color: var(--fail-border); background: var(--fail-bg); }
   .meta-chip.denied .chip-value { color: var(--fail); }
 
+  /* ── Show-full toggle ───────────────────────────────── */
+  .show-full-btn { font-family: var(--mono); font-size: 10px; padding: 2px 8px; border-radius: 4px; background: var(--surface-3); border: 1px solid var(--border); color: var(--accent); cursor: pointer; margin-top: 6px; display: inline-block; }
+  .show-full-btn:hover { border-color: var(--accent); background: var(--surface-2); }
+  .full-content { display: none; }
+
   /* ── First-failure marker ───────────────────────────── */
   .trace-step.first-failure { background: var(--fail-bg); border-radius: 8px; margin: 0 -8px; padding: 10px 8px; }
   .trace-step.first-failure + .trace-step { border-top: none; }
@@ -770,11 +775,27 @@ TOOL_RESULT_CAP = 10000   # chars — tool result content and assistant text out
 TOOL_INPUT_CAP  =  5000   # chars — tool input values and thinking blocks
 
 def truncate(text, cap):
-    """Truncate text to cap chars, appending a visible indicator if truncated."""
+    """Truncate text to cap chars. Returns (display_text, full_text, was_truncated)."""
     if len(text) <= cap:
-        return text
-    remaining = len(text) - cap
-    return text[:cap] + f'\n... ({remaining} more chars)'
+        return text, text, False
+    return text[:cap], text, True
+
+_toggle_counter = [0]
+
+def render_truncatable(text, cap, css_class):
+    """Render text with an optional show-full toggle if truncated.
+    Returns an HTML string containing the content element(s) and button."""
+    display_text, full_text, was_truncated = truncate(text, cap)
+    if not was_truncated:
+        return f'<div class="{css_class}">{h(display_text)}</div>'
+    _toggle_counter[0] += 1
+    uid = _toggle_counter[0]
+    total_chars = len(full_text)
+    return (
+        f'<div class="truncated-content {css_class}" id="trunc-{uid}">{h(display_text)}</div>'
+        f'<div class="full-content {css_class}" id="full-{uid}">{h(full_text)}</div>'
+        f'<button class="show-full-btn" onclick="toggleFull({uid})">show full output ({total_chars:,} chars)</button>'
+    )
 
 def render_trace_event(event, step_num, is_last_before_result, is_failing):
     """Render a single NDJSON event as HTML step. Returns (html_string, steps_rendered) tuple."""
@@ -819,13 +840,13 @@ def render_trace_event(event, step_num, is_last_before_result, is_failing):
         tool_blocks = [c for c in content if isinstance(c, dict) and c.get('type') == 'tool_use']
 
         for tb in thinking_blocks:
-            thinking_text = truncate(tb.get('thinking', ''), TOOL_INPUT_CAP)
+            thinking_html = render_truncatable(tb.get('thinking', ''), TOOL_INPUT_CAP, 'thinking-block')
             parts_html.append(f'''  <div class="trace-step">
     <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
     <div class="step-content">
       <div class="step-label assistant"><div class="step-type-dot"></div>Assistant</div>
       <div class="thinking-label">Thinking</div>
-      <div class="thinking-block">{h(thinking_text)}</div>
+      {thinking_html}
     </div>
   </div>''')
             local_step += 1
@@ -842,7 +863,7 @@ def render_trace_event(event, step_num, is_last_before_result, is_failing):
                     display_text = raw_text
             else:
                 display_text = raw_text
-            display_text = truncate(display_text, TOOL_RESULT_CAP)
+            text_output_html = render_truncatable(display_text, TOOL_RESULT_CAP, 'step-text-output')
             # Build per-step metadata chips from message.usage
             usage = message.get('usage', {}) if isinstance(message, dict) else {}
             meta_chips_html = ''
@@ -869,7 +890,7 @@ def render_trace_event(event, step_num, is_last_before_result, is_failing):
     <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
     <div class="step-content">
       <div class="step-label assistant"><div class="step-type-dot"></div>Assistant{failure_badge}</div>
-      <div class="step-text-output">{h(display_text)}</div>
+      {text_output_html}
       {meta_chips_html}
     </div>
   </div>''')
@@ -884,11 +905,22 @@ def render_trace_event(event, step_num, is_last_before_result, is_failing):
                 input_lines = []
                 for k, v in list(tool_input.items())[:10]:
                     val_str = json.dumps(v) if not isinstance(v, str) else v
-                    val_str = truncate(val_str, TOOL_INPUT_CAP)
-                    input_lines.append(f'<span class="key">{h(k)}:</span> <span class="val">{h(val_str)}</span>')
-                input_html = '\n'.join(input_lines)
+                    trunc_val, full_val, was_trunc = truncate(val_str, TOOL_INPUT_CAP)
+                    if was_trunc:
+                        _toggle_counter[0] += 1
+                        uid = _toggle_counter[0]
+                        total_chars = len(full_val)
+                        val_fragment = (
+                            f'<span class="truncated-content val" id="trunc-{uid}">{h(trunc_val)}</span>'
+                            f'<span class="full-content val" id="full-{uid}">{h(full_val)}</span>'
+                            f'<button class="show-full-btn" onclick="toggleFull({uid})">show full output ({total_chars:,} chars)</button>'
+                        )
+                    else:
+                        val_fragment = f'<span class="val">{h(trunc_val)}</span>'
+                    input_lines.append(f'<span class="key">{h(k)}:</span> {val_fragment}')
+                input_box_html = f'<div class="tool-input">' + '\n'.join(input_lines) + '</div>'
             else:
-                input_html = h(truncate(str(tool_input), TOOL_INPUT_CAP))
+                input_box_html = render_truncatable(str(tool_input), TOOL_INPUT_CAP, 'tool-input')
             tool_id_chip = ''
             if tool_use_id:
                 tool_id_chip = f'<div class="step-meta"><div class="meta-chip"><span class="chip-label">tool_use_id:</span><span class="chip-value">{h(tool_use_id)}</span></div></div>'
@@ -897,7 +929,7 @@ def render_trace_event(event, step_num, is_last_before_result, is_failing):
     <div class="step-content">
       <div class="step-label tool-call"><div class="step-type-dot"></div>Tool Call</div>
       <div class="step-tool-name"><span class="tool-fn">{h(tool_name)}</span></div>
-      <div class="tool-input">{input_html}</div>
+      {input_box_html}
       {tool_id_chip}
     </div>
   </div>''')
@@ -929,8 +961,8 @@ def render_trace_event(event, step_num, is_last_before_result, is_failing):
                 else:
                     tr_text = str(tr_content)
                 result_len = len(tr_text)
-                tr_text = truncate(tr_text, TOOL_RESULT_CAP)
                 len_label = f'{result_len} chars' if result_len < 10000 else f'{result_len // 1000}k chars'
+                tr_result_html = render_truncatable(tr_text, TOOL_RESULT_CAP, 'tool-result-box')
                 parent_id = tr.get('tool_use_id', '')
                 parent_chip = ''
                 if parent_id:
@@ -939,7 +971,7 @@ def render_trace_event(event, step_num, is_last_before_result, is_failing):
     <div class="step-gutter"><div class="step-number">{local_step}</div><div class="step-line"></div></div>
     <div class="step-content">
       <div class="step-label tool-result"><div class="step-type-dot"></div>Tool Result <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:4px">{h(len_label)}</span></div>
-      <div class="tool-result-box">{h(tr_text)}</div>
+      {tr_result_html}
       {parent_chip}
     </div>
   </div>''')
@@ -1197,6 +1229,28 @@ def generate_trace_page(trace, agent, scenario_id, scenario_name, score, duratio
 </div>
 
 </div>
+<script>
+function toggleFull(id) {{
+  var trunc = document.getElementById('trunc-' + id);
+  var full = document.getElementById('full-' + id);
+  var btn = document.querySelector('button[onclick="toggleFull(' + id + ')"]');
+  if (!trunc || !full || !btn) return;
+  if (full.style.display === 'none' || full.style.display === '') {{
+    trunc.style.display = 'none';
+    full.style.display = 'block';
+    btn.textContent = 'show less';
+  }} else {{
+    trunc.style.display = 'block';
+    full.style.display = 'none';
+    btn.textContent = btn.dataset.origLabel || 'show full output';
+  }}
+}}
+document.addEventListener('DOMContentLoaded', function() {{
+  document.querySelectorAll('.show-full-btn').forEach(function(btn) {{
+    btn.dataset.origLabel = btn.textContent;
+  }});
+}});
+</script>
 </body>
 </html>'''
 
@@ -1213,8 +1267,9 @@ def generate_trace_page(trace, agent, scenario_id, scenario_name, score, duratio
 traces_dir = os.path.join(reports_dir, 'traces')
 report_filename = os.path.basename(output_file)
 
-# Clear stale trace files from previous runs — traces are always regenerated fresh.
-if os.path.isdir(traces_dir):
+# Clear stale trace files only when generating from a complete baseline run.
+# Partial runs (single agent/scenario) should not wipe traces from other scenarios.
+if os.path.isdir(traces_dir) and current_run and current_run.get('is_complete_baseline', False):
     import glob as _glob
     for _f in _glob.glob(os.path.join(traces_dir, '*.html')):
         try:

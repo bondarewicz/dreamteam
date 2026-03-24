@@ -30,7 +30,7 @@ graders:
 prompt: |
   A logistics platform handles parcel delivery. The following rules have been described by a product manager:
 
-  "A shipment can be created when there is a pickup address and a delivery address. Once in transit, it cannot be sent back to pending. Delivered shipments are final — their state cannot change. Weight must be positive and cannot exceed 1000 kg. We charge by weight bracket: 0-10 kg is standard, 10-50 kg is heavy, over 50 kg is freight."
+  "A shipment can be created when there is a pickup address and a delivery address. Once in transit, it cannot be sent back to pending. Delivered shipments are final — their state cannot change. Weight must be positive and cannot exceed 1000 kg. We charge by weight bracket: under 10 kg is standard, 10 kg up to but not including 50 kg is heavy (10 kg is the lower boundary, inclusive), 50 kg and above is freight (50 kg is the lower boundary, inclusive)."
 
   Read this description and produce a domain analysis using your full output schema. Include: domain_analysis, business_rules (with invariant flags), acceptance_criteria (with Given/When/Then), and confidence assessment.
 

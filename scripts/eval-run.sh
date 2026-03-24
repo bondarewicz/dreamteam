@@ -308,7 +308,8 @@ def run_single_agent_call(agent, scenario_id, prompt):
     if shutil.which('claude'):
         try:
             proc = subprocess.run(
-                ['claude', '-p', '--agent', agent, '--output-format', 'stream-json', '--verbose'],
+                ['claude', '-p', '--agent', agent, '--output-format', 'stream-json', '--verbose',
+                 '--append-system-prompt', 'EVAL MODE: You are running in a headless evaluation. Do NOT enter plan mode. Do NOT call EnterPlanMode. Do NOT wait for approval. Execute the task directly and produce your complete final output immediately.'],
                 input=prompt,
                 capture_output=True,
                 text=True
