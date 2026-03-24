@@ -1,0 +1,249 @@
+{
+  "agent": "pippen",
+  "scenario_id": "scenario-16-zero-downtime-migration",
+  "agent_output": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      {\n        \"from\": \"application (dual-write in Step 2)\",\n        \"to\": \"users.preferences_json + user_preferences table\",\n        \"status\": \"risk\",\n        \"issue\": \"During Step 3 backfill, a concurrent dual-write and backfill copy can race on the same user row. Backfill reads stale JSON blob and overwrites a newer dual-written row in user_preferences, causing silent data loss.\"\n      },\n      {\n        \"from\": \"application (read switch in Step 4)\",\n        \"to\": \"user_preferences table\",\n        \"status\": \"broken\",\n        \"issue\": \"Rolling deployment means instances split between old reader (users.preferences_json) and new reader (user_preferences) simultaneously. With no feature flag, a user hitting the new-reader instance before backfill is verified complete may get empty/stale preferences. This is not theoretical — it is the default behavior of rolling deploys.\"\n      },\n      {\n        \"from\": \"backfill job (Step 3)\",\n        \"to\": \"user_preferences table\",\n        \"status\": \"risk\",\n        \"issue\": \"Backfill has no progress tracking or resumability. If it crashes or times out mid-run, there is no way to know which users were migrated and which were not. Re-running from scratch wastes time and re-introduces the race condition window.\"\n      },\n      {\n        \"from\": \"Step 3 (backfill)\",\n        \"to\": \"Step 4 (read switch)\",\n        \"status\": \"broken\",\n        \"issue\": \"No validation gate between backfill completion and read-source cutover. Nothing prevents an operator or CI/CD pipeline from deploying Step 4 while backfill is still running or has silently failed.\"\n      }\n    ],\n    \"contract_compliance\": \"The dual-write contract in Step 2 is sound in principle but the backfill in Step 3 does not respect the dual-write invariant — it can overwrite newer data with older data because it lacks a 'write only if not exists or older' guard (e.g., INSERT ... ON CONFLICT DO NOTHING or a updated_at comparison).\",\n    \"data_flow_integrity\": \"Compromised. Three concrete data integrity risks: (1) backfill-vs-dual-write race condition, (2) incomplete backfill with no detection, (3) split-brain reads during rolling deploy of Step 4.\"\n  },\n\n  \"observability_review\": {\n    \"logging\": {\n      \"coverage\": \"missing\",\n      \"gaps\": [\n        \"No logging mentioned for backfill progress (rows processed, rows skipped, rows failed)\",\n        \"No logging for which read source an instance is using — critical during rolling deploy\",\n        \"No audit trail for dual-write discrepancies\"\n      ]\n    },\n    \"metrics\": {\n      \"coverage\": \"missing\",\n      \"gaps\": [\n        \"No row-count comparison metric between users.preferences_json and user_preferences to detect backfill completeness\",\n        \"No latency metrics for the new read path vs old read path\",\n        \"No error rate metric for preference reads/writes per source table\",\n        \"No backfill job progress metric (percent complete, rows/sec)\"\n      ]\n    },\n    \"tracing\": {\n      \"coverage\": \"missing\",\n      \"gaps\": [\n        \"No trace annotation indicating which read source served a given request — makes debugging split-brain behavior during Step 4 rollout nearly impossible\"\n      ]\n    },\n    \"debugging_capability\": \"Poor. If a user reports missing or stale preferences during or after migration, there is no way to determine: (a) whether the backfill processed that user, (b) which instance served the request, (c) which table was read from, or (d) whether a race condition corrupted the data. The on-call engineer at 3am has no tools to diagnose this.\"\n  },\n\n  \"resilience_assessment\": {\n    \"failure_modes\": [\n      {\n        \"scenario\": \"Backfill job crashes at 60% completion\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Add cursor-based progress tracking (e.g., last processed user_id stored in a migration_state table or external store). On restart, resume from cursor. Log checkpoint every N rows.\"\n      },\n      {\n        \"scenario\": \"Backfill overwrites newer dual-written data with stale JSON blob data\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Use INSERT ... ON CONFLICT (user_id) DO NOTHING, or compare updated_at timestamps. The backfill must never overwrite data that the dual-write path has already written.\"\n      },\n      {\n        \"scenario\": \"Step 4 deployed before backfill finishes — some users have no row in user_preferences\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Add a mandatory validation gate: a script or check that compares SELECT COUNT(*) from both sources and blocks deployment if they diverge beyond a threshold. Wire this into CI/CD as a deployment precondition.\"\n      },\n      {\n        \"scenario\": \"During Step 4 rolling deploy, user hits new-reader instance then old-reader instance on next request — sees inconsistent data\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Use a feature flag (e.g., LaunchDarkly, environment variable, database flag) to atomically switch the read source across all instances simultaneously, decoupled from the deployment. Deploy the code first (reads feature flag), then flip the flag once all instances have the new code.\"\n      },\n      {\n        \"scenario\": \"Step 6 column drop on a large users table causes table lock\",\n        \"handling\": \"partial\",\n        \"recommendation\": \"In PostgreSQL, DROP COLUMN marks the column as dropped without rewriting the table (fast). In MySQL, ALTER TABLE rewrites the entire table and locks it. Confirm your RDBMS behavior. Consider pg_repack or pt-online-schema-change if applicable.\"\n      }\n    ],\n    \"retry_config\": \"Not addressed. Backfill job should have per-row retry with exponential backoff and dead-letter logging for rows that fail after max retries.\",\n    \"timeout_config\": \"Not addressed. Backfill job needs a statement timeout to avoid long-running transactions that block other operations. Dual-write path should have a timeout so that failure to write to the new table does not block the primary write path.\",\n    \"circuit_breakers\": \"Not addressed. During dual-write phase, if user_preferences table becomes unavailable, the application should degrade gracefully — continue writing to users.preferences_json and alert, rather than failing the entire request.\",\n    \"graceful_degradation\": \"Not designed. The read switch in Step 4 has no fallback. If user_preferences returns no row, the application should fall back to users.preferences_json rather than returning empty/default preferences.\"\n  },\n\n  \"operational_readiness\": {\n    \"deployment_ready\": false,\n    \"rollback_capable\": false,\n    \"rollback_plan\": \"No rollback plan defined. If Step 4 causes data issues, rolling back to the old reader is safe only if dual-write is still active. But if Step 5 has already been deployed (stop dual-write), rollback to old reader serves stale data. The plan needs explicit rollback procedures for each step with hold periods between steps.\",\n    \"monitoring_coverage\": \"None specified. Minimum required: (1) row count parity check between tables, (2) read error rates by source, (3) backfill progress dashboard, (4) dual-write failure alerts.\",\n    \"on_call_documentation\": \"Missing. Need a runbook covering: how to check backfill status, how to force-switch read source back, how to re-run backfill for specific users, how to detect and repair race-condition corruption.\",\n    \"new_infrastructure_required\": {\n      \"new_env_vars\": [\n        \"PREFERENCE_READ_SOURCE feature flag (recommended to replace rolling deploy cutover)\"\n      ],\n      \"new_services\": [],\n      \"new_queues_topics\": [],\n      \"config_changes\": [\n        \"Feature flag for read source switching\",\n        \"Backfill job batch size and concurrency configuration\",\n        \"Backfill progress tracking table or external state store\"\n      ],\n      \"infra_provisioning\": [\n        \"user_preferences table (explicitly planned in Step 1)\",\n        \"Migration state tracking table or row for backfill cursor\"\n      ]\n    },\n    \"database_safety\": {\n      \"has_migrations\": true,\n      \"reversible\": true,\n      \"data_preserving\": true,\n      \"large_table_impact\": true,\n      \"details\": \"Step 1 (add table) is safe and instant. Step 3 (backfill) performs a full table scan of the users table and bulk inserts into user_preferences — on a large users table this will generate significant I/O and WAL/binlog volume. Must be batched with sleep intervals to avoid replication lag and lock contention. Step 6 (drop column) impact depends on RDBMS — PostgreSQL is fast, MySQL may lock the table for the duration of the rewrite.\"\n    },\n    \"verdict\": \"NOT READY\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"integration_gap\",\n      \"issue\": \"Backfill-to-dual-write race condition causes silent data loss\",\n      \"reason\": \"The backfill job (Step 3) can overwrite rows that the dual-write (Step 2) has already populated with newer data. No conflict resolution strategy (ON CONFLICT DO NOTHING, updated_at comparison) is specified. This is a data corruption bug, not an edge case — it will occur for any user who updates preferences while the backfill is running.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_gap\",\n      \"issue\": \"No validation gate between backfill completion and read cutover\",\n      \"reason\": \"Steps 3 and 4 have no automated or manual verification that all users have been migrated. Deploying Step 4 while backfill is incomplete or has silently failed results in users seeing empty preferences. This must be a hard gate in the deployment pipeline.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_gap\",\n      \"issue\": \"Rolling deploy of read-source switch creates split-brain reads without feature flag\",\n      \"reason\": \"During Step 4 rolling deploy, instances serve reads from different sources simultaneously. A user routed to a new-reader instance gets user_preferences data; the same user routed to an old-reader instance on the next request gets users.preferences_json data. If these diverge (e.g., due to incomplete backfill or race condition), the user sees flickering preferences. A feature flag is required to make the cutover atomic.\",\n      \"routed_to\": \"MJ\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 55,\n    \"high_confidence_areas\": [\n      \"The backfill race condition is a definite bug — concurrent write + copy with no conflict guard always risks data loss\",\n      \"The missing validation gate between Steps 3 and 4 is a clear operational gap\",\n      \"The rolling deploy split-brain issue is inherent to the described architecture\"\n    ],\n    \"low_confidence_areas\": [\n      \"RDBMS-specific behavior for Step 6 column drop (depends on PostgreSQL vs MySQL vs other)\",\n      \"Exact blast radius of backfill I/O on production — depends on table size and hardware\",\n      \"Whether existing application framework provides any implicit dual-read fallback\"\n    ],\n    \"assumptions\": [\n      \"No existing feature flag system is in place (based on plan stating 'no feature flag')\",\n      \"Backfill runs as a single process with no built-in idempotency\",\n      \"The application has no implicit fallback logic when a preference row is not found in user_preferences\"\n    ]\n  }\n}",
+  "agent_output_excerpt": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      {\n        \"from\": \"application (dual-write in Step 2)\",\n        \"to\": \"users.preferences_json + user_preferences table\",\n        \"status\": \"risk\",\n        \"issue\": \"During Step 3 backfill, a concurrent dual-write and backfill copy can race on the same user row. Backfill reads stale JSON blob and overwrites a newer dual-written row in user_preferences, causing silent data loss.\"\n      },\n      {\n        \"from\": \"application (re",
+  "duration_ms": 66594,
+  "tokens_used": 3080,
+  "input_tokens": 3,
+  "output_tokens": 3077,
+  "cost_usd": 0.11263374999999999,
+  "timestamp": "2026-03-24T18:40:38Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "7ce78a45-537d-4ed7-9a4b-6c85e5c72677",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api"
+      ],
+      "plugins": [
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "6eefd4b4-4574-428f-86be-dc3357cabdc2",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01PWY9rTg8fwuHiaFxYkzsKm",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me analyze this zero-downtime migration plan for operational readiness.\n\nKey issues I see:\n\n1. Step 3→4 gap: No validation that backfill is complete before switching reads\n2. Step 4 rolling deployment: During rollout, some instances read from old source, some from new — if backfill incomplete, new-reader instances serve stale/missing data\n3. Backfill job: No progress tracking, no resumability — if it crashes midway, you don't know where it stopped\n4. No feature flag: Can't atomically switch all instances simultaneously\n5. Race condition: During Step 3 backfill, new writes go to both tables (dual-write), but what about rows being backfilled that get updated concurrently? The backfill could overwrite a newer dual-write with older data from the JSON blob.\n\n\n6. I should now document these findings in a structured assessment that the team can act on.",
+            "signature": "Es0HCkYIDBgCKkAjaCgXp3rNzLZfGC/MD7XGL/9USYiNGhGfUGi/OR1xgRLoPwZq3LUvqTsWvboKZg5tPTc0SkUABj5kQXzzSqkOEgwC4n+wFG4+zVz94ZEaDC39qwHQdRxMEHomWiIw/CNj3Tv2IgLTADMIIMDvtcmZR75loP9Vc/0Ogwp3Jih25ppNFFQygiLnSWUniTxqKrQGrPKKJ2hqGGUTO8Ba7R99/AFgzcoH616eqdnfYIwlxOdU89kWWAHd+unWy5cypunzx4ISC91exj14CN5I8LBPbbGoWkEPCbjaspWBPKGH1YUGV/wnmHW7o9XG3XlvVG88EwjZSeBHQjGaMSy7GGwBUGN4AYYDd2KlYp+uiICyvDobPloh19TtcLKbtxHlahzWitLE+xkcC4X72s+xLg0cTWYAls8dE565OJK3oduyB9C3KMEQ72OU57wiu5papASFuXbGRZEURPujE0Crk3DYv1uyYP8PmP1sPCRYFhBTmjI/Ck++8m8mQMILfCnp9CMYPtw2rpQSfN3HW78x+Z97qo4wTvAIDzvhm9sbGKA+0iBCfoQUfBK5AmSKO4dfbI/qhxCamlQP6pLXlXTanUNNY7doRxXgb0NnhxoNNXIMKhPfzdF7Qv7EQPBfyYAB9krd4nUyh/18NPuC4ih1aHLSpbp0HINZDmFbg8ijg6dMfJdCOhJneHBjjMRYsEnt45kFh0/QkI30RzXPbSFPYK2iX7RbIAsOS2RD5azHH2Q38NATyUp9GN0q9WbmFWjNAT6T05bVl5eM/exSxp2L404U+l0lue/pjofbHG1Lu+KJtR2JTE9cQ7Uv81o7r8evCm33LdJCQsMEItakZar+geyQOkgvlo4Fhq2uOWoj6zeE628LXYH7qxCH6IGMmsTnpyIUNZ2LoMvzjXEmXoLktqPVWSzuoqlldVY5PRDpp/uoVlBJVxxJly+12NYzD8bEfRnVHIExIHqpmtcb1xXuRVX7xUR44QAqlpdixWkFqruq+4p4atiaJb0M2QzgRncYHEJEFNImkhPzkV90OaLkWwsgLq688wy56tD0iYPJ9PX6RsTO3GpCXkkUNC/QHSd5TDG89g4I5vkB/j3VFyBR46Zq9KzMsiQdITM5AHZcJ6eUAD2RBt9aDqbTxXOQG9J83VJSZ42UHRLRBN4mmxFclxv6jwDCRLXH3pIo9FANKbn4THOEC3Vbf35eLR4UxD2ZTvqIKf8bDjMwHQg/h5EMjzS6WhaftPZW9t9vNYr3PgVH8Xk8SIc3Z2gqL+xzWtsIb/F1rBpjkxgB"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 5711,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 5711
+          },
+          "output_tokens": 35,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "7ce78a45-537d-4ed7-9a4b-6c85e5c72677",
+      "uuid": "1321d34b-16e9-4bc8-8908-9aa923400ad3"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01PWY9rTg8fwuHiaFxYkzsKm",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      {\n        \"from\": \"application (dual-write in Step 2)\",\n        \"to\": \"users.preferences_json + user_preferences table\",\n        \"status\": \"risk\",\n        \"issue\": \"During Step 3 backfill, a concurrent dual-write and backfill copy can race on the same user row. Backfill reads stale JSON blob and overwrites a newer dual-written row in user_preferences, causing silent data loss.\"\n      },\n      {\n        \"from\": \"application (read switch in Step 4)\",\n        \"to\": \"user_preferences table\",\n        \"status\": \"broken\",\n        \"issue\": \"Rolling deployment means instances split between old reader (users.preferences_json) and new reader (user_preferences) simultaneously. With no feature flag, a user hitting the new-reader instance before backfill is verified complete may get empty/stale preferences. This is not theoretical — it is the default behavior of rolling deploys.\"\n      },\n      {\n        \"from\": \"backfill job (Step 3)\",\n        \"to\": \"user_preferences table\",\n        \"status\": \"risk\",\n        \"issue\": \"Backfill has no progress tracking or resumability. If it crashes or times out mid-run, there is no way to know which users were migrated and which were not. Re-running from scratch wastes time and re-introduces the race condition window.\"\n      },\n      {\n        \"from\": \"Step 3 (backfill)\",\n        \"to\": \"Step 4 (read switch)\",\n        \"status\": \"broken\",\n        \"issue\": \"No validation gate between backfill completion and read-source cutover. Nothing prevents an operator or CI/CD pipeline from deploying Step 4 while backfill is still running or has silently failed.\"\n      }\n    ],\n    \"contract_compliance\": \"The dual-write contract in Step 2 is sound in principle but the backfill in Step 3 does not respect the dual-write invariant — it can overwrite newer data with older data because it lacks a 'write only if not exists or older' guard (e.g., INSERT ... ON CONFLICT DO NOTHING or a updated_at comparison).\",\n    \"data_flow_integrity\": \"Compromised. Three concrete data integrity risks: (1) backfill-vs-dual-write race condition, (2) incomplete backfill with no detection, (3) split-brain reads during rolling deploy of Step 4.\"\n  },\n\n  \"observability_review\": {\n    \"logging\": {\n      \"coverage\": \"missing\",\n      \"gaps\": [\n        \"No logging mentioned for backfill progress (rows processed, rows skipped, rows failed)\",\n        \"No logging for which read source an instance is using — critical during rolling deploy\",\n        \"No audit trail for dual-write discrepancies\"\n      ]\n    },\n    \"metrics\": {\n      \"coverage\": \"missing\",\n      \"gaps\": [\n        \"No row-count comparison metric between users.preferences_json and user_preferences to detect backfill completeness\",\n        \"No latency metrics for the new read path vs old read path\",\n        \"No error rate metric for preference reads/writes per source table\",\n        \"No backfill job progress metric (percent complete, rows/sec)\"\n      ]\n    },\n    \"tracing\": {\n      \"coverage\": \"missing\",\n      \"gaps\": [\n        \"No trace annotation indicating which read source served a given request — makes debugging split-brain behavior during Step 4 rollout nearly impossible\"\n      ]\n    },\n    \"debugging_capability\": \"Poor. If a user reports missing or stale preferences during or after migration, there is no way to determine: (a) whether the backfill processed that user, (b) which instance served the request, (c) which table was read from, or (d) whether a race condition corrupted the data. The on-call engineer at 3am has no tools to diagnose this.\"\n  },\n\n  \"resilience_assessment\": {\n    \"failure_modes\": [\n      {\n        \"scenario\": \"Backfill job crashes at 60% completion\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Add cursor-based progress tracking (e.g., last processed user_id stored in a migration_state table or external store). On restart, resume from cursor. Log checkpoint every N rows.\"\n      },\n      {\n        \"scenario\": \"Backfill overwrites newer dual-written data with stale JSON blob data\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Use INSERT ... ON CONFLICT (user_id) DO NOTHING, or compare updated_at timestamps. The backfill must never overwrite data that the dual-write path has already written.\"\n      },\n      {\n        \"scenario\": \"Step 4 deployed before backfill finishes — some users have no row in user_preferences\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Add a mandatory validation gate: a script or check that compares SELECT COUNT(*) from both sources and blocks deployment if they diverge beyond a threshold. Wire this into CI/CD as a deployment precondition.\"\n      },\n      {\n        \"scenario\": \"During Step 4 rolling deploy, user hits new-reader instance then old-reader instance on next request — sees inconsistent data\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Use a feature flag (e.g., LaunchDarkly, environment variable, database flag) to atomically switch the read source across all instances simultaneously, decoupled from the deployment. Deploy the code first (reads feature flag), then flip the flag once all instances have the new code.\"\n      },\n      {\n        \"scenario\": \"Step 6 column drop on a large users table causes table lock\",\n        \"handling\": \"partial\",\n        \"recommendation\": \"In PostgreSQL, DROP COLUMN marks the column as dropped without rewriting the table (fast). In MySQL, ALTER TABLE rewrites the entire table and locks it. Confirm your RDBMS behavior. Consider pg_repack or pt-online-schema-change if applicable.\"\n      }\n    ],\n    \"retry_config\": \"Not addressed. Backfill job should have per-row retry with exponential backoff and dead-letter logging for rows that fail after max retries.\",\n    \"timeout_config\": \"Not addressed. Backfill job needs a statement timeout to avoid long-running transactions that block other operations. Dual-write path should have a timeout so that failure to write to the new table does not block the primary write path.\",\n    \"circuit_breakers\": \"Not addressed. During dual-write phase, if user_preferences table becomes unavailable, the application should degrade gracefully — continue writing to users.preferences_json and alert, rather than failing the entire request.\",\n    \"graceful_degradation\": \"Not designed. The read switch in Step 4 has no fallback. If user_preferences returns no row, the application should fall back to users.preferences_json rather than returning empty/default preferences.\"\n  },\n\n  \"operational_readiness\": {\n    \"deployment_ready\": false,\n    \"rollback_capable\": false,\n    \"rollback_plan\": \"No rollback plan defined. If Step 4 causes data issues, rolling back to the old reader is safe only if dual-write is still active. But if Step 5 has already been deployed (stop dual-write), rollback to old reader serves stale data. The plan needs explicit rollback procedures for each step with hold periods between steps.\",\n    \"monitoring_coverage\": \"None specified. Minimum required: (1) row count parity check between tables, (2) read error rates by source, (3) backfill progress dashboard, (4) dual-write failure alerts.\",\n    \"on_call_documentation\": \"Missing. Need a runbook covering: how to check backfill status, how to force-switch read source back, how to re-run backfill for specific users, how to detect and repair race-condition corruption.\",\n    \"new_infrastructure_required\": {\n      \"new_env_vars\": [\n        \"PREFERENCE_READ_SOURCE feature flag (recommended to replace rolling deploy cutover)\"\n      ],\n      \"new_services\": [],\n      \"new_queues_topics\": [],\n      \"config_changes\": [\n        \"Feature flag for read source switching\",\n        \"Backfill job batch size and concurrency configuration\",\n        \"Backfill progress tracking table or external state store\"\n      ],\n      \"infra_provisioning\": [\n        \"user_preferences table (explicitly planned in Step 1)\",\n        \"Migration state tracking table or row for backfill cursor\"\n      ]\n    },\n    \"database_safety\": {\n      \"has_migrations\": true,\n      \"reversible\": true,\n      \"data_preserving\": true,\n      \"large_table_impact\": true,\n      \"details\": \"Step 1 (add table) is safe and instant. Step 3 (backfill) performs a full table scan of the users table and bulk inserts into user_preferences — on a large users table this will generate significant I/O and WAL/binlog volume. Must be batched with sleep intervals to avoid replication lag and lock contention. Step 6 (drop column) impact depends on RDBMS — PostgreSQL is fast, MySQL may lock the table for the duration of the rewrite.\"\n    },\n    \"verdict\": \"NOT READY\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"integration_gap\",\n      \"issue\": \"Backfill-to-dual-write race condition causes silent data loss\",\n      \"reason\": \"The backfill job (Step 3) can overwrite rows that the dual-write (Step 2) has already populated with newer data. No conflict resolution strategy (ON CONFLICT DO NOTHING, updated_at comparison) is specified. This is a data corruption bug, not an edge case — it will occur for any user who updates preferences while the backfill is running.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_gap\",\n      \"issue\": \"No validation gate between backfill completion and read cutover\",\n      \"reason\": \"Steps 3 and 4 have no automated or manual verification that all users have been migrated. Deploying Step 4 while backfill is incomplete or has silently failed results in users seeing empty preferences. This must be a hard gate in the deployment pipeline.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_gap\",\n      \"issue\": \"Rolling deploy of read-source switch creates split-brain reads without feature flag\",\n      \"reason\": \"During Step 4 rolling deploy, instances serve reads from different sources simultaneously. A user routed to a new-reader instance gets user_preferences data; the same user routed to an old-reader instance on the next request gets users.preferences_json data. If these diverge (e.g., due to incomplete backfill or race condition), the user sees flickering preferences. A feature flag is required to make the cutover atomic.\",\n      \"routed_to\": \"MJ\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 55,\n    \"high_confidence_areas\": [\n      \"The backfill race condition is a definite bug — concurrent write + copy with no conflict guard always risks data loss\",\n      \"The missing validation gate between Steps 3 and 4 is a clear operational gap\",\n      \"The rolling deploy split-brain issue is inherent to the described architecture\"\n    ],\n    \"low_confidence_areas\": [\n      \"RDBMS-specific behavior for Step 6 column drop (depends on PostgreSQL vs MySQL vs other)\",\n      \"Exact blast radius of backfill I/O on production — depends on table size and hardware\",\n      \"Whether existing application framework provides any implicit dual-read fallback\"\n    ],\n    \"assumptions\": [\n      \"No existing feature flag system is in place (based on plan stating 'no feature flag')\",\n      \"Backfill runs as a single process with no built-in idempotency\",\n      \"The application has no implicit fallback logic when a preference row is not found in user_preferences\"\n    ]\n  }\n}"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 5711,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 5711
+          },
+          "output_tokens": 35,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "7ce78a45-537d-4ed7-9a4b-6c85e5c72677",
+      "uuid": "b7a5f796-f581-4a0d-b25d-8fc0b52a92c8"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774393200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "893ccc74-f8d4-42f3-9bf2-2e409aab91a5",
+      "session_id": "7ce78a45-537d-4ed7-9a4b-6c85e5c72677"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 65950,
+      "duration_api_ms": 65936,
+      "num_turns": 1,
+      "result": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      {\n        \"from\": \"application (dual-write in Step 2)\",\n        \"to\": \"users.preferences_json + user_preferences table\",\n        \"status\": \"risk\",\n        \"issue\": \"During Step 3 backfill, a concurrent dual-write and backfill copy can race on the same user row. Backfill reads stale JSON blob and overwrites a newer dual-written row in user_preferences, causing silent data loss.\"\n      },\n      {\n        \"from\": \"application (read switch in Step 4)\",\n        \"to\": \"user_preferences table\",\n        \"status\": \"broken\",\n        \"issue\": \"Rolling deployment means instances split between old reader (users.preferences_json) and new reader (user_preferences) simultaneously. With no feature flag, a user hitting the new-reader instance before backfill is verified complete may get empty/stale preferences. This is not theoretical — it is the default behavior of rolling deploys.\"\n      },\n      {\n        \"from\": \"backfill job (Step 3)\",\n        \"to\": \"user_preferences table\",\n        \"status\": \"risk\",\n        \"issue\": \"Backfill has no progress tracking or resumability. If it crashes or times out mid-run, there is no way to know which users were migrated and which were not. Re-running from scratch wastes time and re-introduces the race condition window.\"\n      },\n      {\n        \"from\": \"Step 3 (backfill)\",\n        \"to\": \"Step 4 (read switch)\",\n        \"status\": \"broken\",\n        \"issue\": \"No validation gate between backfill completion and read-source cutover. Nothing prevents an operator or CI/CD pipeline from deploying Step 4 while backfill is still running or has silently failed.\"\n      }\n    ],\n    \"contract_compliance\": \"The dual-write contract in Step 2 is sound in principle but the backfill in Step 3 does not respect the dual-write invariant — it can overwrite newer data with older data because it lacks a 'write only if not exists or older' guard (e.g., INSERT ... ON CONFLICT DO NOTHING or a updated_at comparison).\",\n    \"data_flow_integrity\": \"Compromised. Three concrete data integrity risks: (1) backfill-vs-dual-write race condition, (2) incomplete backfill with no detection, (3) split-brain reads during rolling deploy of Step 4.\"\n  },\n\n  \"observability_review\": {\n    \"logging\": {\n      \"coverage\": \"missing\",\n      \"gaps\": [\n        \"No logging mentioned for backfill progress (rows processed, rows skipped, rows failed)\",\n        \"No logging for which read source an instance is using — critical during rolling deploy\",\n        \"No audit trail for dual-write discrepancies\"\n      ]\n    },\n    \"metrics\": {\n      \"coverage\": \"missing\",\n      \"gaps\": [\n        \"No row-count comparison metric between users.preferences_json and user_preferences to detect backfill completeness\",\n        \"No latency metrics for the new read path vs old read path\",\n        \"No error rate metric for preference reads/writes per source table\",\n        \"No backfill job progress metric (percent complete, rows/sec)\"\n      ]\n    },\n    \"tracing\": {\n      \"coverage\": \"missing\",\n      \"gaps\": [\n        \"No trace annotation indicating which read source served a given request — makes debugging split-brain behavior during Step 4 rollout nearly impossible\"\n      ]\n    },\n    \"debugging_capability\": \"Poor. If a user reports missing or stale preferences during or after migration, there is no way to determine: (a) whether the backfill processed that user, (b) which instance served the request, (c) which table was read from, or (d) whether a race condition corrupted the data. The on-call engineer at 3am has no tools to diagnose this.\"\n  },\n\n  \"resilience_assessment\": {\n    \"failure_modes\": [\n      {\n        \"scenario\": \"Backfill job crashes at 60% completion\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Add cursor-based progress tracking (e.g., last processed user_id stored in a migration_state table or external store). On restart, resume from cursor. Log checkpoint every N rows.\"\n      },\n      {\n        \"scenario\": \"Backfill overwrites newer dual-written data with stale JSON blob data\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Use INSERT ... ON CONFLICT (user_id) DO NOTHING, or compare updated_at timestamps. The backfill must never overwrite data that the dual-write path has already written.\"\n      },\n      {\n        \"scenario\": \"Step 4 deployed before backfill finishes — some users have no row in user_preferences\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Add a mandatory validation gate: a script or check that compares SELECT COUNT(*) from both sources and blocks deployment if they diverge beyond a threshold. Wire this into CI/CD as a deployment precondition.\"\n      },\n      {\n        \"scenario\": \"During Step 4 rolling deploy, user hits new-reader instance then old-reader instance on next request — sees inconsistent data\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"Use a feature flag (e.g., LaunchDarkly, environment variable, database flag) to atomically switch the read source across all instances simultaneously, decoupled from the deployment. Deploy the code first (reads feature flag), then flip the flag once all instances have the new code.\"\n      },\n      {\n        \"scenario\": \"Step 6 column drop on a large users table causes table lock\",\n        \"handling\": \"partial\",\n        \"recommendation\": \"In PostgreSQL, DROP COLUMN marks the column as dropped without rewriting the table (fast). In MySQL, ALTER TABLE rewrites the entire table and locks it. Confirm your RDBMS behavior. Consider pg_repack or pt-online-schema-change if applicable.\"\n      }\n    ],\n    \"retry_config\": \"Not addressed. Backfill job should have per-row retry with exponential backoff and dead-letter logging for rows that fail after max retries.\",\n    \"timeout_config\": \"Not addressed. Backfill job needs a statement timeout to avoid long-running transactions that block other operations. Dual-write path should have a timeout so that failure to write to the new table does not block the primary write path.\",\n    \"circuit_breakers\": \"Not addressed. During dual-write phase, if user_preferences table becomes unavailable, the application should degrade gracefully — continue writing to users.preferences_json and alert, rather than failing the entire request.\",\n    \"graceful_degradation\": \"Not designed. The read switch in Step 4 has no fallback. If user_preferences returns no row, the application should fall back to users.preferences_json rather than returning empty/default preferences.\"\n  },\n\n  \"operational_readiness\": {\n    \"deployment_ready\": false,\n    \"rollback_capable\": false,\n    \"rollback_plan\": \"No rollback plan defined. If Step 4 causes data issues, rolling back to the old reader is safe only if dual-write is still active. But if Step 5 has already been deployed (stop dual-write), rollback to old reader serves stale data. The plan needs explicit rollback procedures for each step with hold periods between steps.\",\n    \"monitoring_coverage\": \"None specified. Minimum required: (1) row count parity check between tables, (2) read error rates by source, (3) backfill progress dashboard, (4) dual-write failure alerts.\",\n    \"on_call_documentation\": \"Missing. Need a runbook covering: how to check backfill status, how to force-switch read source back, how to re-run backfill for specific users, how to detect and repair race-condition corruption.\",\n    \"new_infrastructure_required\": {\n      \"new_env_vars\": [\n        \"PREFERENCE_READ_SOURCE feature flag (recommended to replace rolling deploy cutover)\"\n      ],\n      \"new_services\": [],\n      \"new_queues_topics\": [],\n      \"config_changes\": [\n        \"Feature flag for read source switching\",\n        \"Backfill job batch size and concurrency configuration\",\n        \"Backfill progress tracking table or external state store\"\n      ],\n      \"infra_provisioning\": [\n        \"user_preferences table (explicitly planned in Step 1)\",\n        \"Migration state tracking table or row for backfill cursor\"\n      ]\n    },\n    \"database_safety\": {\n      \"has_migrations\": true,\n      \"reversible\": true,\n      \"data_preserving\": true,\n      \"large_table_impact\": true,\n      \"details\": \"Step 1 (add table) is safe and instant. Step 3 (backfill) performs a full table scan of the users table and bulk inserts into user_preferences — on a large users table this will generate significant I/O and WAL/binlog volume. Must be batched with sleep intervals to avoid replication lag and lock contention. Step 6 (drop column) impact depends on RDBMS — PostgreSQL is fast, MySQL may lock the table for the duration of the rewrite.\"\n    },\n    \"verdict\": \"NOT READY\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"integration_gap\",\n      \"issue\": \"Backfill-to-dual-write race condition causes silent data loss\",\n      \"reason\": \"The backfill job (Step 3) can overwrite rows that the dual-write (Step 2) has already populated with newer data. No conflict resolution strategy (ON CONFLICT DO NOTHING, updated_at comparison) is specified. This is a data corruption bug, not an edge case — it will occur for any user who updates preferences while the backfill is running.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_gap\",\n      \"issue\": \"No validation gate between backfill completion and read cutover\",\n      \"reason\": \"Steps 3 and 4 have no automated or manual verification that all users have been migrated. Deploying Step 4 while backfill is incomplete or has silently failed results in users seeing empty preferences. This must be a hard gate in the deployment pipeline.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_gap\",\n      \"issue\": \"Rolling deploy of read-source switch creates split-brain reads without feature flag\",\n      \"reason\": \"During Step 4 rolling deploy, instances serve reads from different sources simultaneously. A user routed to a new-reader instance gets user_preferences data; the same user routed to an old-reader instance on the next request gets users.preferences_json data. If these diverge (e.g., due to incomplete backfill or race condition), the user sees flickering preferences. A feature flag is required to make the cutover atomic.\",\n      \"routed_to\": \"MJ\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 55,\n    \"high_confidence_areas\": [\n      \"The backfill race condition is a definite bug — concurrent write + copy with no conflict guard always risks data loss\",\n      \"The missing validation gate between Steps 3 and 4 is a clear operational gap\",\n      \"The rolling deploy split-brain issue is inherent to the described architecture\"\n    ],\n    \"low_confidence_areas\": [\n      \"RDBMS-specific behavior for Step 6 column drop (depends on PostgreSQL vs MySQL vs other)\",\n      \"Exact blast radius of backfill I/O on production — depends on table size and hardware\",\n      \"Whether existing application framework provides any implicit dual-read fallback\"\n    ],\n    \"assumptions\": [\n      \"No existing feature flag system is in place (based on plan stating 'no feature flag')\",\n      \"Backfill runs as a single process with no built-in idempotency\",\n      \"The application has no implicit fallback logic when a preference row is not found in user_preferences\"\n    ]\n  }\n}",
+      "stop_reason": "end_turn",
+      "session_id": "7ce78a45-537d-4ed7-9a4b-6c85e5c72677",
+      "total_cost_usd": 0.11263374999999999,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 5711,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 3077,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5711,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 3077,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 5711,
+          "webSearchRequests": 0,
+          "costUSD": 0.11263374999999999,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "258e7ef6-c611-4231-bfb4-6cf6fa54c113"
+    }
+  ]
+}

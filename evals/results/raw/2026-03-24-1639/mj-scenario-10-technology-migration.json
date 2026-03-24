@@ -1,0 +1,828 @@
+{
+  "agent": "mj",
+  "scenario_id": "scenario-10-technology-migration",
+  "agent_output": "Now I have sufficient context. The project already has an Order domain with a state machine and prior PostgreSQL ADR. Let me design the zero-downtime migration architecture.\n\n{\n  \"executive_summary\": \"Zero-downtime migration of the Order Management domain from MongoDB to PostgreSQL using a phased Strangler Fig pattern with dual-write and shadow-read verification. The architecture introduces a Database Abstraction Layer (DAL) to decouple the service from storage, then migrates in four phases: (1) schema setup + backfill, (2) dual-write with MongoDB as primary, (3) shadow-read verification and cutover to PostgreSQL as primary, (4) MongoDB decommission. At 200 writes/minute, dual-write overhead is negligible. The 8M document backfill completes in hours with batch processing using PostgreSQL advisory locks for coordination, consistent with the existing ADR.\",\n\n  \"architecture\": {\n    \"components\": [\n      {\n        \"name\": \"Order Service\",\n        \"responsibility\": \"Handles order CRUD, state transitions (leveraging existing OrderStateMachine), and exposes APIs to upstream consumers\",\n        \"boundaries\": \"Owns all order business logic. Delegates persistence to the Repository Abstraction Layer. Never directly references MongoDB or PostgreSQL drivers.\"\n      },\n      {\n        \"name\": \"Repository Abstraction Layer (DAL)\",\n        \"responsibility\": \"Provides a unified OrderRepository interface with swappable implementations: MongoOrderRepository, PostgresOrderRepository, DualWriteOrderRepository, and ShadowReadOrderRepository\",\n        \"boundaries\": \"Pure persistence concern. No business logic. Feature-flagged to switch between migration phases without code deploys.\"\n      },\n      {\n        \"name\": \"DualWriteOrderRepository\",\n        \"responsibility\": \"Writes to both MongoDB (primary) and PostgreSQL (secondary) synchronously. On PostgreSQL write failure, logs the failure and continues (MongoDB is source of truth in this phase). Emits write-discrepancy events for monitoring.\",\n        \"boundaries\": \"Temporary component. Removed after full cutover to PostgreSQL.\"\n      },\n      {\n        \"name\": \"ShadowReadOrderRepository\",\n        \"responsibility\": \"Reads from both datastores, returns MongoDB result, compares PostgreSQL result asynchronously. Logs any divergence. This validates read correctness before cutover.\",\n        \"boundaries\": \"Temporary component. Runs in Phase 3 only.\"\n      },\n      {\n        \"name\": \"Backfill Worker\",\n        \"responsibility\": \"Batch-migrates 8M existing MongoDB documents to PostgreSQL using cursor-based pagination. Uses PostgreSQL advisory locks for coordination across nodes (per existing ADR). Processes in batches of 1000, with configurable parallelism.\",\n        \"boundaries\": \"Runs as a separate process. Does not interfere with live traffic. Idempotent — can be restarted safely using upsert semantics on the PostgreSQL side.\"\n      },\n      {\n        \"name\": \"Reconciliation Job\",\n        \"responsibility\": \"Periodic (hourly during migration) job that samples records from both datastores and reports divergence. Provides confidence metrics for cutover readiness.\",\n        \"boundaries\": \"Read-only against both datastores. Uses advisory locks to prevent overlapping runs.\"\n      },\n      {\n        \"name\": \"Migration Feature Flag Controller\",\n        \"responsibility\": \"Controls which migration phase is active: MONGO_ONLY → DUAL_WRITE → SHADOW_READ → POSTGRES_PRIMARY → POSTGRES_ONLY. Supports per-node gradual rollout.\",\n        \"boundaries\": \"Configuration only. Can be environment variable, feature flag service, or config file.\"\n      },\n      {\n        \"name\": \"PostgreSQL Schema (orders database)\",\n        \"responsibility\": \"Relational schema for orders, order_line_items, payments with foreign key constraints, proper indexes, and ACID transaction support\",\n        \"boundaries\": \"Owned by Order Management bounded context. No other domain writes to these tables.\"\n      }\n    ],\n    \"interfaces\": [\n      {\n        \"from\": \"Order Service\",\n        \"to\": \"Repository Abstraction Layer\",\n        \"contract\": \"OrderRepository interface: findById(id): Order, findByCustomer(customerId, pagination): Order[], save(order): Order, updateStatus(id, newState): Order. All methods return domain objects, never raw DB documents/rows.\",\n        \"coupling_type\": \"loose — interface-based, implementation swappable at runtime\"\n      },\n      {\n        \"from\": \"DualWriteOrderRepository\",\n        \"to\": \"MongoOrderRepository\",\n        \"contract\": \"Delegates all writes to MongoDB first (synchronous, must succeed). Returns MongoDB result as canonical.\",\n        \"coupling_type\": \"temporal — both writes happen in same request path\"\n      },\n      {\n        \"from\": \"DualWriteOrderRepository\",\n        \"to\": \"PostgresOrderRepository\",\n        \"contract\": \"Secondary write to PostgreSQL. Failure is logged but does not fail the request. A repair queue captures failed writes for retry.\",\n        \"coupling_type\": \"temporal — but failure-tolerant\"\n      },\n      {\n        \"from\": \"ShadowReadOrderRepository\",\n        \"to\": \"Both Repositories\",\n        \"contract\": \"Reads from both, returns primary result, async-compares secondary. Divergence emitted as structured log event with both payloads.\",\n        \"coupling_type\": \"temporal — read path only, async comparison\"\n      },\n      {\n        \"from\": \"Backfill Worker\",\n        \"to\": \"MongoDB (read) + PostgreSQL (write)\",\n        \"contract\": \"Cursor-based read from MongoDB with batch size 1000. UPSERT into PostgreSQL keyed on order_id. Checkpoints last processed _id for resumability.\",\n        \"coupling_type\": \"batch — offline process\"\n      },\n      {\n        \"from\": \"Reconciliation Job\",\n        \"to\": \"Both Datastores\",\n        \"contract\": \"Samples N random order IDs, fetches from both stores, deep-compares, reports divergence rate as metric.\",\n        \"coupling_type\": \"read-only, periodic\"\n      }\n    ],\n    \"data_flow\": \"Phase 1 (MONGO_ONLY): Service → MongoRepo → MongoDB. Phase 2 (DUAL_WRITE): Service → DualWriteRepo → [MongoDB (primary, sync) + PostgreSQL (secondary, sync with failure tolerance)] + Backfill Worker migrates historical data. Phase 3 (SHADOW_READ): Service → ShadowReadRepo reads both, returns PostgreSQL result, compares MongoDB result async. Writes go to both via DualWriteRepo with PostgreSQL as primary. Phase 4 (POSTGRES_ONLY): Service → PostgresRepo → PostgreSQL. MongoDB decommissioned.\",\n    \"patterns_used\": [\n      {\n        \"pattern\": \"Strangler Fig\",\n        \"rationale\": \"Incrementally replaces MongoDB with PostgreSQL without big-bang cutover. Each phase is independently verifiable and reversible. Industry-proven for zero-downtime database migrations.\"\n      },\n      {\n        \"pattern\": \"Dual Write with Asymmetric Failure Handling\",\n        \"rationale\": \"During migration, writes go to both stores. The primary store (initially MongoDB, later PostgreSQL) must succeed; the secondary can fail gracefully with repair. This ensures no data loss while building confidence in the new store.\"\n      },\n      {\n        \"pattern\": \"Shadow Read / Dark Launch\",\n        \"rationale\": \"Before cutting reads to PostgreSQL, shadow reads validate that PostgreSQL returns identical results to MongoDB. Builds statistical confidence in data correctness without risking production reads.\"\n      },\n      {\n        \"pattern\": \"Repository Pattern with Strategy\",\n        \"rationale\": \"The OrderRepository interface with swappable implementations allows migration phase transitions via configuration without code changes. Clean separation of domain logic from persistence.\"\n      },\n      {\n        \"pattern\": \"Idempotent Backfill with Cursor Pagination\",\n        \"rationale\": \"8M documents require batched migration. Cursor-based pagination (using MongoDB _id) avoids skip/offset performance degradation. UPSERT semantics make the backfill idempotent and safely restartable.\"\n      },\n      {\n        \"pattern\": \"Advisory Lock Coordination\",\n        \"rationale\": \"Per existing ADR, uses PostgreSQL advisory locks for backfill worker and reconciliation job coordination. No new infrastructure needed.\"\n      }\n    ]\n  },\n\n  \"domain_model\": {\n    \"bounded_contexts\": [\n      {\n        \"name\": \"Order Management\",\n        \"classification\": \"core\",\n        \"aggregates\": [\n          {\n            \"name\": \"Order\",\n            \"root_entity\": \"Order\",\n            \"entities\": [\"Order\", \"OrderLineItem\"],\n            \"value_objects\": [\"Money\", \"ShippingAddress\", \"OrderState\"],\n            \"invariants\": [\n              \"Order state transitions must follow the OrderStateMachine (PENDING→CONFIRMED→SHIPPED→DELIVERED, with CANCELLED as terminal from PENDING/CONFIRMED)\",\n              \"Order total must equal sum of line item subtotals\",\n              \"An order must have at least one line item\"\n            ],\n            \"notes\": \"In PostgreSQL, the Order aggregate maps to an 'orders' table with 'order_line_items' as a child table with FK constraint. This enforces referential integrity that MongoDB could not.\"\n          },\n          {\n            \"name\": \"Payment\",\n            \"root_entity\": \"Payment\",\n            \"entities\": [\"Payment\"],\n            \"value_objects\": [\"Money\", \"PaymentMethod\", \"PaymentStatus\"],\n            \"invariants\": [\n              \"Payment must reference a valid Order (FK constraint in PostgreSQL)\",\n              \"Payment amount cannot exceed order total\",\n              \"Refund cannot exceed original payment amount\"\n            ],\n            \"notes\": \"In MongoDB these were embedded or loosely referenced. In PostgreSQL, payments table has FK to orders, enabling ACID transactions across order+payment updates.\"\n          }\n        ]\n      }\n    ],\n    \"context_map\": [\n      {\n        \"upstream\": \"Order Management (PostgreSQL)\",\n        \"downstream\": \"Reporting / Analytics\",\n        \"relationship\": \"Open Host Service — PostgreSQL enables complex JOIN queries for reporting that were expensive/impossible with MongoDB aggregation pipelines\"\n      },\n      {\n        \"upstream\": \"Order Management\",\n        \"downstream\": \"Shipping / Fulfillment\",\n        \"relationship\": \"Domain Events — OrderConfirmed, OrderShipped events published regardless of underlying datastore. Migration is transparent to downstream consumers.\"\n      }\n    ]\n  },\n\n  \"trade_offs\": [\n    {\n      \"decision\": \"Synchronous dual-write instead of CDC (Change Data Capture) based replication\",\n      \"gains\": \"Simpler architecture. No Debezium/Kafka infrastructure needed. At 200 writes/min (~3.3/sec), the additional write latency to PostgreSQL is negligible (<5ms per write). Easier to reason about consistency.\",\n      \"sacrifices\": \"Adds ~5-10ms latency per write during dual-write phase. If PostgreSQL is down, repair queue must be processed. Tighter coupling during migration than CDC would provide.\",\n      \"alternatives_considered\": [\n        \"CDC with Debezium: More operationally complex, requires Kafka. Better for 10,000+ writes/min. Overkill at 200/min.\",\n        \"Async dual-write via message queue: Introduces eventual consistency concerns and queue infrastructure. Unnecessary at this write volume.\"\n      ]\n    },\n    {\n      \"decision\": \"Phased Strangler Fig over big-bang migration with maintenance window\",\n      \"gains\": \"Zero downtime. Each phase is independently testable and reversible. Risk is spread across weeks rather than concentrated in one event. Team can build confidence incrementally.\",\n      \"sacrifices\": \"Longer total migration timeline (2-4 weeks vs. a single maintenance window). More complex codebase during migration with temporary dual-write code. Requires discipline to remove migration scaffolding after completion.\",\n      \"alternatives_considered\": [\n        \"Big-bang migration with downtime window: Simpler but violates zero-downtime requirement.\",\n        \"Blue-green database swap: Requires full data sync before cutover, risk of data loss during the sync window.\"\n      ]\n    },\n    {\n      \"decision\": \"PostgreSQL relational schema over JSONB document storage in PostgreSQL\",\n      \"gains\": \"Full benefit of relational model: FK constraints prevent orphaned records, JOINs for reporting, standard indexing, schema enforcement. Aligns with stated migration reasons.\",\n      \"sacrifices\": \"Requires explicit schema design and migrations. Less flexible for ad-hoc field additions than document model. Need to handle MongoDB's flexible schema (e.g., orders with varying optional fields) via nullable columns or separate tables.\",\n      \"alternatives_considered\": [\n        \"JSONB columns in PostgreSQL: Preserves document flexibility but loses FK constraints and JOIN efficiency — defeats the purpose of migrating.\",\n        \"Hybrid: relational core with JSONB for extensible metadata: Good compromise for optional/variable fields. Recommended for any order 'metadata' or 'custom_fields'.\"\n      ]\n    },\n    {\n      \"decision\": \"Backfill as separate worker process vs. inline lazy migration\",\n      \"gains\": \"Predictable migration timeline. All data migrated before cutover. No read-path complexity for cache-miss-then-migrate logic. Simpler to verify completeness.\",\n      \"sacrifices\": \"Backfill process must be managed and monitored. Brief period where both stores exist with potentially stale PostgreSQL data (mitigated by dual-write catching live traffic).\",\n      \"alternatives_considered\": [\n        \"Lazy migration (migrate on read): Simpler initially but means some records may never be migrated if never accessed. Complicates read path permanently until migration declared complete.\"\n      ]\n    }\n  ],\n\n  \"flexibility_points\": [\n    {\n      \"area\": \"Repository Abstraction Layer\",\n      \"evolution_path\": \"The OrderRepository interface survives the migration permanently. If a future migration is needed (e.g., to CockroachDB for multi-region), only the implementation changes. This is a lasting architectural improvement.\"\n    },\n    {\n      \"area\": \"Migration Phase Feature Flags\",\n      \"evolution_path\": \"Phase transitions are configuration-driven. Can roll back from POSTGRES_PRIMARY to DUAL_WRITE instantly if issues are detected. Supports canary rollout (10% of traffic to new path).\"\n    },\n    {\n      \"area\": \"PostgreSQL Schema Extensibility\",\n      \"evolution_path\": \"Use a JSONB 'metadata' column on the orders table for extensible/optional fields. Core relational columns for indexed/constrained fields, JSONB for the long tail. Best of both worlds.\"\n    },\n    {\n      \"area\": \"Reporting Queries\",\n      \"evolution_path\": \"PostgreSQL enables read replicas for reporting workloads. Can add materialized views for complex aggregations without impacting write performance.\"\n    }\n  ],\n\n  \"rigidity_points\": [\n    {\n      \"area\": \"Order ID Format\",\n      \"reason\": \"The order_id must remain consistent across both datastores during migration. If MongoDB uses ObjectId, PostgreSQL must store it as-is (VARCHAR or UUID). Cannot change ID format mid-migration. Decide the canonical ID format before Phase 1.\"\n    },\n    {\n      \"area\": \"Order State Machine\",\n      \"reason\": \"The OrderStateMachine (PENDING→CONFIRMED→SHIPPED→DELIVERED/CANCELLED) must be enforced identically in both stores during dual-write. PostgreSQL CHECK constraints or trigger-based validation must match the TypeScript state machine exactly.\"\n    },\n    {\n      \"area\": \"Transaction Boundaries\",\n      \"reason\": \"Once on PostgreSQL, order + payment writes happen in a single transaction. This is a core reason for migrating. The aggregate transaction boundary must be well-defined before schema design.\"\n    },\n    {\n      \"area\": \"Dual-Write Ordering\",\n      \"reason\": \"During dual-write, the primary store must always be written first. Swapping primary/secondary is a phase transition, not a per-request decision. This ordering is critical for consistency.\"\n    }\n  ],\n\n  \"risks\": [\n    {\n      \"risk\": \"Data divergence between MongoDB and PostgreSQL during dual-write phase due to race conditions or partial failures\",\n      \"severity\": \"high\",\n      \"mitigation\": \"Implement a repair queue for failed secondary writes. Run reconciliation job hourly to detect and report divergence. Track divergence rate as a key metric — cutover only proceeds when divergence rate is 0% for 48+ hours.\"\n    },\n    {\n      \"risk\": \"Schema mismatch — MongoDB documents have inconsistent/optional fields that don't cleanly map to relational schema\",\n      \"severity\": \"high\",\n      \"mitigation\": \"Audit all 8M documents for schema variance BEFORE designing the PostgreSQL schema. Use a schema analysis script (e.g., variety.js or custom aggregation) to identify all field paths, types, and frequency. Design nullable columns and JSONB metadata accordingly.\"\n    },\n    {\n      \"risk\": \"Backfill takes longer than expected, delaying migration timeline\",\n      \"severity\": \"medium\",\n      \"mitigation\": \"At 8M records with batch size 1000, that's 8,000 batches. At 100ms per batch (including UPSERT), ~13 minutes. Even at 10x slower, ~2 hours. Low risk but monitor throughput and adjust batch size/parallelism. Run backfill during off-peak hours.\"\n    },\n    {\n      \"risk\": \"Application performance regression after PostgreSQL cutover due to unoptimized queries or missing indexes\",\n      \"severity\": \"medium\",\n      \"mitigation\": \"Shadow reads in Phase 3 measure PostgreSQL read latency vs MongoDB. Add appropriate indexes (order_id, customer_id, status, created_at). Use EXPLAIN ANALYZE on all query patterns before cutover. Set up pg_stat_statements monitoring.\"\n    },\n    {\n      \"risk\": \"Rollback complexity — if PostgreSQL issues are found post-cutover, rolling back to MongoDB requires reverse sync\",\n      \"severity\": \"high\",\n      \"mitigation\": \"Keep dual-write active for 1-2 weeks after PostgreSQL becomes primary. MongoDB stays warm as a hot standby. Only decommission MongoDB after a bake period with zero incidents.\"\n    },\n    {\n      \"risk\": \"Team forgets to remove migration scaffolding (DualWriteRepo, ShadowReadRepo, feature flags) after migration completes\",\n      \"severity\": \"low\",\n      \"mitigation\": \"Create tracked tickets for scaffolding removal as part of the migration plan. Set a calendar reminder for 2 weeks post-decommission. The Repository Abstraction Layer stays; only the dual-write/shadow-read implementations are removed.\"\n    }\n  ],\n\n  \"implementation_guidance\": {\n    \"recommended_approach\": \"Execute in four phases over 2-4 weeks. Phase 1 (Days 1-3): Design and deploy PostgreSQL schema; implement Repository Abstraction Layer with MongoOrderRepository as the sole active implementation; deploy with zero behavior change. Phase 2 (Days 4-7): Deploy DualWriteOrderRepository behind feature flag; start backfill worker to migrate 8M historical documents; monitor write success rate and repair queue depth. Phase 3 (Days 8-14): Enable ShadowReadOrderRepository; compare read results for 48-72 hours; measure divergence rate and latency delta; once divergence is 0% for 48h, flip primary from MongoDB to PostgreSQL. Phase 4 (Days 15-21): Run with PostgreSQL as sole datastore; keep MongoDB warm for 1 week as rollback safety net; decommission MongoDB; remove migration scaffolding.\",\n    \"files_to_create_or_modify\": [\n      \"src/orders/repositories/OrderRepository.ts — Interface definition (findById, findByCustomer, save, updateStatus)\",\n      \"src/orders/repositories/MongoOrderRepository.ts — Existing MongoDB implementation extracted behind interface\",\n      \"src/orders/repositories/PostgresOrderRepository.ts — New PostgreSQL implementation using pg or Knex/Prisma\",\n      \"src/orders/repositories/DualWriteOrderRepository.ts — Temporary: writes to both, configurable primary\",\n      \"src/orders/repositories/ShadowReadOrderRepository.ts — Temporary: reads both, compares, returns primary\",\n      \"src/orders/repositories/RepositoryFactory.ts — Factory that returns correct implementation based on migration phase config\",\n      \"src/orders/repositories/RepairQueue.ts — Captures and retries failed secondary writes\",\n      \"migrations/001_create_orders_schema.sql — PostgreSQL DDL: orders, order_line_items, payments tables with FKs and indexes\",\n      \"scripts/backfill-orders.ts — Cursor-based MongoDB→PostgreSQL batch migration worker\",\n      \"scripts/reconcile-orders.ts — Sampling-based divergence checker\",\n      \"src/orders/mappers/MongoOrderMapper.ts — Maps MongoDB documents to domain Order objects\",\n      \"src/orders/mappers/PostgresOrderMapper.ts — Maps PostgreSQL rows to domain Order objects\",\n      \"docs/adr/adr-order-mongodb-to-postgresql-migration.md — ADR documenting this migration decision\"\n    ],\n    \"patterns_to_follow\": \"Repository Pattern with Strategy for swappable implementations. Strangler Fig for phased migration. Feature flags for phase control. Idempotent operations throughout (UPSERT for backfill, idempotent writes). Domain objects as the translation layer between storage formats — never pass raw documents/rows across repository boundaries. Use the existing OrderStateMachine for state transition validation regardless of datastore. Use PostgreSQL advisory locks (per existing ADR) for backfill and reconciliation job coordination.\",\n    \"pitfalls_to_avoid\": [\n      \"DO NOT attempt a big-bang migration — the zero-downtime constraint makes this unacceptable\",\n      \"DO NOT use MongoDB Change Streams as the sole replication mechanism — they can miss events during network partitions; dual-write is more reliable at this volume\",\n      \"DO NOT design the PostgreSQL schema without first auditing MongoDB document variance — hidden optional fields will cause insert failures\",\n      \"DO NOT skip the shadow-read phase — cutting over reads without validation risks serving stale/incorrect data\",\n      \"DO NOT use auto-increment IDs in PostgreSQL if MongoDB ObjectIds are used elsewhere — maintain the same ID format or create a mapping table\",\n      \"DO NOT make the secondary write in dual-write phase a hard failure — it must be failure-tolerant with repair queue\",\n      \"DO NOT decommission MongoDB immediately after cutover — keep it warm for at least 1 week as a rollback safety net\",\n      \"DO NOT forget to add indexes on PostgreSQL for all existing MongoDB query patterns — run EXPLAIN ANALYZE on every query before cutover\",\n      \"DO NOT run the backfill without rate limiting — even though 8M is manageable, unthrottled bulk inserts can spike PostgreSQL WAL and replication lag\"\n    ]\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 88,\n    \"high_confidence_areas\": [\n      \"Strangler Fig with dual-write is the industry-standard pattern for zero-downtime database migrations at this scale\",\n      \"200 writes/min is well within synchronous dual-write tolerance — no need for CDC/async complexity\",\n      \"8M records is a modest backfill — completes in minutes to low hours\",\n      \"Repository abstraction is the correct decoupling layer and provides lasting architectural value\",\n      \"PostgreSQL advisory locks for job coordination aligns with existing ADR and team practices\",\n      \"The Order domain's state machine and aggregate boundaries are well-defined from existing code\"\n    ],\n    \"low_confidence_areas\": [\n      \"MongoDB document schema variance — without auditing actual documents, the PostgreSQL schema design may need iteration\",\n      \"Exact PostgreSQL schema design for order_line_items (separate table vs JSONB array) depends on query patterns not fully specified\",\n      \"Integration with existing deployment pipeline and feature flag system — assumed to exist but not verified\",\n      \"Whether existing domain events (OrderConfirmed, etc.) are emitted from the repository layer or service layer — this affects where dual-write hooks in\"\n    ],\n    \"assumptions\": [\n      \"The Order Service is a single service (not multiple services writing to the orders collection)\",\n      \"MongoDB ObjectIds can be stored as VARCHAR/TEXT in PostgreSQL without breaking downstream consumers\",\n      \"A feature flag system or environment-variable-based configuration exists for phase control\",\n      \"The team has PostgreSQL operational expertise or is acquiring it (monitoring, vacuuming, connection pooling)\",\n      \"No other services directly read/write the MongoDB orders collection — if they do, they also need migration coordination\",\n      \"The existing OrderStateMachine TypeScript code is the canonical state transition logic\"\n    ]\n  }\n}",
+  "agent_output_excerpt": "Now I have sufficient context. The project already has an Order domain with a state machine and prior PostgreSQL ADR. Let me design the zero-downtime migration architecture.\n\n{\n  \"executive_summary\": \"Zero-downtime migration of the Order Management domain from MongoDB to PostgreSQL using a phased Strangler Fig pattern with dual-write and shadow-read verification. The architecture introduces a Database Abstraction Layer (DAL) to decouple the service from storage, then migrates in four phases: (1)",
+  "duration_ms": 149823,
+  "tokens_used": 6579,
+  "input_tokens": 11,
+  "output_tokens": 6568,
+  "cost_usd": 0.2532805,
+  "timestamp": "2026-03-24T15:45:53Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "frontend-design:frontend-design"
+      ],
+      "plugins": [
+        {
+          "name": "frontend-design",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/frontend-design/79caa0d824ac"
+        },
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "5e88c909-43d1-435d-a532-8701587bc2ca",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01JiacTsFu4TX4cYLiq5tqmV",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me analyze this database migration architecture problem. I need to design a zero-downtime migration from MongoDB to PostgreSQL for the Order Management domain.\n\nLet me first check if there's any existing codebase context I should be aware of.",
+            "signature": "Ep8DCkYIDBgCKkDXcUYhGMlG9AI7IHSpbTCM/9hOmjZqE/RJ8cDO1majh5LMMVwTaTawqqL6NVxo8UeptYmdYFjp2n4qBkR/HcZGEgz7SvxjftaP6gb0Rl0aDCAtiYeAXmpa7sjZ5yIwjCsD1yg15w9Gj1BN6fqIfNDQFLjeNheEM5BCT1z7uuxlqXFFRpOulvvQrHfY/tXJKoYCMZIdUjDyicuAHxYv6UidNdxgHHKekOKgXrHF3xmmGbIFsOs9LoygeLvI7fr0j/FhhQR05wAnxpiSaax89dcELgJudgAjwxjj6QIsvZphMD5lknmKRovJsArwNy5Dlqfp1h6+rhJRoj8KxRtnJDphSTzu5ALiFYjHO5z/SeBqIijOE4lriUivR6mF2d0R1xc5D93Qf05QpKu2+6bXbohvq/Er8mnaF68TWmWf84MJGI4OzL6FOpr25x7WhXMm4+yQr7fRS+MtPSEn47xC6kMwKg/agBjjS7EZx8lI/bNRZHeWV9JQP85b9+3z0ic0lf7gEJ/8Y0c6Dkiy/5vPWx5u4Znn0c0m2xgB"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2167,
+          "cache_read_input_tokens": 4329,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2167
+          },
+          "output_tokens": 34,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "24833a8c-6f1b-4a69-80ea-4fa94da0c66c"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01JiacTsFu4TX4cYLiq5tqmV",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01Y8E1X2aeWch76upKgNk2wq",
+            "name": "ToolSearch",
+            "input": {
+              "query": "select:Glob,Grep,Bash",
+              "max_results": 3
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2167,
+          "cache_read_input_tokens": 4329,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2167
+          },
+          "output_tokens": 34,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "3ccda674-cdee-4d19-b5b1-6987f635997d"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01Y8E1X2aeWch76upKgNk2wq",
+            "content": [
+              {
+                "type": "tool_reference",
+                "tool_name": "Glob"
+              },
+              {
+                "type": "tool_reference",
+                "tool_name": "Grep"
+              },
+              {
+                "type": "tool_reference",
+                "tool_name": "Bash"
+              }
+            ]
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "f1f3edfd-09d1-4c3c-97e5-a99b7783eef6",
+      "timestamp": "2026-03-24T15:45:58.698Z",
+      "tool_use_result": {
+        "matches": [
+          "Glob",
+          "Grep",
+          "Bash"
+        ],
+        "query": "select:Glob,Grep,Bash",
+        "total_deferred_tools": 26
+      }
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774375200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "72ee7bc6-1036-4869-b0ad-7e561f7d9b60",
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01DzVvr7PDZX5TzguRSHEB63",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me check if there's any existing codebase context for this project.",
+            "signature": "Eu8BCkYIDBgCKkD/lpNcV0NBIZwFJywXkZMzErYdRsXTnxBmx0IaRUgsPQCyDwHEwKpVx5p7I3hNJUMEBG9Z2zE+rjGdiWD6mmx1EgypOMO3/Zic93oZtR4aDHU/nJRPAXYP0ri5RCIwI7G/ZI0snJPxluupb7eTkAnqn404kHZklPtxXqpXUtC6s3GeUtOWJ8yu+Eia6S54KlfqB799Sh1F3B6ZucO9qcDlhWx+2NSX2jGC8+c85FO84XjZ70EjDOLhyqT8rgFIhSXDcnBYo/J+WJCf+zCv5Z0/q75d+0JDNqO6VrDFi2/WmCoQvkWCMzsYAQ=="
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 4531,
+          "cache_read_input_tokens": 6496,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 4531
+          },
+          "output_tokens": 9,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "5bcb158e-1a57-4949-afc8-4e0001681ade"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01DzVvr7PDZX5TzguRSHEB63",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01Tka8N5LHD4B2KVq5YyvomX",
+            "name": "Glob",
+            "input": {
+              "pattern": "**/*order*"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 4531,
+          "cache_read_input_tokens": 6496,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 4531
+          },
+          "output_tokens": 9,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "b6cf92a8-d2f1-415e-aa51-bfb65360f401"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_01Tka8N5LHD4B2KVq5YyvomX",
+            "type": "tool_result",
+            "content": "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/lib/called-in-order.js\n/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/lib/called-in-order.test.js\n/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/lib/order-by-first-call.js\n/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/lib/order-by-first-call.test.js\n/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/types/called-in-order.d.ts\n/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/types/order-by-first-call.d.ts\n/Users/lb/Github/Bondarewicz/dreamteam/node_modules/caniuse-lite/data/features/border-image.js\n/Users/lb/Github/Bondarewicz/dreamteam/node_modules/caniuse-lite/data/features/border-radius.js\n/Users/lb/Github/Bondarewicz/dreamteam/node_modules/caniuse-lite/data/features/mediarecorder.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/orderStateMachine.ts\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/lib/called-in-order.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/lib/called-in-order.test.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/lib/order-by-first-call.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/lib/order-by-first-call.test.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/types/called-in-order.d.ts\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/types/order-by-first-call.d.ts\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/caniuse-lite/data/features/border-image.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/caniuse-lite/data/features/border-radius.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/caniuse-lite/data/features/mediarecorder.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/orderStateMachine.test.ts\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/lib/called-in-order.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/lib/called-in-order.test.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/lib/order-by-first-call.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/lib/order-by-first-call.test.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/types/called-in-order.d.ts\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/types/order-by-first-call.d.ts\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/caniuse-lite/data/features/border-image.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/caniuse-lite/data/features/border-radius.js\n/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/caniuse-lite/data/features/mediarecorder.js"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "1179698c-332f-4bc6-9fba-09b4609fb325",
+      "timestamp": "2026-03-24T15:46:02.433Z",
+      "tool_use_result": {
+        "filenames": [
+          "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/lib/called-in-order.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/lib/called-in-order.test.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/lib/order-by-first-call.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/lib/order-by-first-call.test.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/types/called-in-order.d.ts",
+          "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/@sinonjs/commons/types/order-by-first-call.d.ts",
+          "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/caniuse-lite/data/features/border-image.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/caniuse-lite/data/features/border-radius.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/node_modules/caniuse-lite/data/features/mediarecorder.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/orderStateMachine.ts",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/lib/called-in-order.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/lib/called-in-order.test.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/lib/order-by-first-call.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/lib/order-by-first-call.test.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/types/called-in-order.d.ts",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/@sinonjs/commons/types/order-by-first-call.d.ts",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/caniuse-lite/data/features/border-image.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/caniuse-lite/data/features/border-radius.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/discount-engine/node_modules/caniuse-lite/data/features/mediarecorder.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/orderStateMachine.test.ts",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/lib/called-in-order.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/lib/called-in-order.test.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/lib/order-by-first-call.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/lib/order-by-first-call.test.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/types/called-in-order.d.ts",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/@sinonjs/commons/types/order-by-first-call.d.ts",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/caniuse-lite/data/features/border-image.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/caniuse-lite/data/features/border-radius.js",
+          "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/weight-classifier/node_modules/caniuse-lite/data/features/mediarecorder.js"
+        ],
+        "durationMs": 87,
+        "numFiles": 29,
+        "truncated": false
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01DzVvr7PDZX5TzguRSHEB63",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01MkqSP4nea1gPTWqwtKNpZK",
+            "name": "Glob",
+            "input": {
+              "pattern": "**/*mongo*"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 4531,
+          "cache_read_input_tokens": 6496,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 4531
+          },
+          "output_tokens": 9,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "69c61807-46b5-472e-b127-80c1b7e43207"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01DzVvr7PDZX5TzguRSHEB63",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_019qwd4LecArqrY31ap4c3Qr",
+            "name": "Glob",
+            "input": {
+              "pattern": "**/*postgres*"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 4531,
+          "cache_read_input_tokens": 6496,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 4531
+          },
+          "output_tokens": 9,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "a0baf48a-92db-4a5f-b4be-a9a89728d27d"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_01MkqSP4nea1gPTWqwtKNpZK",
+            "type": "tool_result",
+            "content": "No files found"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "11421db6-227e-41bb-b8ce-8d961db73adc",
+      "timestamp": "2026-03-24T15:46:02.768Z",
+      "tool_use_result": {
+        "filenames": [],
+        "durationMs": 76,
+        "numFiles": 0,
+        "truncated": false
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_019qwd4LecArqrY31ap4c3Qr",
+            "type": "tool_result",
+            "content": "/Users/lb/Github/Bondarewicz/dreamteam/docs/adr/adr-postgresql-advisory-locks-for-batch-coordination.md"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "46a5afd4-9817-427b-a03b-a5cb4c515e1d",
+      "timestamp": "2026-03-24T15:46:02.771Z",
+      "tool_use_result": {
+        "filenames": [
+          "/Users/lb/Github/Bondarewicz/dreamteam/docs/adr/adr-postgresql-advisory-locks-for-batch-coordination.md"
+        ],
+        "durationMs": 66,
+        "numFiles": 1,
+        "truncated": false
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01FZmkreSFqNPsV6odBhfVyk",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_018bskv2uuj2VvLwc11NBMFn",
+            "name": "ToolSearch",
+            "input": {
+              "query": "select:Read",
+              "max_results": 1
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 1,
+          "cache_creation_input_tokens": 1490,
+          "cache_read_input_tokens": 11027,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 1490
+          },
+          "output_tokens": 33,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "94e022ff-b58e-487a-9423-ddf9b6cfa547"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_018bskv2uuj2VvLwc11NBMFn",
+            "content": [
+              {
+                "type": "tool_reference",
+                "tool_name": "Read"
+              }
+            ]
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "e3b297de-c2ab-432c-8dc9-48549ecd7e3b",
+      "timestamp": "2026-03-24T15:46:06.266Z",
+      "tool_use_result": {
+        "matches": [
+          "Read"
+        ],
+        "query": "select:Read",
+        "total_deferred_tools": 26
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01N9EGaGBcwiKYNFxJF2sSab",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01W8VUBtu7SuTcmAZCKCHt2g",
+            "name": "Read",
+            "input": {
+              "file_path": "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/orderStateMachine.ts"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 740,
+          "cache_read_input_tokens": 12517,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 740
+          },
+          "output_tokens": 62,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "85209380-03ea-4c60-9854-2218f169b430"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_01W8VUBtu7SuTcmAZCKCHt2g",
+            "type": "tool_result",
+            "content": "     1→export type OrderState =\n     2→  | \"PENDING\"\n     3→  | \"CONFIRMED\"\n     4→  | \"SHIPPED\"\n     5→  | \"DELIVERED\"\n     6→  | \"CANCELLED\";\n     7→\n     8→// AC1: Valid transitions map\n     9→const VALID_TRANSITIONS: Record<OrderState, ReadonlySet<OrderState>> = {\n    10→  PENDING: new Set([\"CONFIRMED\", \"CANCELLED\"]),\n    11→  CONFIRMED: new Set([\"SHIPPED\", \"CANCELLED\"]),\n    12→  SHIPPED: new Set([\"DELIVERED\"]),\n    13→  DELIVERED: new Set(), // AC4: terminal state\n    14→  CANCELLED: new Set(), // AC3: terminal state\n    15→};\n    16→\n    17→export class InvalidTransitionError extends Error {\n    18→  readonly code = \"INVALID_TRANSITION\";\n    19→\n    20→  constructor(from: OrderState, to: OrderState) {\n    21→    super(`Cannot transition from ${from} to ${to}`);\n    22→    this.name = \"InvalidTransitionError\";\n    23→  }\n    24→}\n    25→\n    26→export class OrderStateMachine {\n    27→  /**\n    28→   * Attempt a state transition.\n    29→   * @returns the new state if the transition is valid\n    30→   * @throws InvalidTransitionError (with code \"INVALID_TRANSITION\") for invalid transitions\n    31→   */\n    32→  transition(currentState: OrderState, targetState: OrderState): OrderState {\n    33→    if (!VALID_TRANSITIONS[currentState].has(targetState)) {\n    34→      throw new InvalidTransitionError(currentState, targetState);\n    35→    }\n    36→    return targetState;\n    37→  }\n    38→}\n    39→"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "1fd8119d-39a1-466d-9d4d-c2d92deac91d",
+      "timestamp": "2026-03-24T15:46:09.865Z",
+      "tool_use_result": {
+        "type": "text",
+        "file": {
+          "filePath": "/Users/lb/Github/Bondarewicz/dreamteam/.tmp/orderStateMachine.ts",
+          "content": "export type OrderState =\n  | \"PENDING\"\n  | \"CONFIRMED\"\n  | \"SHIPPED\"\n  | \"DELIVERED\"\n  | \"CANCELLED\";\n\n// AC1: Valid transitions map\nconst VALID_TRANSITIONS: Record<OrderState, ReadonlySet<OrderState>> = {\n  PENDING: new Set([\"CONFIRMED\", \"CANCELLED\"]),\n  CONFIRMED: new Set([\"SHIPPED\", \"CANCELLED\"]),\n  SHIPPED: new Set([\"DELIVERED\"]),\n  DELIVERED: new Set(), // AC4: terminal state\n  CANCELLED: new Set(), // AC3: terminal state\n};\n\nexport class InvalidTransitionError extends Error {\n  readonly code = \"INVALID_TRANSITION\";\n\n  constructor(from: OrderState, to: OrderState) {\n    super(`Cannot transition from ${from} to ${to}`);\n    this.name = \"InvalidTransitionError\";\n  }\n}\n\nexport class OrderStateMachine {\n  /**\n   * Attempt a state transition.\n   * @returns the new state if the transition is valid\n   * @throws InvalidTransitionError (with code \"INVALID_TRANSITION\") for invalid transitions\n   */\n  transition(currentState: OrderState, targetState: OrderState): OrderState {\n    if (!VALID_TRANSITIONS[currentState].has(targetState)) {\n      throw new InvalidTransitionError(currentState, targetState);\n    }\n    return targetState;\n  }\n}\n",
+          "numLines": 39,
+          "startLine": 1,
+          "totalLines": 39
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01N9EGaGBcwiKYNFxJF2sSab",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01PhtR4uW2dpqQv8zSgYgi5b",
+            "name": "Read",
+            "input": {
+              "file_path": "/Users/lb/Github/Bondarewicz/dreamteam/docs/adr/adr-postgresql-advisory-locks-for-batch-coordination.md"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 740,
+          "cache_read_input_tokens": 12517,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 740
+          },
+          "output_tokens": 62,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "9e6ca4d0-4f6a-425b-a44c-803efb007cb1"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_01PhtR4uW2dpqQv8zSgYgi5b",
+            "type": "tool_result",
+            "content": "     1→# ADR: Use PostgreSQL Advisory Locks for Nightly Batch Job Coordination\n     2→\n     3→**Status:** Accepted\n     4→**Date:** 2026-03-19\n     5→**Deciders:** MJ (Strategic Systems Architect)\n     6→\n     7→## Context\n     8→\n     9→The nightly reconciliation batch job was previously running on a single node with no coordination mechanism. The system is being expanded to a multi-node deployment and needs to guarantee that exactly one node executes the batch job per night.\n    10→\n    11→The system already runs PostgreSQL as its primary datastore.\n    12→\n    13→## Decision\n    14→\n    15→Use PostgreSQL session-level advisory locks (`pg_try_advisory_lock`) to coordinate the nightly batch job across nodes. The node that acquires the lock runs the job; all other nodes skip execution for that cycle.\n    16→\n    17→## Rationale\n    18→\n    19→- **No new infrastructure.** PostgreSQL is already in the stack. Advisory locks are a built-in primitive -- no additional service to deploy, monitor, or maintain.\n    20→- **Sufficient for the workload.** The job runs once per night from a single coordinator node. Advisory locks handle this level of contention trivially.\n    21→- **Simple failure semantics.** If the coordinator crashes, the database connection drops, and the session-level lock is automatically released. No manual cleanup is needed.\n    22→\n    23→## Alternatives Considered\n    24→\n    25→| Alternative | Why rejected |\n    26→|---|---|\n    27→| **Redis SETNX** | Introduces a new infrastructure dependency (Redis) solely for lock management. Operationally heavier for a single nightly job. |\n    28→| **ZooKeeper** | Significant operational complexity for a coordination need this simple. Overkill. |\n    29→| **Custom heartbeat table in PostgreSQL** | Requires application-level TTL/expiry logic, polling, and cleanup. More code to write and maintain than advisory locks for the same outcome. |\n    30→\n    31→## Trade-offs and Risks\n    32→\n    33→- **Lock visibility.** Advisory locks are not visible outside the database (no dashboard, no CLI query beyond `pg_locks`). Operators must query `pg_locks` directly to inspect lock state.\n    34→- **No TTL-based expiration.** If a node holds a connection open but stalls (zombie process, network partition that keeps the TCP session alive), the lock persists until the connection is truly closed. For a nightly job with low blast radius, this is acceptable.\n    35→- **Session scope.** The lock is tied to the database session, not to a logical timeout. Teams must ensure the batch job's database connection is configured with reasonable TCP keepalive and statement timeout settings so stale sessions are reaped.\n    36→\n    37→## Consequences\n    38→\n    39→- Each node attempts `SELECT pg_try_advisory_lock(<lock_key>)` at the scheduled batch time. The node that returns `true` proceeds; others log a skip and exit.\n    40→- Monitoring should include an alert if no node successfully completes the batch job within the expected window (guards against all-nodes-skip scenarios, e.g., key mismatch).\n    41→- If the system later requires sub-second coordination, high-frequency locking, or cross-service distributed locks, this decision should be revisited in favor of a dedicated coordination service.\n    42→"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "5c9fbc2a-e093-4234-b6e5-e33a9a194b97",
+      "timestamp": "2026-03-24T15:46:10.038Z",
+      "tool_use_result": {
+        "type": "text",
+        "file": {
+          "filePath": "/Users/lb/Github/Bondarewicz/dreamteam/docs/adr/adr-postgresql-advisory-locks-for-batch-coordination.md",
+          "content": "# ADR: Use PostgreSQL Advisory Locks for Nightly Batch Job Coordination\n\n**Status:** Accepted\n**Date:** 2026-03-19\n**Deciders:** MJ (Strategic Systems Architect)\n\n## Context\n\nThe nightly reconciliation batch job was previously running on a single node with no coordination mechanism. The system is being expanded to a multi-node deployment and needs to guarantee that exactly one node executes the batch job per night.\n\nThe system already runs PostgreSQL as its primary datastore.\n\n## Decision\n\nUse PostgreSQL session-level advisory locks (`pg_try_advisory_lock`) to coordinate the nightly batch job across nodes. The node that acquires the lock runs the job; all other nodes skip execution for that cycle.\n\n## Rationale\n\n- **No new infrastructure.** PostgreSQL is already in the stack. Advisory locks are a built-in primitive -- no additional service to deploy, monitor, or maintain.\n- **Sufficient for the workload.** The job runs once per night from a single coordinator node. Advisory locks handle this level of contention trivially.\n- **Simple failure semantics.** If the coordinator crashes, the database connection drops, and the session-level lock is automatically released. No manual cleanup is needed.\n\n## Alternatives Considered\n\n| Alternative | Why rejected |\n|---|---|\n| **Redis SETNX** | Introduces a new infrastructure dependency (Redis) solely for lock management. Operationally heavier for a single nightly job. |\n| **ZooKeeper** | Significant operational complexity for a coordination need this simple. Overkill. |\n| **Custom heartbeat table in PostgreSQL** | Requires application-level TTL/expiry logic, polling, and cleanup. More code to write and maintain than advisory locks for the same outcome. |\n\n## Trade-offs and Risks\n\n- **Lock visibility.** Advisory locks are not visible outside the database (no dashboard, no CLI query beyond `pg_locks`). Operators must query `pg_locks` directly to inspect lock state.\n- **No TTL-based expiration.** If a node holds a connection open but stalls (zombie process, network partition that keeps the TCP session alive), the lock persists until the connection is truly closed. For a nightly job with low blast radius, this is acceptable.\n- **Session scope.** The lock is tied to the database session, not to a logical timeout. Teams must ensure the batch job's database connection is configured with reasonable TCP keepalive and statement timeout settings so stale sessions are reaped.\n\n## Consequences\n\n- Each node attempts `SELECT pg_try_advisory_lock(<lock_key>)` at the scheduled batch time. The node that returns `true` proceeds; others log a skip and exit.\n- Monitoring should include an alert if no node successfully completes the batch job within the expected window (guards against all-nodes-skip scenarios, e.g., key mismatch).\n- If the system later requires sub-second coordination, high-frequency locking, or cross-service distributed locks, this decision should be revisited in favor of a dedicated coordination service.\n",
+          "numLines": 42,
+          "startLine": 1,
+          "totalLines": 42
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_012hVUiswxs9aCZ41YH1yNUm",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Good context. The project already has an order state machine and an ADR about PostgreSQL advisory locks. Now I have enough to design the migration architecture.\n\nClassification: `none` — I have sufficient constraints:\n- Source: MongoDB, 8M documents\n- Target: PostgreSQL\n- Traffic: 200 writes/min\n- Zero downtime requirement\n- Reasons: ACID transactions, complex joins, foreign key constraints\n- Domain: Order Management with known state machine\n\nLet me design a comprehensive Strangler Fig / dual-write migration architecture.",
+            "signature": "EroFCkYIDBgCKkAwCxOnSbT7/MFWtwayXrHflNDx4A898mJYcv0+HSKhMKqgZpDgmXJhACjNB0pUkogL9kssI8WVTEGQaRP7e8uLEgys49nDlO0cSa6lDy0aDCXfTmEtBn6bvoLvXCIwpGPruDDqWqXGS8MqcZ2FoXRa54rWpwamGnHx9htZUUlef1woBvdewwdrNBlSmNj5KqEEOHF2YzuI/FxU/52xGCLUhoUK6qt1DB1fAiS/siY9OY5JJtxUIugSIC9gBKQ9TXntEt3rxtjYcWrRL8nrSj0NNzUyPpPrUaK3494hRdSF8GzsIZU7WqHx9Xly6DeO4vB6E5v606VlAezfAmeV0hoxrThvDr0/c2GKJHw6cReW4aSoGPWzm19aVKlIFaTmQkg1iicV3MsXKCWGE3xptAowZPR8uXXwbrlXrZJKrhJVDxeY3vlExU+Ia8/VnDAWZpf/ITat5jlN8D1LgpTcA/+XTMQmYVVKdSuv8C4nbbtiA0ePRYA6zJ+o1wiRFQvVwpr3uG9QqXUQ2d3kIj448G8CWxrGnGgQ3oinRo5D7nRe/diSq+t3YH15x+QyfFumf3rGIXMKnDlAiqiT7rvKiFpK9uspT5ebM1jUHvuGQ/rsFqiCxiUkhbZ/dnG80YyJE2cSeqrWH9s5emqwKj789w9fjSaZ0Vo6trr1rsIA41O4I2K++xDNWyLI2QwzsRzlKuKKrGJQuotV3flvVsBQn8G6x6Rkxlc2Tx46Jt2FafXRqR5LG0VPlTgxKrrLwQv6ZiD4w0YrvnPFxMJU69WxqLmHuiqUMLj+wJsjnCCgZfYS+MTMICy++8x+/YCsEvYSJu6LPlkWhkAnPRbNdaVjmJuG4DCPQoKIyVXOUrdMSvBcqv8g/XsHNNsWulnCJlZmKkSKcjoCdlRUQQJMqpVYlZWs5o4YAQ=="
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 1,
+          "cache_creation_input_tokens": 1506,
+          "cache_read_input_tokens": 13257,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 1506
+          },
+          "output_tokens": 8,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "94ec0c85-5eb0-4daf-98ba-67f3fef3abe5"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_012hVUiswxs9aCZ41YH1yNUm",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Now I have sufficient context. The project already has an Order domain with a state machine and prior PostgreSQL ADR. Let me design the zero-downtime migration architecture.\n\n{\n  \"executive_summary\": \"Zero-downtime migration of the Order Management domain from MongoDB to PostgreSQL using a phased Strangler Fig pattern with dual-write and shadow-read verification. The architecture introduces a Database Abstraction Layer (DAL) to decouple the service from storage, then migrates in four phases: (1) schema setup + backfill, (2) dual-write with MongoDB as primary, (3) shadow-read verification and cutover to PostgreSQL as primary, (4) MongoDB decommission. At 200 writes/minute, dual-write overhead is negligible. The 8M document backfill completes in hours with batch processing using PostgreSQL advisory locks for coordination, consistent with the existing ADR.\",\n\n  \"architecture\": {\n    \"components\": [\n      {\n        \"name\": \"Order Service\",\n        \"responsibility\": \"Handles order CRUD, state transitions (leveraging existing OrderStateMachine), and exposes APIs to upstream consumers\",\n        \"boundaries\": \"Owns all order business logic. Delegates persistence to the Repository Abstraction Layer. Never directly references MongoDB or PostgreSQL drivers.\"\n      },\n      {\n        \"name\": \"Repository Abstraction Layer (DAL)\",\n        \"responsibility\": \"Provides a unified OrderRepository interface with swappable implementations: MongoOrderRepository, PostgresOrderRepository, DualWriteOrderRepository, and ShadowReadOrderRepository\",\n        \"boundaries\": \"Pure persistence concern. No business logic. Feature-flagged to switch between migration phases without code deploys.\"\n      },\n      {\n        \"name\": \"DualWriteOrderRepository\",\n        \"responsibility\": \"Writes to both MongoDB (primary) and PostgreSQL (secondary) synchronously. On PostgreSQL write failure, logs the failure and continues (MongoDB is source of truth in this phase). Emits write-discrepancy events for monitoring.\",\n        \"boundaries\": \"Temporary component. Removed after full cutover to PostgreSQL.\"\n      },\n      {\n        \"name\": \"ShadowReadOrderRepository\",\n        \"responsibility\": \"Reads from both datastores, returns MongoDB result, compares PostgreSQL result asynchronously. Logs any divergence. This validates read correctness before cutover.\",\n        \"boundaries\": \"Temporary component. Runs in Phase 3 only.\"\n      },\n      {\n        \"name\": \"Backfill Worker\",\n        \"responsibility\": \"Batch-migrates 8M existing MongoDB documents to PostgreSQL using cursor-based pagination. Uses PostgreSQL advisory locks for coordination across nodes (per existing ADR). Processes in batches of 1000, with configurable parallelism.\",\n        \"boundaries\": \"Runs as a separate process. Does not interfere with live traffic. Idempotent — can be restarted safely using upsert semantics on the PostgreSQL side.\"\n      },\n      {\n        \"name\": \"Reconciliation Job\",\n        \"responsibility\": \"Periodic (hourly during migration) job that samples records from both datastores and reports divergence. Provides confidence metrics for cutover readiness.\",\n        \"boundaries\": \"Read-only against both datastores. Uses advisory locks to prevent overlapping runs.\"\n      },\n      {\n        \"name\": \"Migration Feature Flag Controller\",\n        \"responsibility\": \"Controls which migration phase is active: MONGO_ONLY → DUAL_WRITE → SHADOW_READ → POSTGRES_PRIMARY → POSTGRES_ONLY. Supports per-node gradual rollout.\",\n        \"boundaries\": \"Configuration only. Can be environment variable, feature flag service, or config file.\"\n      },\n      {\n        \"name\": \"PostgreSQL Schema (orders database)\",\n        \"responsibility\": \"Relational schema for orders, order_line_items, payments with foreign key constraints, proper indexes, and ACID transaction support\",\n        \"boundaries\": \"Owned by Order Management bounded context. No other domain writes to these tables.\"\n      }\n    ],\n    \"interfaces\": [\n      {\n        \"from\": \"Order Service\",\n        \"to\": \"Repository Abstraction Layer\",\n        \"contract\": \"OrderRepository interface: findById(id): Order, findByCustomer(customerId, pagination): Order[], save(order): Order, updateStatus(id, newState): Order. All methods return domain objects, never raw DB documents/rows.\",\n        \"coupling_type\": \"loose — interface-based, implementation swappable at runtime\"\n      },\n      {\n        \"from\": \"DualWriteOrderRepository\",\n        \"to\": \"MongoOrderRepository\",\n        \"contract\": \"Delegates all writes to MongoDB first (synchronous, must succeed). Returns MongoDB result as canonical.\",\n        \"coupling_type\": \"temporal — both writes happen in same request path\"\n      },\n      {\n        \"from\": \"DualWriteOrderRepository\",\n        \"to\": \"PostgresOrderRepository\",\n        \"contract\": \"Secondary write to PostgreSQL. Failure is logged but does not fail the request. A repair queue captures failed writes for retry.\",\n        \"coupling_type\": \"temporal — but failure-tolerant\"\n      },\n      {\n        \"from\": \"ShadowReadOrderRepository\",\n        \"to\": \"Both Repositories\",\n        \"contract\": \"Reads from both, returns primary result, async-compares secondary. Divergence emitted as structured log event with both payloads.\",\n        \"coupling_type\": \"temporal — read path only, async comparison\"\n      },\n      {\n        \"from\": \"Backfill Worker\",\n        \"to\": \"MongoDB (read) + PostgreSQL (write)\",\n        \"contract\": \"Cursor-based read from MongoDB with batch size 1000. UPSERT into PostgreSQL keyed on order_id. Checkpoints last processed _id for resumability.\",\n        \"coupling_type\": \"batch — offline process\"\n      },\n      {\n        \"from\": \"Reconciliation Job\",\n        \"to\": \"Both Datastores\",\n        \"contract\": \"Samples N random order IDs, fetches from both stores, deep-compares, reports divergence rate as metric.\",\n        \"coupling_type\": \"read-only, periodic\"\n      }\n    ],\n    \"data_flow\": \"Phase 1 (MONGO_ONLY): Service → MongoRepo → MongoDB. Phase 2 (DUAL_WRITE): Service → DualWriteRepo → [MongoDB (primary, sync) + PostgreSQL (secondary, sync with failure tolerance)] + Backfill Worker migrates historical data. Phase 3 (SHADOW_READ): Service → ShadowReadRepo reads both, returns PostgreSQL result, compares MongoDB result async. Writes go to both via DualWriteRepo with PostgreSQL as primary. Phase 4 (POSTGRES_ONLY): Service → PostgresRepo → PostgreSQL. MongoDB decommissioned.\",\n    \"patterns_used\": [\n      {\n        \"pattern\": \"Strangler Fig\",\n        \"rationale\": \"Incrementally replaces MongoDB with PostgreSQL without big-bang cutover. Each phase is independently verifiable and reversible. Industry-proven for zero-downtime database migrations.\"\n      },\n      {\n        \"pattern\": \"Dual Write with Asymmetric Failure Handling\",\n        \"rationale\": \"During migration, writes go to both stores. The primary store (initially MongoDB, later PostgreSQL) must succeed; the secondary can fail gracefully with repair. This ensures no data loss while building confidence in the new store.\"\n      },\n      {\n        \"pattern\": \"Shadow Read / Dark Launch\",\n        \"rationale\": \"Before cutting reads to PostgreSQL, shadow reads validate that PostgreSQL returns identical results to MongoDB. Builds statistical confidence in data correctness without risking production reads.\"\n      },\n      {\n        \"pattern\": \"Repository Pattern with Strategy\",\n        \"rationale\": \"The OrderRepository interface with swappable implementations allows migration phase transitions via configuration without code changes. Clean separation of domain logic from persistence.\"\n      },\n      {\n        \"pattern\": \"Idempotent Backfill with Cursor Pagination\",\n        \"rationale\": \"8M documents require batched migration. Cursor-based pagination (using MongoDB _id) avoids skip/offset performance degradation. UPSERT semantics make the backfill idempotent and safely restartable.\"\n      },\n      {\n        \"pattern\": \"Advisory Lock Coordination\",\n        \"rationale\": \"Per existing ADR, uses PostgreSQL advisory locks for backfill worker and reconciliation job coordination. No new infrastructure needed.\"\n      }\n    ]\n  },\n\n  \"domain_model\": {\n    \"bounded_contexts\": [\n      {\n        \"name\": \"Order Management\",\n        \"classification\": \"core\",\n        \"aggregates\": [\n          {\n            \"name\": \"Order\",\n            \"root_entity\": \"Order\",\n            \"entities\": [\"Order\", \"OrderLineItem\"],\n            \"value_objects\": [\"Money\", \"ShippingAddress\", \"OrderState\"],\n            \"invariants\": [\n              \"Order state transitions must follow the OrderStateMachine (PENDING→CONFIRMED→SHIPPED→DELIVERED, with CANCELLED as terminal from PENDING/CONFIRMED)\",\n              \"Order total must equal sum of line item subtotals\",\n              \"An order must have at least one line item\"\n            ],\n            \"notes\": \"In PostgreSQL, the Order aggregate maps to an 'orders' table with 'order_line_items' as a child table with FK constraint. This enforces referential integrity that MongoDB could not.\"\n          },\n          {\n            \"name\": \"Payment\",\n            \"root_entity\": \"Payment\",\n            \"entities\": [\"Payment\"],\n            \"value_objects\": [\"Money\", \"PaymentMethod\", \"PaymentStatus\"],\n            \"invariants\": [\n              \"Payment must reference a valid Order (FK constraint in PostgreSQL)\",\n              \"Payment amount cannot exceed order total\",\n              \"Refund cannot exceed original payment amount\"\n            ],\n            \"notes\": \"In MongoDB these were embedded or loosely referenced. In PostgreSQL, payments table has FK to orders, enabling ACID transactions across order+payment updates.\"\n          }\n        ]\n      }\n    ],\n    \"context_map\": [\n      {\n        \"upstream\": \"Order Management (PostgreSQL)\",\n        \"downstream\": \"Reporting / Analytics\",\n        \"relationship\": \"Open Host Service — PostgreSQL enables complex JOIN queries for reporting that were expensive/impossible with MongoDB aggregation pipelines\"\n      },\n      {\n        \"upstream\": \"Order Management\",\n        \"downstream\": \"Shipping / Fulfillment\",\n        \"relationship\": \"Domain Events — OrderConfirmed, OrderShipped events published regardless of underlying datastore. Migration is transparent to downstream consumers.\"\n      }\n    ]\n  },\n\n  \"trade_offs\": [\n    {\n      \"decision\": \"Synchronous dual-write instead of CDC (Change Data Capture) based replication\",\n      \"gains\": \"Simpler architecture. No Debezium/Kafka infrastructure needed. At 200 writes/min (~3.3/sec), the additional write latency to PostgreSQL is negligible (<5ms per write). Easier to reason about consistency.\",\n      \"sacrifices\": \"Adds ~5-10ms latency per write during dual-write phase. If PostgreSQL is down, repair queue must be processed. Tighter coupling during migration than CDC would provide.\",\n      \"alternatives_considered\": [\n        \"CDC with Debezium: More operationally complex, requires Kafka. Better for 10,000+ writes/min. Overkill at 200/min.\",\n        \"Async dual-write via message queue: Introduces eventual consistency concerns and queue infrastructure. Unnecessary at this write volume.\"\n      ]\n    },\n    {\n      \"decision\": \"Phased Strangler Fig over big-bang migration with maintenance window\",\n      \"gains\": \"Zero downtime. Each phase is independently testable and reversible. Risk is spread across weeks rather than concentrated in one event. Team can build confidence incrementally.\",\n      \"sacrifices\": \"Longer total migration timeline (2-4 weeks vs. a single maintenance window). More complex codebase during migration with temporary dual-write code. Requires discipline to remove migration scaffolding after completion.\",\n      \"alternatives_considered\": [\n        \"Big-bang migration with downtime window: Simpler but violates zero-downtime requirement.\",\n        \"Blue-green database swap: Requires full data sync before cutover, risk of data loss during the sync window.\"\n      ]\n    },\n    {\n      \"decision\": \"PostgreSQL relational schema over JSONB document storage in PostgreSQL\",\n      \"gains\": \"Full benefit of relational model: FK constraints prevent orphaned records, JOINs for reporting, standard indexing, schema enforcement. Aligns with stated migration reasons.\",\n      \"sacrifices\": \"Requires explicit schema design and migrations. Less flexible for ad-hoc field additions than document model. Need to handle MongoDB's flexible schema (e.g., orders with varying optional fields) via nullable columns or separate tables.\",\n      \"alternatives_considered\": [\n        \"JSONB columns in PostgreSQL: Preserves document flexibility but loses FK constraints and JOIN efficiency — defeats the purpose of migrating.\",\n        \"Hybrid: relational core with JSONB for extensible metadata: Good compromise for optional/variable fields. Recommended for any order 'metadata' or 'custom_fields'.\"\n      ]\n    },\n    {\n      \"decision\": \"Backfill as separate worker process vs. inline lazy migration\",\n      \"gains\": \"Predictable migration timeline. All data migrated before cutover. No read-path complexity for cache-miss-then-migrate logic. Simpler to verify completeness.\",\n      \"sacrifices\": \"Backfill process must be managed and monitored. Brief period where both stores exist with potentially stale PostgreSQL data (mitigated by dual-write catching live traffic).\",\n      \"alternatives_considered\": [\n        \"Lazy migration (migrate on read): Simpler initially but means some records may never be migrated if never accessed. Complicates read path permanently until migration declared complete.\"\n      ]\n    }\n  ],\n\n  \"flexibility_points\": [\n    {\n      \"area\": \"Repository Abstraction Layer\",\n      \"evolution_path\": \"The OrderRepository interface survives the migration permanently. If a future migration is needed (e.g., to CockroachDB for multi-region), only the implementation changes. This is a lasting architectural improvement.\"\n    },\n    {\n      \"area\": \"Migration Phase Feature Flags\",\n      \"evolution_path\": \"Phase transitions are configuration-driven. Can roll back from POSTGRES_PRIMARY to DUAL_WRITE instantly if issues are detected. Supports canary rollout (10% of traffic to new path).\"\n    },\n    {\n      \"area\": \"PostgreSQL Schema Extensibility\",\n      \"evolution_path\": \"Use a JSONB 'metadata' column on the orders table for extensible/optional fields. Core relational columns for indexed/constrained fields, JSONB for the long tail. Best of both worlds.\"\n    },\n    {\n      \"area\": \"Reporting Queries\",\n      \"evolution_path\": \"PostgreSQL enables read replicas for reporting workloads. Can add materialized views for complex aggregations without impacting write performance.\"\n    }\n  ],\n\n  \"rigidity_points\": [\n    {\n      \"area\": \"Order ID Format\",\n      \"reason\": \"The order_id must remain consistent across both datastores during migration. If MongoDB uses ObjectId, PostgreSQL must store it as-is (VARCHAR or UUID). Cannot change ID format mid-migration. Decide the canonical ID format before Phase 1.\"\n    },\n    {\n      \"area\": \"Order State Machine\",\n      \"reason\": \"The OrderStateMachine (PENDING→CONFIRMED→SHIPPED→DELIVERED/CANCELLED) must be enforced identically in both stores during dual-write. PostgreSQL CHECK constraints or trigger-based validation must match the TypeScript state machine exactly.\"\n    },\n    {\n      \"area\": \"Transaction Boundaries\",\n      \"reason\": \"Once on PostgreSQL, order + payment writes happen in a single transaction. This is a core reason for migrating. The aggregate transaction boundary must be well-defined before schema design.\"\n    },\n    {\n      \"area\": \"Dual-Write Ordering\",\n      \"reason\": \"During dual-write, the primary store must always be written first. Swapping primary/secondary is a phase transition, not a per-request decision. This ordering is critical for consistency.\"\n    }\n  ],\n\n  \"risks\": [\n    {\n      \"risk\": \"Data divergence between MongoDB and PostgreSQL during dual-write phase due to race conditions or partial failures\",\n      \"severity\": \"high\",\n      \"mitigation\": \"Implement a repair queue for failed secondary writes. Run reconciliation job hourly to detect and report divergence. Track divergence rate as a key metric — cutover only proceeds when divergence rate is 0% for 48+ hours.\"\n    },\n    {\n      \"risk\": \"Schema mismatch — MongoDB documents have inconsistent/optional fields that don't cleanly map to relational schema\",\n      \"severity\": \"high\",\n      \"mitigation\": \"Audit all 8M documents for schema variance BEFORE designing the PostgreSQL schema. Use a schema analysis script (e.g., variety.js or custom aggregation) to identify all field paths, types, and frequency. Design nullable columns and JSONB metadata accordingly.\"\n    },\n    {\n      \"risk\": \"Backfill takes longer than expected, delaying migration timeline\",\n      \"severity\": \"medium\",\n      \"mitigation\": \"At 8M records with batch size 1000, that's 8,000 batches. At 100ms per batch (including UPSERT), ~13 minutes. Even at 10x slower, ~2 hours. Low risk but monitor throughput and adjust batch size/parallelism. Run backfill during off-peak hours.\"\n    },\n    {\n      \"risk\": \"Application performance regression after PostgreSQL cutover due to unoptimized queries or missing indexes\",\n      \"severity\": \"medium\",\n      \"mitigation\": \"Shadow reads in Phase 3 measure PostgreSQL read latency vs MongoDB. Add appropriate indexes (order_id, customer_id, status, created_at). Use EXPLAIN ANALYZE on all query patterns before cutover. Set up pg_stat_statements monitoring.\"\n    },\n    {\n      \"risk\": \"Rollback complexity — if PostgreSQL issues are found post-cutover, rolling back to MongoDB requires reverse sync\",\n      \"severity\": \"high\",\n      \"mitigation\": \"Keep dual-write active for 1-2 weeks after PostgreSQL becomes primary. MongoDB stays warm as a hot standby. Only decommission MongoDB after a bake period with zero incidents.\"\n    },\n    {\n      \"risk\": \"Team forgets to remove migration scaffolding (DualWriteRepo, ShadowReadRepo, feature flags) after migration completes\",\n      \"severity\": \"low\",\n      \"mitigation\": \"Create tracked tickets for scaffolding removal as part of the migration plan. Set a calendar reminder for 2 weeks post-decommission. The Repository Abstraction Layer stays; only the dual-write/shadow-read implementations are removed.\"\n    }\n  ],\n\n  \"implementation_guidance\": {\n    \"recommended_approach\": \"Execute in four phases over 2-4 weeks. Phase 1 (Days 1-3): Design and deploy PostgreSQL schema; implement Repository Abstraction Layer with MongoOrderRepository as the sole active implementation; deploy with zero behavior change. Phase 2 (Days 4-7): Deploy DualWriteOrderRepository behind feature flag; start backfill worker to migrate 8M historical documents; monitor write success rate and repair queue depth. Phase 3 (Days 8-14): Enable ShadowReadOrderRepository; compare read results for 48-72 hours; measure divergence rate and latency delta; once divergence is 0% for 48h, flip primary from MongoDB to PostgreSQL. Phase 4 (Days 15-21): Run with PostgreSQL as sole datastore; keep MongoDB warm for 1 week as rollback safety net; decommission MongoDB; remove migration scaffolding.\",\n    \"files_to_create_or_modify\": [\n      \"src/orders/repositories/OrderRepository.ts — Interface definition (findById, findByCustomer, save, updateStatus)\",\n      \"src/orders/repositories/MongoOrderRepository.ts — Existing MongoDB implementation extracted behind interface\",\n      \"src/orders/repositories/PostgresOrderRepository.ts — New PostgreSQL implementation using pg or Knex/Prisma\",\n      \"src/orders/repositories/DualWriteOrderRepository.ts — Temporary: writes to both, configurable primary\",\n      \"src/orders/repositories/ShadowReadOrderRepository.ts — Temporary: reads both, compares, returns primary\",\n      \"src/orders/repositories/RepositoryFactory.ts — Factory that returns correct implementation based on migration phase config\",\n      \"src/orders/repositories/RepairQueue.ts — Captures and retries failed secondary writes\",\n      \"migrations/001_create_orders_schema.sql — PostgreSQL DDL: orders, order_line_items, payments tables with FKs and indexes\",\n      \"scripts/backfill-orders.ts — Cursor-based MongoDB→PostgreSQL batch migration worker\",\n      \"scripts/reconcile-orders.ts — Sampling-based divergence checker\",\n      \"src/orders/mappers/MongoOrderMapper.ts — Maps MongoDB documents to domain Order objects\",\n      \"src/orders/mappers/PostgresOrderMapper.ts — Maps PostgreSQL rows to domain Order objects\",\n      \"docs/adr/adr-order-mongodb-to-postgresql-migration.md — ADR documenting this migration decision\"\n    ],\n    \"patterns_to_follow\": \"Repository Pattern with Strategy for swappable implementations. Strangler Fig for phased migration. Feature flags for phase control. Idempotent operations throughout (UPSERT for backfill, idempotent writes). Domain objects as the translation layer between storage formats — never pass raw documents/rows across repository boundaries. Use the existing OrderStateMachine for state transition validation regardless of datastore. Use PostgreSQL advisory locks (per existing ADR) for backfill and reconciliation job coordination.\",\n    \"pitfalls_to_avoid\": [\n      \"DO NOT attempt a big-bang migration — the zero-downtime constraint makes this unacceptable\",\n      \"DO NOT use MongoDB Change Streams as the sole replication mechanism — they can miss events during network partitions; dual-write is more reliable at this volume\",\n      \"DO NOT design the PostgreSQL schema without first auditing MongoDB document variance — hidden optional fields will cause insert failures\",\n      \"DO NOT skip the shadow-read phase — cutting over reads without validation risks serving stale/incorrect data\",\n      \"DO NOT use auto-increment IDs in PostgreSQL if MongoDB ObjectIds are used elsewhere — maintain the same ID format or create a mapping table\",\n      \"DO NOT make the secondary write in dual-write phase a hard failure — it must be failure-tolerant with repair queue\",\n      \"DO NOT decommission MongoDB immediately after cutover — keep it warm for at least 1 week as a rollback safety net\",\n      \"DO NOT forget to add indexes on PostgreSQL for all existing MongoDB query patterns — run EXPLAIN ANALYZE on every query before cutover\",\n      \"DO NOT run the backfill without rate limiting — even though 8M is manageable, unthrottled bulk inserts can spike PostgreSQL WAL and replication lag\"\n    ]\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 88,\n    \"high_confidence_areas\": [\n      \"Strangler Fig with dual-write is the industry-standard pattern for zero-downtime database migrations at this scale\",\n      \"200 writes/min is well within synchronous dual-write tolerance — no need for CDC/async complexity\",\n      \"8M records is a modest backfill — completes in minutes to low hours\",\n      \"Repository abstraction is the correct decoupling layer and provides lasting architectural value\",\n      \"PostgreSQL advisory locks for job coordination aligns with existing ADR and team practices\",\n      \"The Order domain's state machine and aggregate boundaries are well-defined from existing code\"\n    ],\n    \"low_confidence_areas\": [\n      \"MongoDB document schema variance — without auditing actual documents, the PostgreSQL schema design may need iteration\",\n      \"Exact PostgreSQL schema design for order_line_items (separate table vs JSONB array) depends on query patterns not fully specified\",\n      \"Integration with existing deployment pipeline and feature flag system — assumed to exist but not verified\",\n      \"Whether existing domain events (OrderConfirmed, etc.) are emitted from the repository layer or service layer — this affects where dual-write hooks in\"\n    ],\n    \"assumptions\": [\n      \"The Order Service is a single service (not multiple services writing to the orders collection)\",\n      \"MongoDB ObjectIds can be stored as VARCHAR/TEXT in PostgreSQL without breaking downstream consumers\",\n      \"A feature flag system or environment-variable-based configuration exists for phase control\",\n      \"The team has PostgreSQL operational expertise or is acquiring it (monitoring, vacuuming, connection pooling)\",\n      \"No other services directly read/write the MongoDB orders collection — if they do, they also need migration coordination\",\n      \"The existing OrderStateMachine TypeScript code is the canonical state transition logic\"\n    ]\n  }\n}"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 1,
+          "cache_creation_input_tokens": 1506,
+          "cache_read_input_tokens": 13257,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 1506
+          },
+          "output_tokens": 8,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "uuid": "8c7c5ce7-7f23-400c-a856-5c1285a86622"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 149043,
+      "duration_api_ms": 148987,
+      "num_turns": 8,
+      "result": "Now I have sufficient context. The project already has an Order domain with a state machine and prior PostgreSQL ADR. Let me design the zero-downtime migration architecture.\n\n{\n  \"executive_summary\": \"Zero-downtime migration of the Order Management domain from MongoDB to PostgreSQL using a phased Strangler Fig pattern with dual-write and shadow-read verification. The architecture introduces a Database Abstraction Layer (DAL) to decouple the service from storage, then migrates in four phases: (1) schema setup + backfill, (2) dual-write with MongoDB as primary, (3) shadow-read verification and cutover to PostgreSQL as primary, (4) MongoDB decommission. At 200 writes/minute, dual-write overhead is negligible. The 8M document backfill completes in hours with batch processing using PostgreSQL advisory locks for coordination, consistent with the existing ADR.\",\n\n  \"architecture\": {\n    \"components\": [\n      {\n        \"name\": \"Order Service\",\n        \"responsibility\": \"Handles order CRUD, state transitions (leveraging existing OrderStateMachine), and exposes APIs to upstream consumers\",\n        \"boundaries\": \"Owns all order business logic. Delegates persistence to the Repository Abstraction Layer. Never directly references MongoDB or PostgreSQL drivers.\"\n      },\n      {\n        \"name\": \"Repository Abstraction Layer (DAL)\",\n        \"responsibility\": \"Provides a unified OrderRepository interface with swappable implementations: MongoOrderRepository, PostgresOrderRepository, DualWriteOrderRepository, and ShadowReadOrderRepository\",\n        \"boundaries\": \"Pure persistence concern. No business logic. Feature-flagged to switch between migration phases without code deploys.\"\n      },\n      {\n        \"name\": \"DualWriteOrderRepository\",\n        \"responsibility\": \"Writes to both MongoDB (primary) and PostgreSQL (secondary) synchronously. On PostgreSQL write failure, logs the failure and continues (MongoDB is source of truth in this phase). Emits write-discrepancy events for monitoring.\",\n        \"boundaries\": \"Temporary component. Removed after full cutover to PostgreSQL.\"\n      },\n      {\n        \"name\": \"ShadowReadOrderRepository\",\n        \"responsibility\": \"Reads from both datastores, returns MongoDB result, compares PostgreSQL result asynchronously. Logs any divergence. This validates read correctness before cutover.\",\n        \"boundaries\": \"Temporary component. Runs in Phase 3 only.\"\n      },\n      {\n        \"name\": \"Backfill Worker\",\n        \"responsibility\": \"Batch-migrates 8M existing MongoDB documents to PostgreSQL using cursor-based pagination. Uses PostgreSQL advisory locks for coordination across nodes (per existing ADR). Processes in batches of 1000, with configurable parallelism.\",\n        \"boundaries\": \"Runs as a separate process. Does not interfere with live traffic. Idempotent — can be restarted safely using upsert semantics on the PostgreSQL side.\"\n      },\n      {\n        \"name\": \"Reconciliation Job\",\n        \"responsibility\": \"Periodic (hourly during migration) job that samples records from both datastores and reports divergence. Provides confidence metrics for cutover readiness.\",\n        \"boundaries\": \"Read-only against both datastores. Uses advisory locks to prevent overlapping runs.\"\n      },\n      {\n        \"name\": \"Migration Feature Flag Controller\",\n        \"responsibility\": \"Controls which migration phase is active: MONGO_ONLY → DUAL_WRITE → SHADOW_READ → POSTGRES_PRIMARY → POSTGRES_ONLY. Supports per-node gradual rollout.\",\n        \"boundaries\": \"Configuration only. Can be environment variable, feature flag service, or config file.\"\n      },\n      {\n        \"name\": \"PostgreSQL Schema (orders database)\",\n        \"responsibility\": \"Relational schema for orders, order_line_items, payments with foreign key constraints, proper indexes, and ACID transaction support\",\n        \"boundaries\": \"Owned by Order Management bounded context. No other domain writes to these tables.\"\n      }\n    ],\n    \"interfaces\": [\n      {\n        \"from\": \"Order Service\",\n        \"to\": \"Repository Abstraction Layer\",\n        \"contract\": \"OrderRepository interface: findById(id): Order, findByCustomer(customerId, pagination): Order[], save(order): Order, updateStatus(id, newState): Order. All methods return domain objects, never raw DB documents/rows.\",\n        \"coupling_type\": \"loose — interface-based, implementation swappable at runtime\"\n      },\n      {\n        \"from\": \"DualWriteOrderRepository\",\n        \"to\": \"MongoOrderRepository\",\n        \"contract\": \"Delegates all writes to MongoDB first (synchronous, must succeed). Returns MongoDB result as canonical.\",\n        \"coupling_type\": \"temporal — both writes happen in same request path\"\n      },\n      {\n        \"from\": \"DualWriteOrderRepository\",\n        \"to\": \"PostgresOrderRepository\",\n        \"contract\": \"Secondary write to PostgreSQL. Failure is logged but does not fail the request. A repair queue captures failed writes for retry.\",\n        \"coupling_type\": \"temporal — but failure-tolerant\"\n      },\n      {\n        \"from\": \"ShadowReadOrderRepository\",\n        \"to\": \"Both Repositories\",\n        \"contract\": \"Reads from both, returns primary result, async-compares secondary. Divergence emitted as structured log event with both payloads.\",\n        \"coupling_type\": \"temporal — read path only, async comparison\"\n      },\n      {\n        \"from\": \"Backfill Worker\",\n        \"to\": \"MongoDB (read) + PostgreSQL (write)\",\n        \"contract\": \"Cursor-based read from MongoDB with batch size 1000. UPSERT into PostgreSQL keyed on order_id. Checkpoints last processed _id for resumability.\",\n        \"coupling_type\": \"batch — offline process\"\n      },\n      {\n        \"from\": \"Reconciliation Job\",\n        \"to\": \"Both Datastores\",\n        \"contract\": \"Samples N random order IDs, fetches from both stores, deep-compares, reports divergence rate as metric.\",\n        \"coupling_type\": \"read-only, periodic\"\n      }\n    ],\n    \"data_flow\": \"Phase 1 (MONGO_ONLY): Service → MongoRepo → MongoDB. Phase 2 (DUAL_WRITE): Service → DualWriteRepo → [MongoDB (primary, sync) + PostgreSQL (secondary, sync with failure tolerance)] + Backfill Worker migrates historical data. Phase 3 (SHADOW_READ): Service → ShadowReadRepo reads both, returns PostgreSQL result, compares MongoDB result async. Writes go to both via DualWriteRepo with PostgreSQL as primary. Phase 4 (POSTGRES_ONLY): Service → PostgresRepo → PostgreSQL. MongoDB decommissioned.\",\n    \"patterns_used\": [\n      {\n        \"pattern\": \"Strangler Fig\",\n        \"rationale\": \"Incrementally replaces MongoDB with PostgreSQL without big-bang cutover. Each phase is independently verifiable and reversible. Industry-proven for zero-downtime database migrations.\"\n      },\n      {\n        \"pattern\": \"Dual Write with Asymmetric Failure Handling\",\n        \"rationale\": \"During migration, writes go to both stores. The primary store (initially MongoDB, later PostgreSQL) must succeed; the secondary can fail gracefully with repair. This ensures no data loss while building confidence in the new store.\"\n      },\n      {\n        \"pattern\": \"Shadow Read / Dark Launch\",\n        \"rationale\": \"Before cutting reads to PostgreSQL, shadow reads validate that PostgreSQL returns identical results to MongoDB. Builds statistical confidence in data correctness without risking production reads.\"\n      },\n      {\n        \"pattern\": \"Repository Pattern with Strategy\",\n        \"rationale\": \"The OrderRepository interface with swappable implementations allows migration phase transitions via configuration without code changes. Clean separation of domain logic from persistence.\"\n      },\n      {\n        \"pattern\": \"Idempotent Backfill with Cursor Pagination\",\n        \"rationale\": \"8M documents require batched migration. Cursor-based pagination (using MongoDB _id) avoids skip/offset performance degradation. UPSERT semantics make the backfill idempotent and safely restartable.\"\n      },\n      {\n        \"pattern\": \"Advisory Lock Coordination\",\n        \"rationale\": \"Per existing ADR, uses PostgreSQL advisory locks for backfill worker and reconciliation job coordination. No new infrastructure needed.\"\n      }\n    ]\n  },\n\n  \"domain_model\": {\n    \"bounded_contexts\": [\n      {\n        \"name\": \"Order Management\",\n        \"classification\": \"core\",\n        \"aggregates\": [\n          {\n            \"name\": \"Order\",\n            \"root_entity\": \"Order\",\n            \"entities\": [\"Order\", \"OrderLineItem\"],\n            \"value_objects\": [\"Money\", \"ShippingAddress\", \"OrderState\"],\n            \"invariants\": [\n              \"Order state transitions must follow the OrderStateMachine (PENDING→CONFIRMED→SHIPPED→DELIVERED, with CANCELLED as terminal from PENDING/CONFIRMED)\",\n              \"Order total must equal sum of line item subtotals\",\n              \"An order must have at least one line item\"\n            ],\n            \"notes\": \"In PostgreSQL, the Order aggregate maps to an 'orders' table with 'order_line_items' as a child table with FK constraint. This enforces referential integrity that MongoDB could not.\"\n          },\n          {\n            \"name\": \"Payment\",\n            \"root_entity\": \"Payment\",\n            \"entities\": [\"Payment\"],\n            \"value_objects\": [\"Money\", \"PaymentMethod\", \"PaymentStatus\"],\n            \"invariants\": [\n              \"Payment must reference a valid Order (FK constraint in PostgreSQL)\",\n              \"Payment amount cannot exceed order total\",\n              \"Refund cannot exceed original payment amount\"\n            ],\n            \"notes\": \"In MongoDB these were embedded or loosely referenced. In PostgreSQL, payments table has FK to orders, enabling ACID transactions across order+payment updates.\"\n          }\n        ]\n      }\n    ],\n    \"context_map\": [\n      {\n        \"upstream\": \"Order Management (PostgreSQL)\",\n        \"downstream\": \"Reporting / Analytics\",\n        \"relationship\": \"Open Host Service — PostgreSQL enables complex JOIN queries for reporting that were expensive/impossible with MongoDB aggregation pipelines\"\n      },\n      {\n        \"upstream\": \"Order Management\",\n        \"downstream\": \"Shipping / Fulfillment\",\n        \"relationship\": \"Domain Events — OrderConfirmed, OrderShipped events published regardless of underlying datastore. Migration is transparent to downstream consumers.\"\n      }\n    ]\n  },\n\n  \"trade_offs\": [\n    {\n      \"decision\": \"Synchronous dual-write instead of CDC (Change Data Capture) based replication\",\n      \"gains\": \"Simpler architecture. No Debezium/Kafka infrastructure needed. At 200 writes/min (~3.3/sec), the additional write latency to PostgreSQL is negligible (<5ms per write). Easier to reason about consistency.\",\n      \"sacrifices\": \"Adds ~5-10ms latency per write during dual-write phase. If PostgreSQL is down, repair queue must be processed. Tighter coupling during migration than CDC would provide.\",\n      \"alternatives_considered\": [\n        \"CDC with Debezium: More operationally complex, requires Kafka. Better for 10,000+ writes/min. Overkill at 200/min.\",\n        \"Async dual-write via message queue: Introduces eventual consistency concerns and queue infrastructure. Unnecessary at this write volume.\"\n      ]\n    },\n    {\n      \"decision\": \"Phased Strangler Fig over big-bang migration with maintenance window\",\n      \"gains\": \"Zero downtime. Each phase is independently testable and reversible. Risk is spread across weeks rather than concentrated in one event. Team can build confidence incrementally.\",\n      \"sacrifices\": \"Longer total migration timeline (2-4 weeks vs. a single maintenance window). More complex codebase during migration with temporary dual-write code. Requires discipline to remove migration scaffolding after completion.\",\n      \"alternatives_considered\": [\n        \"Big-bang migration with downtime window: Simpler but violates zero-downtime requirement.\",\n        \"Blue-green database swap: Requires full data sync before cutover, risk of data loss during the sync window.\"\n      ]\n    },\n    {\n      \"decision\": \"PostgreSQL relational schema over JSONB document storage in PostgreSQL\",\n      \"gains\": \"Full benefit of relational model: FK constraints prevent orphaned records, JOINs for reporting, standard indexing, schema enforcement. Aligns with stated migration reasons.\",\n      \"sacrifices\": \"Requires explicit schema design and migrations. Less flexible for ad-hoc field additions than document model. Need to handle MongoDB's flexible schema (e.g., orders with varying optional fields) via nullable columns or separate tables.\",\n      \"alternatives_considered\": [\n        \"JSONB columns in PostgreSQL: Preserves document flexibility but loses FK constraints and JOIN efficiency — defeats the purpose of migrating.\",\n        \"Hybrid: relational core with JSONB for extensible metadata: Good compromise for optional/variable fields. Recommended for any order 'metadata' or 'custom_fields'.\"\n      ]\n    },\n    {\n      \"decision\": \"Backfill as separate worker process vs. inline lazy migration\",\n      \"gains\": \"Predictable migration timeline. All data migrated before cutover. No read-path complexity for cache-miss-then-migrate logic. Simpler to verify completeness.\",\n      \"sacrifices\": \"Backfill process must be managed and monitored. Brief period where both stores exist with potentially stale PostgreSQL data (mitigated by dual-write catching live traffic).\",\n      \"alternatives_considered\": [\n        \"Lazy migration (migrate on read): Simpler initially but means some records may never be migrated if never accessed. Complicates read path permanently until migration declared complete.\"\n      ]\n    }\n  ],\n\n  \"flexibility_points\": [\n    {\n      \"area\": \"Repository Abstraction Layer\",\n      \"evolution_path\": \"The OrderRepository interface survives the migration permanently. If a future migration is needed (e.g., to CockroachDB for multi-region), only the implementation changes. This is a lasting architectural improvement.\"\n    },\n    {\n      \"area\": \"Migration Phase Feature Flags\",\n      \"evolution_path\": \"Phase transitions are configuration-driven. Can roll back from POSTGRES_PRIMARY to DUAL_WRITE instantly if issues are detected. Supports canary rollout (10% of traffic to new path).\"\n    },\n    {\n      \"area\": \"PostgreSQL Schema Extensibility\",\n      \"evolution_path\": \"Use a JSONB 'metadata' column on the orders table for extensible/optional fields. Core relational columns for indexed/constrained fields, JSONB for the long tail. Best of both worlds.\"\n    },\n    {\n      \"area\": \"Reporting Queries\",\n      \"evolution_path\": \"PostgreSQL enables read replicas for reporting workloads. Can add materialized views for complex aggregations without impacting write performance.\"\n    }\n  ],\n\n  \"rigidity_points\": [\n    {\n      \"area\": \"Order ID Format\",\n      \"reason\": \"The order_id must remain consistent across both datastores during migration. If MongoDB uses ObjectId, PostgreSQL must store it as-is (VARCHAR or UUID). Cannot change ID format mid-migration. Decide the canonical ID format before Phase 1.\"\n    },\n    {\n      \"area\": \"Order State Machine\",\n      \"reason\": \"The OrderStateMachine (PENDING→CONFIRMED→SHIPPED→DELIVERED/CANCELLED) must be enforced identically in both stores during dual-write. PostgreSQL CHECK constraints or trigger-based validation must match the TypeScript state machine exactly.\"\n    },\n    {\n      \"area\": \"Transaction Boundaries\",\n      \"reason\": \"Once on PostgreSQL, order + payment writes happen in a single transaction. This is a core reason for migrating. The aggregate transaction boundary must be well-defined before schema design.\"\n    },\n    {\n      \"area\": \"Dual-Write Ordering\",\n      \"reason\": \"During dual-write, the primary store must always be written first. Swapping primary/secondary is a phase transition, not a per-request decision. This ordering is critical for consistency.\"\n    }\n  ],\n\n  \"risks\": [\n    {\n      \"risk\": \"Data divergence between MongoDB and PostgreSQL during dual-write phase due to race conditions or partial failures\",\n      \"severity\": \"high\",\n      \"mitigation\": \"Implement a repair queue for failed secondary writes. Run reconciliation job hourly to detect and report divergence. Track divergence rate as a key metric — cutover only proceeds when divergence rate is 0% for 48+ hours.\"\n    },\n    {\n      \"risk\": \"Schema mismatch — MongoDB documents have inconsistent/optional fields that don't cleanly map to relational schema\",\n      \"severity\": \"high\",\n      \"mitigation\": \"Audit all 8M documents for schema variance BEFORE designing the PostgreSQL schema. Use a schema analysis script (e.g., variety.js or custom aggregation) to identify all field paths, types, and frequency. Design nullable columns and JSONB metadata accordingly.\"\n    },\n    {\n      \"risk\": \"Backfill takes longer than expected, delaying migration timeline\",\n      \"severity\": \"medium\",\n      \"mitigation\": \"At 8M records with batch size 1000, that's 8,000 batches. At 100ms per batch (including UPSERT), ~13 minutes. Even at 10x slower, ~2 hours. Low risk but monitor throughput and adjust batch size/parallelism. Run backfill during off-peak hours.\"\n    },\n    {\n      \"risk\": \"Application performance regression after PostgreSQL cutover due to unoptimized queries or missing indexes\",\n      \"severity\": \"medium\",\n      \"mitigation\": \"Shadow reads in Phase 3 measure PostgreSQL read latency vs MongoDB. Add appropriate indexes (order_id, customer_id, status, created_at). Use EXPLAIN ANALYZE on all query patterns before cutover. Set up pg_stat_statements monitoring.\"\n    },\n    {\n      \"risk\": \"Rollback complexity — if PostgreSQL issues are found post-cutover, rolling back to MongoDB requires reverse sync\",\n      \"severity\": \"high\",\n      \"mitigation\": \"Keep dual-write active for 1-2 weeks after PostgreSQL becomes primary. MongoDB stays warm as a hot standby. Only decommission MongoDB after a bake period with zero incidents.\"\n    },\n    {\n      \"risk\": \"Team forgets to remove migration scaffolding (DualWriteRepo, ShadowReadRepo, feature flags) after migration completes\",\n      \"severity\": \"low\",\n      \"mitigation\": \"Create tracked tickets for scaffolding removal as part of the migration plan. Set a calendar reminder for 2 weeks post-decommission. The Repository Abstraction Layer stays; only the dual-write/shadow-read implementations are removed.\"\n    }\n  ],\n\n  \"implementation_guidance\": {\n    \"recommended_approach\": \"Execute in four phases over 2-4 weeks. Phase 1 (Days 1-3): Design and deploy PostgreSQL schema; implement Repository Abstraction Layer with MongoOrderRepository as the sole active implementation; deploy with zero behavior change. Phase 2 (Days 4-7): Deploy DualWriteOrderRepository behind feature flag; start backfill worker to migrate 8M historical documents; monitor write success rate and repair queue depth. Phase 3 (Days 8-14): Enable ShadowReadOrderRepository; compare read results for 48-72 hours; measure divergence rate and latency delta; once divergence is 0% for 48h, flip primary from MongoDB to PostgreSQL. Phase 4 (Days 15-21): Run with PostgreSQL as sole datastore; keep MongoDB warm for 1 week as rollback safety net; decommission MongoDB; remove migration scaffolding.\",\n    \"files_to_create_or_modify\": [\n      \"src/orders/repositories/OrderRepository.ts — Interface definition (findById, findByCustomer, save, updateStatus)\",\n      \"src/orders/repositories/MongoOrderRepository.ts — Existing MongoDB implementation extracted behind interface\",\n      \"src/orders/repositories/PostgresOrderRepository.ts — New PostgreSQL implementation using pg or Knex/Prisma\",\n      \"src/orders/repositories/DualWriteOrderRepository.ts — Temporary: writes to both, configurable primary\",\n      \"src/orders/repositories/ShadowReadOrderRepository.ts — Temporary: reads both, compares, returns primary\",\n      \"src/orders/repositories/RepositoryFactory.ts — Factory that returns correct implementation based on migration phase config\",\n      \"src/orders/repositories/RepairQueue.ts — Captures and retries failed secondary writes\",\n      \"migrations/001_create_orders_schema.sql — PostgreSQL DDL: orders, order_line_items, payments tables with FKs and indexes\",\n      \"scripts/backfill-orders.ts — Cursor-based MongoDB→PostgreSQL batch migration worker\",\n      \"scripts/reconcile-orders.ts — Sampling-based divergence checker\",\n      \"src/orders/mappers/MongoOrderMapper.ts — Maps MongoDB documents to domain Order objects\",\n      \"src/orders/mappers/PostgresOrderMapper.ts — Maps PostgreSQL rows to domain Order objects\",\n      \"docs/adr/adr-order-mongodb-to-postgresql-migration.md — ADR documenting this migration decision\"\n    ],\n    \"patterns_to_follow\": \"Repository Pattern with Strategy for swappable implementations. Strangler Fig for phased migration. Feature flags for phase control. Idempotent operations throughout (UPSERT for backfill, idempotent writes). Domain objects as the translation layer between storage formats — never pass raw documents/rows across repository boundaries. Use the existing OrderStateMachine for state transition validation regardless of datastore. Use PostgreSQL advisory locks (per existing ADR) for backfill and reconciliation job coordination.\",\n    \"pitfalls_to_avoid\": [\n      \"DO NOT attempt a big-bang migration — the zero-downtime constraint makes this unacceptable\",\n      \"DO NOT use MongoDB Change Streams as the sole replication mechanism — they can miss events during network partitions; dual-write is more reliable at this volume\",\n      \"DO NOT design the PostgreSQL schema without first auditing MongoDB document variance — hidden optional fields will cause insert failures\",\n      \"DO NOT skip the shadow-read phase — cutting over reads without validation risks serving stale/incorrect data\",\n      \"DO NOT use auto-increment IDs in PostgreSQL if MongoDB ObjectIds are used elsewhere — maintain the same ID format or create a mapping table\",\n      \"DO NOT make the secondary write in dual-write phase a hard failure — it must be failure-tolerant with repair queue\",\n      \"DO NOT decommission MongoDB immediately after cutover — keep it warm for at least 1 week as a rollback safety net\",\n      \"DO NOT forget to add indexes on PostgreSQL for all existing MongoDB query patterns — run EXPLAIN ANALYZE on every query before cutover\",\n      \"DO NOT run the backfill without rate limiting — even though 8M is manageable, unthrottled bulk inserts can spike PostgreSQL WAL and replication lag\"\n    ]\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 88,\n    \"high_confidence_areas\": [\n      \"Strangler Fig with dual-write is the industry-standard pattern for zero-downtime database migrations at this scale\",\n      \"200 writes/min is well within synchronous dual-write tolerance — no need for CDC/async complexity\",\n      \"8M records is a modest backfill — completes in minutes to low hours\",\n      \"Repository abstraction is the correct decoupling layer and provides lasting architectural value\",\n      \"PostgreSQL advisory locks for job coordination aligns with existing ADR and team practices\",\n      \"The Order domain's state machine and aggregate boundaries are well-defined from existing code\"\n    ],\n    \"low_confidence_areas\": [\n      \"MongoDB document schema variance — without auditing actual documents, the PostgreSQL schema design may need iteration\",\n      \"Exact PostgreSQL schema design for order_line_items (separate table vs JSONB array) depends on query patterns not fully specified\",\n      \"Integration with existing deployment pipeline and feature flag system — assumed to exist but not verified\",\n      \"Whether existing domain events (OrderConfirmed, etc.) are emitted from the repository layer or service layer — this affects where dual-write hooks in\"\n    ],\n    \"assumptions\": [\n      \"The Order Service is a single service (not multiple services writing to the orders collection)\",\n      \"MongoDB ObjectIds can be stored as VARCHAR/TEXT in PostgreSQL without breaking downstream consumers\",\n      \"A feature flag system or environment-variable-based configuration exists for phase control\",\n      \"The team has PostgreSQL operational expertise or is acquiring it (monitoring, vacuuming, connection pooling)\",\n      \"No other services directly read/write the MongoDB orders collection — if they do, they also need migration coordination\",\n      \"The existing OrderStateMachine TypeScript code is the canonical state transition logic\"\n    ]\n  }\n}",
+      "stop_reason": "end_turn",
+      "session_id": "67c6cfb3-d479-4998-ada8-9c555b85b2ba",
+      "total_cost_usd": 0.2532805,
+      "usage": {
+        "input_tokens": 11,
+        "cache_creation_input_tokens": 10434,
+        "cache_read_input_tokens": 47626,
+        "output_tokens": 6568,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 10434,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 11,
+          "outputTokens": 6568,
+          "cacheReadInputTokens": 47626,
+          "cacheCreationInputTokens": 10434,
+          "webSearchRequests": 0,
+          "costUSD": 0.2532805,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "0a03fe34-b6a8-4ba5-a9f0-fea26f561b77"
+    }
+  ]
+}

@@ -1,0 +1,249 @@
+{
+  "agent": "magic",
+  "scenario_id": "scenario-21-learning-review-structure",
+  "agent_output": "# Learning Review: Seasonal Pricing Cache Staleness Incident (2026-03-12)\n\n## Situation Snapshot\n\nOn 2026-03-12, a cache invalidation refactor (PR #1847) was deployed to the product pricing service by Shaq and approved by Kobe. The change altered how TTL values are computed for category-specific cache entries, moving from a config-driven lookup to a call-site-passed value. This inadvertently bypassed the seasonal category's 15-minute TTL ceiling — a domain rule protecting time-sensitive promotional pricing. For 20 minutes (14:22–14:42 UTC), 847 customer transactions on seasonal items were charged stale prices from the previous day's promotional batch. Pippen's price divergence alert detected the anomaly at 14:38 UTC, and rollback completed four minutes later.\n\n## Timeline\n\n| Time (UTC) | Event | What was known | Decision / Action |\n|---|---|---|---|\n| Pre-deploy | PR #1847 scoped as \"performance optimization\" for cache invalidation. | Team understood this as a non-functional change to how TTL is passed. Bird was not consulted because the ticket was not flagged as touching pricing rules. | Proceeded without domain review. This made sense: the ticket's framing gave no signal that pricing semantics were in play. |\n| ~14:00 | Kobe approves PR #1847 after reviewing unit tests and the standard-category code path. | Unit tests passed. The standard product path was correct. Kobe was aware that seasonal categories have their own TTL override but did not trace the new call-site pattern to verify it read that override. | Approved. Reasonable given the PR's \"performance optimization\" framing — the review focused on correctness of the refactored pattern, not on category-by-category domain rule compliance. |\n| 14:22 | Shaq deploys pricing-service v2.4.1 to production. | Staging tests passed against \"standard\" category fixtures. Seasonal products were absent from staging data. | Deployed with confidence based on green staging. The gap in staging fixture coverage was not visible to Shaq. |\n| 14:22–14:38 | Seasonal products served with stale cached prices. 847 transactions affected. | No one was aware. The system appeared healthy by all existing monitors. | No action — the issue was invisible. |\n| 14:38 | Pippen's price divergence alert fires (5% threshold breached). | Team now knows pricing-service responses diverge from the source-of-truth price feed. | Investigation begins immediately. |\n| 14:42 | Rollback of v2.4.1 completed. | Root cause identified as the TTL override being bypassed for seasonal entries. | Rollback was fast — 4 minutes from detection to resolution. The rollback playbook worked as designed. |\n\n## Contributing Factors\n\nNo single cause produced this incident. The following independent factors had to co-exist:\n\n1. **Ticket framing excluded domain review.** The cache invalidation work was scoped as a \"performance optimization,\" which placed it outside Bird's domain review path. The seasonal TTL ceiling is a domain rule, but the ticket's categorization created no trigger for domain consultation. This framing was reasonable at the time — cache TTL mechanics genuinely feel like infrastructure, not business logic.\n\n2. **Domain rules encoded in config, not enforced in code.** The 15-minute seasonal TTL ceiling lives in the `CategoryConfig` enum but is not enforced by an invariant or guard clause at the cache write boundary. The rule is a convention, not a constraint. Any code path that bypasses the config lookup can silently violate it.\n\n3. **The refactor changed the TTL authority from config-read to call-site-pass.** This is the mechanical cause — TTL was previously looked up from `CategoryConfig` at cache write time, guaranteeing category-specific rules were honored. The new pattern passes TTL from the call site, which worked for categories without overrides but silently skipped the seasonal ceiling. The pattern was correct in structure but wrong in assumption: it assumed all categories use the same TTL source.\n\n4. **Staging fixture set did not include seasonal products.** Shaq tested in staging, but the fixture data only covered the \"standard\" category. The seasonal category — the one with the special TTL rule — was never exercised. This gap was not documented or visible in any test coverage report.\n\n5. **Code review focused on structural correctness, not domain rule compliance.** Kobe verified that the refactored code was internally consistent and that unit tests passed. He was aware of the seasonal TTL override's existence but did not trace the new code path to confirm it still read that override. This is understandable — code review typically validates what the PR claims to do, and the PR did not claim to change pricing behavior.\n\n6. **No automated check links cache TTL values to domain rules.** There was no integration test, contract test, or policy check that compared actual cache TTLs against the `CategoryConfig` domain rules. The divergence was only detectable by the price-feed comparison alert, which has inherent latency (the 5% threshold takes time to breach).\n\n## Learnings\n\n- **We now know that cache TTL values are domain rules, not just infrastructure knobs**, which means any change to TTL computation must trigger domain review regardless of how the ticket is framed. The boundary between \"performance\" and \"business logic\" is not always obvious — TTL ceilings that protect promotional pricing are pricing rules wearing infrastructure clothing.\n\n- **We now know that our staging fixture set has blind spots for category-specific behavior**, which means staging confidence is only as good as fixture coverage. A green staging run against \"standard\" tells us nothing about \"seasonal.\"\n\n- **We now know that domain rules in config enums are advisory, not enforced**, which means any refactor that changes how config is read can silently bypass domain constraints without any test or runtime failure.\n\n- **We now know that Pippen's price divergence alert works and catches real issues**, which means the detection layer is sound — but 16 minutes of exposure is too long for promotional pricing. The alert proved its value; the question is whether we can tighten the window.\n\n- **We now know that ticket scoping directly controls who reviews the work**, which means a miscategorized ticket can route critical changes past the people best equipped to catch problems. Bird's absence from this review was a natural consequence of the ticket's framing, not negligence by anyone.\n\n## Action Items\n\n1. **`[PREVENT]` Add a domain-enforced TTL guard at the cache write boundary.** The cache layer must read and enforce category-specific TTL ceilings from `CategoryConfig` regardless of what TTL the call site passes. This makes the rule a constraint, not a convention. **Owner: Shaq. Due: 2026-03-28.**\n\n2. **`[DETECT]` Create an integration test that asserts cache TTL values per category match `CategoryConfig` rules.** This test should run in CI and fail if any category's cache TTL exceeds its configured ceiling. **Owner: Pippen. Due: 2026-03-31.**\n\n3. **`[DETECT]` Tighten the price divergence alert threshold or add a fast-path check.** Evaluate whether a sub-5% threshold or a per-transaction spot-check (sampling) can reduce the 16-minute detection window for promotional categories. **Owner: Pippen. Due: 2026-04-07.**\n\n4. **`[PREVENT]` Add seasonal products to the staging fixture set.** Ensure staging includes representative data for every pricing category, especially those with domain-specific overrides. Maintain a fixture coverage checklist tied to `CategoryConfig` entries. **Owner: Shaq. Due: 2026-03-28.**\n\n5. **`[PROCESS]` Introduce a \"domain touch\" label for tickets that modify cache, TTL, or pricing-adjacent code paths.** Any PR that touches cache invalidation, TTL computation, or category-specific logic must be flagged for Bird's domain review, regardless of ticket category. **Owner: Coach K. Due: 2026-04-04.**\n\n6. **`[MITIGATE]` Document a runbook for price-divergence incidents** that includes: (a) immediate rollback steps, (b) transaction identification query for affected orders, (c) customer communication template. The 4-minute rollback was fast; the customer remediation path should be equally ready. **Owner: Pippen. Due: 2026-04-07.**\n\n## Preserving the Learning\n\n- **ADR: \"Cache TTL as Domain Rule\"** — Document the decision that category-specific TTL ceilings are domain invariants, not infrastructure defaults, and must be enforced at the cache write boundary. This ADR should be referenced in the pricing service's `ARCHITECTURE.md`. **Owner: Magic (me). Due: 2026-03-28.**\n\n- **Domain Rule addition to Bird's rulebook:** \"Seasonal category TTL must not exceed 15 minutes during active promotional windows\" should be added as a first-class testable domain rule with an explicit acceptance criterion, not just a config value. **Owner: Bird. Due: 2026-03-28.**\n\n- **Checklist addition to Kobe's review protocol:** \"For any PR that changes how configuration values are read or passed, verify that all category-specific overrides are still honored by the new code path.\" **Owner: Kobe. Due: 2026-03-31.**\n\n- **Staging fixture policy:** Add a standing check — when a new category or override is added to `CategoryConfig`, a corresponding staging fixture must be added in the same PR. Document this in the contributing guide. **Owner: Coach K. Due: 2026-04-04.**",
+  "agent_output_excerpt": "# Learning Review: Seasonal Pricing Cache Staleness Incident (2026-03-12)\n\n## Situation Snapshot\n\nOn 2026-03-12, a cache invalidation refactor (PR #1847) was deployed to the product pricing service by Shaq and approved by Kobe. The change altered how TTL values are computed for category-specific cache entries, moving from a config-driven lookup to a call-site-passed value. This inadvertently bypassed the seasonal category's 15-minute TTL ceiling — a domain rule protecting time-sensitive promotio",
+  "duration_ms": 58526,
+  "tokens_used": 2282,
+  "input_tokens": 3,
+  "output_tokens": 2279,
+  "cost_usd": 0.07635875,
+  "timestamp": "2026-03-24T18:23:38Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "1c52ce22-4c8f-404f-9fe1-1172c8408145",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api"
+      ],
+      "plugins": [
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "32c295c0-b0bb-423b-8753-afadc48008e6",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01NgweLKmjgrwKe8cm4JWpN4",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants a learning review for a cache invalidation incident. The instructions say to use markdown prose, NOT JSON, for learning reviews.",
+            "signature": "ErgCCkYIDBgCKkD/0D3oTrfyIE6aSCwxG7SmWWpOLONI0FsLgxz/VjE50ir7v5qFpKsniDc8BUN/tDMfzPTuHWNKEjJGDmddN1DSEgwrjxZNEj9/7LNbtSoaDIlItNHtYufju+wjRSIwLjIPC9ObSUKa/Em37MJoONC9Vh86G58LJKga/okuRlkSKlwVXYnPxlabxtJM4ubiKp8BjvDml+EScLtbTRbGh4n67bpyk+LswreNWFZcz6lMI2v1vbEkqOYRQoLQB0r11ADEhTmv/4C6hZInntK8SkFB1llgjfpRaoXm+fYMwTxQj3f34sP1MFr3PLDGZ0E8EFYujNe7n0Xqoe3hHoWkuyvlXg6aWrEyq3K+uLnqdCUVJ7/9mCZ6kRNB/OrjzFVT8Af+HwdjE/7Vb6e72XEmE8PeGAE="
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2543,
+          "cache_read_input_tokens": 6950,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2543
+          },
+          "output_tokens": 24,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "1c52ce22-4c8f-404f-9fe1-1172c8408145",
+      "uuid": "60ae9610-329c-4e19-8f5b-e4dac0deac23"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01NgweLKmjgrwKe8cm4JWpN4",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "# Learning Review: Seasonal Pricing Cache Staleness Incident (2026-03-12)\n\n## Situation Snapshot\n\nOn 2026-03-12, a cache invalidation refactor (PR #1847) was deployed to the product pricing service by Shaq and approved by Kobe. The change altered how TTL values are computed for category-specific cache entries, moving from a config-driven lookup to a call-site-passed value. This inadvertently bypassed the seasonal category's 15-minute TTL ceiling — a domain rule protecting time-sensitive promotional pricing. For 20 minutes (14:22–14:42 UTC), 847 customer transactions on seasonal items were charged stale prices from the previous day's promotional batch. Pippen's price divergence alert detected the anomaly at 14:38 UTC, and rollback completed four minutes later.\n\n## Timeline\n\n| Time (UTC) | Event | What was known | Decision / Action |\n|---|---|---|---|\n| Pre-deploy | PR #1847 scoped as \"performance optimization\" for cache invalidation. | Team understood this as a non-functional change to how TTL is passed. Bird was not consulted because the ticket was not flagged as touching pricing rules. | Proceeded without domain review. This made sense: the ticket's framing gave no signal that pricing semantics were in play. |\n| ~14:00 | Kobe approves PR #1847 after reviewing unit tests and the standard-category code path. | Unit tests passed. The standard product path was correct. Kobe was aware that seasonal categories have their own TTL override but did not trace the new call-site pattern to verify it read that override. | Approved. Reasonable given the PR's \"performance optimization\" framing — the review focused on correctness of the refactored pattern, not on category-by-category domain rule compliance. |\n| 14:22 | Shaq deploys pricing-service v2.4.1 to production. | Staging tests passed against \"standard\" category fixtures. Seasonal products were absent from staging data. | Deployed with confidence based on green staging. The gap in staging fixture coverage was not visible to Shaq. |\n| 14:22–14:38 | Seasonal products served with stale cached prices. 847 transactions affected. | No one was aware. The system appeared healthy by all existing monitors. | No action — the issue was invisible. |\n| 14:38 | Pippen's price divergence alert fires (5% threshold breached). | Team now knows pricing-service responses diverge from the source-of-truth price feed. | Investigation begins immediately. |\n| 14:42 | Rollback of v2.4.1 completed. | Root cause identified as the TTL override being bypassed for seasonal entries. | Rollback was fast — 4 minutes from detection to resolution. The rollback playbook worked as designed. |\n\n## Contributing Factors\n\nNo single cause produced this incident. The following independent factors had to co-exist:\n\n1. **Ticket framing excluded domain review.** The cache invalidation work was scoped as a \"performance optimization,\" which placed it outside Bird's domain review path. The seasonal TTL ceiling is a domain rule, but the ticket's categorization created no trigger for domain consultation. This framing was reasonable at the time — cache TTL mechanics genuinely feel like infrastructure, not business logic.\n\n2. **Domain rules encoded in config, not enforced in code.** The 15-minute seasonal TTL ceiling lives in the `CategoryConfig` enum but is not enforced by an invariant or guard clause at the cache write boundary. The rule is a convention, not a constraint. Any code path that bypasses the config lookup can silently violate it.\n\n3. **The refactor changed the TTL authority from config-read to call-site-pass.** This is the mechanical cause — TTL was previously looked up from `CategoryConfig` at cache write time, guaranteeing category-specific rules were honored. The new pattern passes TTL from the call site, which worked for categories without overrides but silently skipped the seasonal ceiling. The pattern was correct in structure but wrong in assumption: it assumed all categories use the same TTL source.\n\n4. **Staging fixture set did not include seasonal products.** Shaq tested in staging, but the fixture data only covered the \"standard\" category. The seasonal category — the one with the special TTL rule — was never exercised. This gap was not documented or visible in any test coverage report.\n\n5. **Code review focused on structural correctness, not domain rule compliance.** Kobe verified that the refactored code was internally consistent and that unit tests passed. He was aware of the seasonal TTL override's existence but did not trace the new code path to confirm it still read that override. This is understandable — code review typically validates what the PR claims to do, and the PR did not claim to change pricing behavior.\n\n6. **No automated check links cache TTL values to domain rules.** There was no integration test, contract test, or policy check that compared actual cache TTLs against the `CategoryConfig` domain rules. The divergence was only detectable by the price-feed comparison alert, which has inherent latency (the 5% threshold takes time to breach).\n\n## Learnings\n\n- **We now know that cache TTL values are domain rules, not just infrastructure knobs**, which means any change to TTL computation must trigger domain review regardless of how the ticket is framed. The boundary between \"performance\" and \"business logic\" is not always obvious — TTL ceilings that protect promotional pricing are pricing rules wearing infrastructure clothing.\n\n- **We now know that our staging fixture set has blind spots for category-specific behavior**, which means staging confidence is only as good as fixture coverage. A green staging run against \"standard\" tells us nothing about \"seasonal.\"\n\n- **We now know that domain rules in config enums are advisory, not enforced**, which means any refactor that changes how config is read can silently bypass domain constraints without any test or runtime failure.\n\n- **We now know that Pippen's price divergence alert works and catches real issues**, which means the detection layer is sound — but 16 minutes of exposure is too long for promotional pricing. The alert proved its value; the question is whether we can tighten the window.\n\n- **We now know that ticket scoping directly controls who reviews the work**, which means a miscategorized ticket can route critical changes past the people best equipped to catch problems. Bird's absence from this review was a natural consequence of the ticket's framing, not negligence by anyone.\n\n## Action Items\n\n1. **`[PREVENT]` Add a domain-enforced TTL guard at the cache write boundary.** The cache layer must read and enforce category-specific TTL ceilings from `CategoryConfig` regardless of what TTL the call site passes. This makes the rule a constraint, not a convention. **Owner: Shaq. Due: 2026-03-28.**\n\n2. **`[DETECT]` Create an integration test that asserts cache TTL values per category match `CategoryConfig` rules.** This test should run in CI and fail if any category's cache TTL exceeds its configured ceiling. **Owner: Pippen. Due: 2026-03-31.**\n\n3. **`[DETECT]` Tighten the price divergence alert threshold or add a fast-path check.** Evaluate whether a sub-5% threshold or a per-transaction spot-check (sampling) can reduce the 16-minute detection window for promotional categories. **Owner: Pippen. Due: 2026-04-07.**\n\n4. **`[PREVENT]` Add seasonal products to the staging fixture set.** Ensure staging includes representative data for every pricing category, especially those with domain-specific overrides. Maintain a fixture coverage checklist tied to `CategoryConfig` entries. **Owner: Shaq. Due: 2026-03-28.**\n\n5. **`[PROCESS]` Introduce a \"domain touch\" label for tickets that modify cache, TTL, or pricing-adjacent code paths.** Any PR that touches cache invalidation, TTL computation, or category-specific logic must be flagged for Bird's domain review, regardless of ticket category. **Owner: Coach K. Due: 2026-04-04.**\n\n6. **`[MITIGATE]` Document a runbook for price-divergence incidents** that includes: (a) immediate rollback steps, (b) transaction identification query for affected orders, (c) customer communication template. The 4-minute rollback was fast; the customer remediation path should be equally ready. **Owner: Pippen. Due: 2026-04-07.**\n\n## Preserving the Learning\n\n- **ADR: \"Cache TTL as Domain Rule\"** — Document the decision that category-specific TTL ceilings are domain invariants, not infrastructure defaults, and must be enforced at the cache write boundary. This ADR should be referenced in the pricing service's `ARCHITECTURE.md`. **Owner: Magic (me). Due: 2026-03-28.**\n\n- **Domain Rule addition to Bird's rulebook:** \"Seasonal category TTL must not exceed 15 minutes during active promotional windows\" should be added as a first-class testable domain rule with an explicit acceptance criterion, not just a config value. **Owner: Bird. Due: 2026-03-28.**\n\n- **Checklist addition to Kobe's review protocol:** \"For any PR that changes how configuration values are read or passed, verify that all category-specific overrides are still honored by the new code path.\" **Owner: Kobe. Due: 2026-03-31.**\n\n- **Staging fixture policy:** Add a standing check — when a new category or override is added to `CategoryConfig`, a corresponding staging fixture must be added in the same PR. Document this in the contributing guide. **Owner: Coach K. Due: 2026-04-04.**"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2543,
+          "cache_read_input_tokens": 6950,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2543
+          },
+          "output_tokens": 24,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "1c52ce22-4c8f-404f-9fe1-1172c8408145",
+      "uuid": "b431c4d6-a9c7-410c-a34a-824afc10e429"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774393200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "804ba20a-7500-4caf-b828-d26ca2582731",
+      "session_id": "1c52ce22-4c8f-404f-9fe1-1172c8408145"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 57842,
+      "duration_api_ms": 57829,
+      "num_turns": 1,
+      "result": "# Learning Review: Seasonal Pricing Cache Staleness Incident (2026-03-12)\n\n## Situation Snapshot\n\nOn 2026-03-12, a cache invalidation refactor (PR #1847) was deployed to the product pricing service by Shaq and approved by Kobe. The change altered how TTL values are computed for category-specific cache entries, moving from a config-driven lookup to a call-site-passed value. This inadvertently bypassed the seasonal category's 15-minute TTL ceiling — a domain rule protecting time-sensitive promotional pricing. For 20 minutes (14:22–14:42 UTC), 847 customer transactions on seasonal items were charged stale prices from the previous day's promotional batch. Pippen's price divergence alert detected the anomaly at 14:38 UTC, and rollback completed four minutes later.\n\n## Timeline\n\n| Time (UTC) | Event | What was known | Decision / Action |\n|---|---|---|---|\n| Pre-deploy | PR #1847 scoped as \"performance optimization\" for cache invalidation. | Team understood this as a non-functional change to how TTL is passed. Bird was not consulted because the ticket was not flagged as touching pricing rules. | Proceeded without domain review. This made sense: the ticket's framing gave no signal that pricing semantics were in play. |\n| ~14:00 | Kobe approves PR #1847 after reviewing unit tests and the standard-category code path. | Unit tests passed. The standard product path was correct. Kobe was aware that seasonal categories have their own TTL override but did not trace the new call-site pattern to verify it read that override. | Approved. Reasonable given the PR's \"performance optimization\" framing — the review focused on correctness of the refactored pattern, not on category-by-category domain rule compliance. |\n| 14:22 | Shaq deploys pricing-service v2.4.1 to production. | Staging tests passed against \"standard\" category fixtures. Seasonal products were absent from staging data. | Deployed with confidence based on green staging. The gap in staging fixture coverage was not visible to Shaq. |\n| 14:22–14:38 | Seasonal products served with stale cached prices. 847 transactions affected. | No one was aware. The system appeared healthy by all existing monitors. | No action — the issue was invisible. |\n| 14:38 | Pippen's price divergence alert fires (5% threshold breached). | Team now knows pricing-service responses diverge from the source-of-truth price feed. | Investigation begins immediately. |\n| 14:42 | Rollback of v2.4.1 completed. | Root cause identified as the TTL override being bypassed for seasonal entries. | Rollback was fast — 4 minutes from detection to resolution. The rollback playbook worked as designed. |\n\n## Contributing Factors\n\nNo single cause produced this incident. The following independent factors had to co-exist:\n\n1. **Ticket framing excluded domain review.** The cache invalidation work was scoped as a \"performance optimization,\" which placed it outside Bird's domain review path. The seasonal TTL ceiling is a domain rule, but the ticket's categorization created no trigger for domain consultation. This framing was reasonable at the time — cache TTL mechanics genuinely feel like infrastructure, not business logic.\n\n2. **Domain rules encoded in config, not enforced in code.** The 15-minute seasonal TTL ceiling lives in the `CategoryConfig` enum but is not enforced by an invariant or guard clause at the cache write boundary. The rule is a convention, not a constraint. Any code path that bypasses the config lookup can silently violate it.\n\n3. **The refactor changed the TTL authority from config-read to call-site-pass.** This is the mechanical cause — TTL was previously looked up from `CategoryConfig` at cache write time, guaranteeing category-specific rules were honored. The new pattern passes TTL from the call site, which worked for categories without overrides but silently skipped the seasonal ceiling. The pattern was correct in structure but wrong in assumption: it assumed all categories use the same TTL source.\n\n4. **Staging fixture set did not include seasonal products.** Shaq tested in staging, but the fixture data only covered the \"standard\" category. The seasonal category — the one with the special TTL rule — was never exercised. This gap was not documented or visible in any test coverage report.\n\n5. **Code review focused on structural correctness, not domain rule compliance.** Kobe verified that the refactored code was internally consistent and that unit tests passed. He was aware of the seasonal TTL override's existence but did not trace the new code path to confirm it still read that override. This is understandable — code review typically validates what the PR claims to do, and the PR did not claim to change pricing behavior.\n\n6. **No automated check links cache TTL values to domain rules.** There was no integration test, contract test, or policy check that compared actual cache TTLs against the `CategoryConfig` domain rules. The divergence was only detectable by the price-feed comparison alert, which has inherent latency (the 5% threshold takes time to breach).\n\n## Learnings\n\n- **We now know that cache TTL values are domain rules, not just infrastructure knobs**, which means any change to TTL computation must trigger domain review regardless of how the ticket is framed. The boundary between \"performance\" and \"business logic\" is not always obvious — TTL ceilings that protect promotional pricing are pricing rules wearing infrastructure clothing.\n\n- **We now know that our staging fixture set has blind spots for category-specific behavior**, which means staging confidence is only as good as fixture coverage. A green staging run against \"standard\" tells us nothing about \"seasonal.\"\n\n- **We now know that domain rules in config enums are advisory, not enforced**, which means any refactor that changes how config is read can silently bypass domain constraints without any test or runtime failure.\n\n- **We now know that Pippen's price divergence alert works and catches real issues**, which means the detection layer is sound — but 16 minutes of exposure is too long for promotional pricing. The alert proved its value; the question is whether we can tighten the window.\n\n- **We now know that ticket scoping directly controls who reviews the work**, which means a miscategorized ticket can route critical changes past the people best equipped to catch problems. Bird's absence from this review was a natural consequence of the ticket's framing, not negligence by anyone.\n\n## Action Items\n\n1. **`[PREVENT]` Add a domain-enforced TTL guard at the cache write boundary.** The cache layer must read and enforce category-specific TTL ceilings from `CategoryConfig` regardless of what TTL the call site passes. This makes the rule a constraint, not a convention. **Owner: Shaq. Due: 2026-03-28.**\n\n2. **`[DETECT]` Create an integration test that asserts cache TTL values per category match `CategoryConfig` rules.** This test should run in CI and fail if any category's cache TTL exceeds its configured ceiling. **Owner: Pippen. Due: 2026-03-31.**\n\n3. **`[DETECT]` Tighten the price divergence alert threshold or add a fast-path check.** Evaluate whether a sub-5% threshold or a per-transaction spot-check (sampling) can reduce the 16-minute detection window for promotional categories. **Owner: Pippen. Due: 2026-04-07.**\n\n4. **`[PREVENT]` Add seasonal products to the staging fixture set.** Ensure staging includes representative data for every pricing category, especially those with domain-specific overrides. Maintain a fixture coverage checklist tied to `CategoryConfig` entries. **Owner: Shaq. Due: 2026-03-28.**\n\n5. **`[PROCESS]` Introduce a \"domain touch\" label for tickets that modify cache, TTL, or pricing-adjacent code paths.** Any PR that touches cache invalidation, TTL computation, or category-specific logic must be flagged for Bird's domain review, regardless of ticket category. **Owner: Coach K. Due: 2026-04-04.**\n\n6. **`[MITIGATE]` Document a runbook for price-divergence incidents** that includes: (a) immediate rollback steps, (b) transaction identification query for affected orders, (c) customer communication template. The 4-minute rollback was fast; the customer remediation path should be equally ready. **Owner: Pippen. Due: 2026-04-07.**\n\n## Preserving the Learning\n\n- **ADR: \"Cache TTL as Domain Rule\"** — Document the decision that category-specific TTL ceilings are domain invariants, not infrastructure defaults, and must be enforced at the cache write boundary. This ADR should be referenced in the pricing service's `ARCHITECTURE.md`. **Owner: Magic (me). Due: 2026-03-28.**\n\n- **Domain Rule addition to Bird's rulebook:** \"Seasonal category TTL must not exceed 15 minutes during active promotional windows\" should be added as a first-class testable domain rule with an explicit acceptance criterion, not just a config value. **Owner: Bird. Due: 2026-03-28.**\n\n- **Checklist addition to Kobe's review protocol:** \"For any PR that changes how configuration values are read or passed, verify that all category-specific overrides are still honored by the new code path.\" **Owner: Kobe. Due: 2026-03-31.**\n\n- **Staging fixture policy:** Add a standing check — when a new category or override is added to `CategoryConfig`, a corresponding staging fixture must be added in the same PR. Document this in the contributing guide. **Owner: Coach K. Due: 2026-04-04.**",
+      "stop_reason": "end_turn",
+      "session_id": "1c52ce22-4c8f-404f-9fe1-1172c8408145",
+      "total_cost_usd": 0.07635875,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 2543,
+        "cache_read_input_tokens": 6950,
+        "output_tokens": 2279,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 2543,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2279,
+          "cacheReadInputTokens": 6950,
+          "cacheCreationInputTokens": 2543,
+          "webSearchRequests": 0,
+          "costUSD": 0.07635875,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "69ca4d7b-942e-4020-9773-682ebf7742bf"
+    }
+  ]
+}
