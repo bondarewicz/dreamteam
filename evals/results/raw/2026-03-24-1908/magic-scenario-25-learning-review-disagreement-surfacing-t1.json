@@ -1,0 +1,249 @@
+{
+  "agent": "magic",
+  "scenario_id": "scenario-25-learning-review-disagreement-surfacing",
+  "agent_output": "# Learning Review: user_preferences Migration Deadlock and Rollback\n\n**Date of incident**: 2026-02-14\n**Review author**: Magic Johnson (Context Synthesizer)\n**Review date**: 2026-03-24\n\n---\n\n## 1. Situation Snapshot\n\nDuring a scheduled maintenance window on 2026-02-14, the team applied a database migration to add a nullable JSON column to the `user_preferences` table (800k rows) and ran a backfill job to populate existing rows. The backfill deadlocked with a live API transaction at 60% completion, leaving the table in a partially-migrated state. A disagreement between Kobe and MJ on the recovery path consumed decision-making time under pressure. The team ultimately rolled back, and the subsequent event log replay degraded service for 47 minutes. No data was lost, but the incident exposed several gaps in the team's shared understanding of migration safety, domain semantics, and operational decision frameworks.\n\n---\n\n## 2. Timeline\n\n| Time (approx.) | Event | What was known | Decision / Action |\n|---|---|---|---|\n| Window opens | Migration applied: nullable JSON column added to `user_preferences` | Column is nullable; API has fallback for missing values. Table has 800k rows. | Shaq runs migration per runbook. |\n| Backfill starts | Single UPDATE statement begins populating all 800k rows | Runbook does not specify batch size. Shaq proceeds with unbatched approach — reasonable given the runbook's silence on the topic. | No batching applied. |\n| ~11 min in | Deadlock detected between backfill UPDATE and a live API `SELECT FOR UPDATE` | 60% of rows migrated. 40% have NULL in the new column. Deadlock kills the backfill. The root lock contention is understood, but whether the condition would recur is not. | Team enters incident response. |\n| Decision point | Kobe advocates rollback; MJ advocates forward-fix | Both positions are internally coherent (see Section 3). No pre-agreed criteria exist for choosing between them. The team has no rehearsed procedure for either path. | Discussion under time pressure. |\n| Decision made | Team rolls back | Rollback is chosen. The implication — that 4 hours of accumulated preference events will need replay — is understood but the replay has not been rehearsed. | Rollback executed. |\n| Post-rollback | Event replay designed (4 hrs) and executed (47 min) | Replay is a new operation introduced under pressure. It succeeds. Service is degraded during the 47-minute execution window. | Replay completes. No data lost. |\n\n---\n\n## 3. Contributing Factors\n\nEach of the following factors independently contributed to the incident's scope and duration. No single factor is the root cause.\n\n**The backfill was unbatched.** Shaq executed the backfill as a single UPDATE across 800k rows. This maximized the lock window and made a deadlock with concurrent API transactions likely. The runbook did not specify a batch size threshold, and Shaq followed the runbook as written. The absence of batching guidance in the runbook is itself a contributing factor — not Shaq's interpretation of it.\n\n**The maintenance window did not fully isolate write traffic.** A live API transaction performed a `SELECT FOR UPDATE` on the same table during the backfill. The team's definition of \"maintenance window\" did not include quiescing write traffic to the migration target, or the quiescing was incomplete. The deadlock was a direct consequence of concurrent writes.\n\n**The semantic meaning of NULL in the new column was ambiguous.** Bird's domain rule is clear: preference data must be consistent per user, and partial states are not permitted at the row level. However, the migration introduced a nullable column where NULL could mean either \"user has no preference\" or \"user hasn't been migrated yet.\" This ambiguity was not surfaced or resolved during migration planning. It meant the partially-migrated state was not just operationally awkward but semantically undefined — a condition that made both rollback and forward-fix riskier than they appeared.\n\n**No pre-agreed decision framework existed for partial migration failure.** Both Kobe and MJ were reasoning from first principles under pressure. Kobe's position (rollback to known-good state, avoid unknown deadlock recurrence) and MJ's position (forward-fix avoids introducing an unrehearsed replay operation and sidesteps event accumulation risk) were both internally sound. The disagreement was not a failure of either individual's reasoning — it was a signal that the team had never aligned on the criteria for rollback vs. forward-fix. Without shared criteria, the decision consumed time and cognitive load during the incident instead of being a quick lookup against a pre-agreed playbook.\n\n**The event replay operation had not been rehearsed.** Regardless of which recovery path was chosen, the team lacked a tested procedure for either completing a partial backfill or replaying accumulated events. The replay ultimately took 4 hours to design and 47 minutes to execute — time that could have been reduced or eliminated with a pre-tested runbook.\n\n**No SLA existed for migration recovery time.** The 47-minute service degradation had no benchmark against which to measure severity. The team cannot currently say whether this was acceptable or not.\n\n---\n\n## 4. Learnings\n\n**We now know that runbook silence is not the same as runbook approval.** The runbook's lack of a batch size threshold was interpreted as \"batching is not required,\" when it should have been interpreted as \"this case was not considered.\" This means runbooks need to explicitly address batch strategy for any data-modifying operation above a stated row threshold, and engineers should treat runbook silence on a relevant concern as a gap to escalate, not a green light.\n\n**We now know that the semantic meaning of NULL must be defined before a nullable column ships.** A nullable column that can mean two different things (no value vs. not-yet-migrated) creates a domain ambiguity that makes every subsequent decision harder — including incident recovery decisions. This means migration plans for columns with domain significance must include a \"what does NULL mean?\" section reviewed by the domain authority (Bird) before approval.\n\n**We now know that the Kobe/MJ disagreement was a symptom, not the problem.** Both positions were reasonable given the information available. The real gap was that the team had no shared decision framework for \"partial migration failure during a maintenance window.\" This means the team needs to establish explicit, pre-agreed criteria — not to prevent disagreement, but to give disagreement a shared vocabulary and resolution path before it occurs under pressure.\n\n**We now know that any migration plan that accumulates events during execution needs a tested replay procedure.** The 4-hour event accumulation and subsequent replay were foreseeable consequences of the migration strategy. This means migration plans that touch tables with active event streams must include a rehearsed replay procedure as part of the rollback plan, not as an improvised recovery step.\n\n**We now know that \"maintenance window\" needs a precise operational definition.** The concurrent `SELECT FOR UPDATE` should not have been possible if the maintenance window fully quiesced write traffic to the target table. This means the team needs to define what \"maintenance window\" means at the table level — which traffic is stopped, which is allowed, and how that's enforced.\n\n---\n\n## 5. Action Items\n\n- `[PREVENT]` **Add batch size guidance to the migration runbook.** Define a row-count threshold (e.g., >10k rows) above which backfills must be batched. Include recommended batch sizes and lock timeout settings. **Owner**: Shaq. **Due**: 2026-04-07.\n\n- `[PREVENT]` **Require a \"NULL semantics\" section in every migration plan that adds a nullable column to a domain entity.** This section must be reviewed and approved by Bird before the migration is scheduled. **Owner**: Bird. **Due**: 2026-04-07.\n\n- `[PREVENT]` **Define and document a rollback-vs-forward-fix decision framework for data migrations.** The framework should include explicit criteria (e.g., percentage migrated, nature of failure, availability of tested replay, domain consistency requirements). This is not about choosing a \"correct\" default — it is about giving the team a shared vocabulary so the decision can be made quickly under pressure. **Owner**: Kobe and MJ jointly. **Due**: 2026-04-14.\n\n- `[DETECT]` **Add deadlock monitoring and alerting for migration target tables during maintenance windows.** The deadlock was detected only when the backfill failed. Earlier detection would have given the team more options. **Owner**: Pippen. **Due**: 2026-04-07.\n\n- `[MITIGATE]` **Require a tested replay/recovery procedure for any migration that touches a table with an active event stream.** The procedure must be executed in staging before the production migration is approved. **Owner**: Shaq and Pippen jointly. **Due**: 2026-04-14.\n\n- `[PROCESS]` **Define \"maintenance window\" operationally at the table level.** Document which traffic is quiesced, how quiescing is enforced (not just requested), and how to verify quiescing is complete before migration begins. **Owner**: Pippen. **Due**: 2026-04-07.\n\n---\n\n## 6. Preserving the Learning\n\n**ADR: Migration Safety Standards** — Document the batch size policy, NULL semantics review requirement, and maintenance window definition as an Architecture Decision Record. This ensures the standards survive beyond the individuals involved in this incident. **Owner**: MJ. **Due**: 2026-04-07.\n\n**Domain Rule Update: Preference Consistency** — Bird to codify the rule that nullable columns on domain entities must have an unambiguous semantic definition for NULL, added to the domain rules reference. **Owner**: Bird. **Due**: 2026-04-07.\n\n**Runbook Addendum: Rollback vs Forward-Fix Framework** — Once Kobe and MJ produce the decision framework (Action Item above), embed it in the migration runbook as a decision tree. This is the artifact most likely to be consulted under pressure — it must be in the place engineers look during incidents, not in a separate document. **Owner**: Kobe and MJ. **Due**: 2026-04-21.\n\n**Incident Retrospective Checklist Item** — Add \"Did we have a pre-agreed recovery path?\" to the post-incident checklist. This normalizes the question so future migrations are reviewed for recovery readiness before execution. **Owner**: Pippen. **Due**: 2026-04-07.\n\n---\n\n*A note on the Kobe/MJ disagreement: This review deliberately does not resolve which recovery path was \"correct.\" Both positions reflected sound engineering judgment applied to incomplete shared context. The disagreement is the most valuable signal from this incident — it tells us exactly where our shared understanding has gaps. Filling those gaps with a pre-agreed framework is more valuable than retroactively declaring a winner. The goal is not to prevent disagreement; it is to ensure that when disagreement happens under pressure, the team has a shared structure for resolving it quickly.*",
+  "agent_output_excerpt": "# Learning Review: user_preferences Migration Deadlock and Rollback\n\n**Date of incident**: 2026-02-14\n**Review author**: Magic Johnson (Context Synthesizer)\n**Review date**: 2026-03-24\n\n---\n\n## 1. Situation Snapshot\n\nDuring a scheduled maintenance window on 2026-02-14, the team applied a database migration to add a nullable JSON column to the `user_preferences` table (800k rows) and ran a backfill job to populate existing rows. The backfill deadlocked with a live API transaction at 60% completio",
+  "duration_ms": 62832,
+  "tokens_used": 2606,
+  "input_tokens": 3,
+  "output_tokens": 2603,
+  "cost_usd": 0.08674,
+  "timestamp": "2026-03-24T18:24:43Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "f96ef76a-5d72-465d-b125-94ebb0c8b953",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api"
+      ],
+      "plugins": [
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "2ad238d6-b6d1-4505-abdc-327d68db8097",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01X2bs2WdFZFG1ZYm5suiPEJ",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants a learning review for a database migration incident. This should be in markdown prose format following the 6-section learning review structure. Key instruction: frame the Kobe/MJ disagreement as incomplete shared understanding, not as either being wrong.",
+            "signature": "ErYDCkYIDBgCKkCTWfpcJDY8TmBAxXlCLpn3a8hlQGy50Bmdr/hPaTrV1TCoWs01+v/ikP52CAX5F8L5IO3u9x0kTJiZxshQ2r/ZEgyG7Sg7K8jIX4MbE+8aDOxnEXyecr2QDin1fSIwqYWJQxt4W5WeYruN4eAZ6+7DwMQNgLJgGh5X5aJUaiBt9ppPY7FSAm/aJxE7lVTKKp0C11ktLBNySeexvIzy6UNcV0HHlXjBm166X2P39z22fvh+TqhNyBWtqNYlmKVhCZg38wMPQZCwxbG9IRYyMlCSS61yMsV5U00Jer9cbMiRfIxJulBXIY52PRATUBAZNHSdmR8AImpd8+ohrLiQey3ZY5+jr4uW/nahyn/1SA0LXS/UjUkuJMfehPLuUP74sjAzZttvgZ4fQQxQ+k1Uao20GPbqJ6VxivOszs7yZmmabdkUYUxBacbDLs4TN+H1JkKgznKhC2shJYnh4KCsNHg4bt8akH1X4qEzhPgX3IZGndg0F9TIWgjgEHjUHfMNutHd4dytHqx/kpqYlg8HXOjqmIm6mo1gb+gCMAeQ0Ms4TJjPw+Hld5ClcRynMl3bGAE="
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2908,
+          "cache_read_input_tokens": 6950,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2908
+          },
+          "output_tokens": 25,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "f96ef76a-5d72-465d-b125-94ebb0c8b953",
+      "uuid": "0e81ff57-f0f8-4fa4-a4de-1a264cbace30"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01X2bs2WdFZFG1ZYm5suiPEJ",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "# Learning Review: user_preferences Migration Deadlock and Rollback\n\n**Date of incident**: 2026-02-14\n**Review author**: Magic Johnson (Context Synthesizer)\n**Review date**: 2026-03-24\n\n---\n\n## 1. Situation Snapshot\n\nDuring a scheduled maintenance window on 2026-02-14, the team applied a database migration to add a nullable JSON column to the `user_preferences` table (800k rows) and ran a backfill job to populate existing rows. The backfill deadlocked with a live API transaction at 60% completion, leaving the table in a partially-migrated state. A disagreement between Kobe and MJ on the recovery path consumed decision-making time under pressure. The team ultimately rolled back, and the subsequent event log replay degraded service for 47 minutes. No data was lost, but the incident exposed several gaps in the team's shared understanding of migration safety, domain semantics, and operational decision frameworks.\n\n---\n\n## 2. Timeline\n\n| Time (approx.) | Event | What was known | Decision / Action |\n|---|---|---|---|\n| Window opens | Migration applied: nullable JSON column added to `user_preferences` | Column is nullable; API has fallback for missing values. Table has 800k rows. | Shaq runs migration per runbook. |\n| Backfill starts | Single UPDATE statement begins populating all 800k rows | Runbook does not specify batch size. Shaq proceeds with unbatched approach — reasonable given the runbook's silence on the topic. | No batching applied. |\n| ~11 min in | Deadlock detected between backfill UPDATE and a live API `SELECT FOR UPDATE` | 60% of rows migrated. 40% have NULL in the new column. Deadlock kills the backfill. The root lock contention is understood, but whether the condition would recur is not. | Team enters incident response. |\n| Decision point | Kobe advocates rollback; MJ advocates forward-fix | Both positions are internally coherent (see Section 3). No pre-agreed criteria exist for choosing between them. The team has no rehearsed procedure for either path. | Discussion under time pressure. |\n| Decision made | Team rolls back | Rollback is chosen. The implication — that 4 hours of accumulated preference events will need replay — is understood but the replay has not been rehearsed. | Rollback executed. |\n| Post-rollback | Event replay designed (4 hrs) and executed (47 min) | Replay is a new operation introduced under pressure. It succeeds. Service is degraded during the 47-minute execution window. | Replay completes. No data lost. |\n\n---\n\n## 3. Contributing Factors\n\nEach of the following factors independently contributed to the incident's scope and duration. No single factor is the root cause.\n\n**The backfill was unbatched.** Shaq executed the backfill as a single UPDATE across 800k rows. This maximized the lock window and made a deadlock with concurrent API transactions likely. The runbook did not specify a batch size threshold, and Shaq followed the runbook as written. The absence of batching guidance in the runbook is itself a contributing factor — not Shaq's interpretation of it.\n\n**The maintenance window did not fully isolate write traffic.** A live API transaction performed a `SELECT FOR UPDATE` on the same table during the backfill. The team's definition of \"maintenance window\" did not include quiescing write traffic to the migration target, or the quiescing was incomplete. The deadlock was a direct consequence of concurrent writes.\n\n**The semantic meaning of NULL in the new column was ambiguous.** Bird's domain rule is clear: preference data must be consistent per user, and partial states are not permitted at the row level. However, the migration introduced a nullable column where NULL could mean either \"user has no preference\" or \"user hasn't been migrated yet.\" This ambiguity was not surfaced or resolved during migration planning. It meant the partially-migrated state was not just operationally awkward but semantically undefined — a condition that made both rollback and forward-fix riskier than they appeared.\n\n**No pre-agreed decision framework existed for partial migration failure.** Both Kobe and MJ were reasoning from first principles under pressure. Kobe's position (rollback to known-good state, avoid unknown deadlock recurrence) and MJ's position (forward-fix avoids introducing an unrehearsed replay operation and sidesteps event accumulation risk) were both internally sound. The disagreement was not a failure of either individual's reasoning — it was a signal that the team had never aligned on the criteria for rollback vs. forward-fix. Without shared criteria, the decision consumed time and cognitive load during the incident instead of being a quick lookup against a pre-agreed playbook.\n\n**The event replay operation had not been rehearsed.** Regardless of which recovery path was chosen, the team lacked a tested procedure for either completing a partial backfill or replaying accumulated events. The replay ultimately took 4 hours to design and 47 minutes to execute — time that could have been reduced or eliminated with a pre-tested runbook.\n\n**No SLA existed for migration recovery time.** The 47-minute service degradation had no benchmark against which to measure severity. The team cannot currently say whether this was acceptable or not.\n\n---\n\n## 4. Learnings\n\n**We now know that runbook silence is not the same as runbook approval.** The runbook's lack of a batch size threshold was interpreted as \"batching is not required,\" when it should have been interpreted as \"this case was not considered.\" This means runbooks need to explicitly address batch strategy for any data-modifying operation above a stated row threshold, and engineers should treat runbook silence on a relevant concern as a gap to escalate, not a green light.\n\n**We now know that the semantic meaning of NULL must be defined before a nullable column ships.** A nullable column that can mean two different things (no value vs. not-yet-migrated) creates a domain ambiguity that makes every subsequent decision harder — including incident recovery decisions. This means migration plans for columns with domain significance must include a \"what does NULL mean?\" section reviewed by the domain authority (Bird) before approval.\n\n**We now know that the Kobe/MJ disagreement was a symptom, not the problem.** Both positions were reasonable given the information available. The real gap was that the team had no shared decision framework for \"partial migration failure during a maintenance window.\" This means the team needs to establish explicit, pre-agreed criteria — not to prevent disagreement, but to give disagreement a shared vocabulary and resolution path before it occurs under pressure.\n\n**We now know that any migration plan that accumulates events during execution needs a tested replay procedure.** The 4-hour event accumulation and subsequent replay were foreseeable consequences of the migration strategy. This means migration plans that touch tables with active event streams must include a rehearsed replay procedure as part of the rollback plan, not as an improvised recovery step.\n\n**We now know that \"maintenance window\" needs a precise operational definition.** The concurrent `SELECT FOR UPDATE` should not have been possible if the maintenance window fully quiesced write traffic to the target table. This means the team needs to define what \"maintenance window\" means at the table level — which traffic is stopped, which is allowed, and how that's enforced.\n\n---\n\n## 5. Action Items\n\n- `[PREVENT]` **Add batch size guidance to the migration runbook.** Define a row-count threshold (e.g., >10k rows) above which backfills must be batched. Include recommended batch sizes and lock timeout settings. **Owner**: Shaq. **Due**: 2026-04-07.\n\n- `[PREVENT]` **Require a \"NULL semantics\" section in every migration plan that adds a nullable column to a domain entity.** This section must be reviewed and approved by Bird before the migration is scheduled. **Owner**: Bird. **Due**: 2026-04-07.\n\n- `[PREVENT]` **Define and document a rollback-vs-forward-fix decision framework for data migrations.** The framework should include explicit criteria (e.g., percentage migrated, nature of failure, availability of tested replay, domain consistency requirements). This is not about choosing a \"correct\" default — it is about giving the team a shared vocabulary so the decision can be made quickly under pressure. **Owner**: Kobe and MJ jointly. **Due**: 2026-04-14.\n\n- `[DETECT]` **Add deadlock monitoring and alerting for migration target tables during maintenance windows.** The deadlock was detected only when the backfill failed. Earlier detection would have given the team more options. **Owner**: Pippen. **Due**: 2026-04-07.\n\n- `[MITIGATE]` **Require a tested replay/recovery procedure for any migration that touches a table with an active event stream.** The procedure must be executed in staging before the production migration is approved. **Owner**: Shaq and Pippen jointly. **Due**: 2026-04-14.\n\n- `[PROCESS]` **Define \"maintenance window\" operationally at the table level.** Document which traffic is quiesced, how quiescing is enforced (not just requested), and how to verify quiescing is complete before migration begins. **Owner**: Pippen. **Due**: 2026-04-07.\n\n---\n\n## 6. Preserving the Learning\n\n**ADR: Migration Safety Standards** — Document the batch size policy, NULL semantics review requirement, and maintenance window definition as an Architecture Decision Record. This ensures the standards survive beyond the individuals involved in this incident. **Owner**: MJ. **Due**: 2026-04-07.\n\n**Domain Rule Update: Preference Consistency** — Bird to codify the rule that nullable columns on domain entities must have an unambiguous semantic definition for NULL, added to the domain rules reference. **Owner**: Bird. **Due**: 2026-04-07.\n\n**Runbook Addendum: Rollback vs Forward-Fix Framework** — Once Kobe and MJ produce the decision framework (Action Item above), embed it in the migration runbook as a decision tree. This is the artifact most likely to be consulted under pressure — it must be in the place engineers look during incidents, not in a separate document. **Owner**: Kobe and MJ. **Due**: 2026-04-21.\n\n**Incident Retrospective Checklist Item** — Add \"Did we have a pre-agreed recovery path?\" to the post-incident checklist. This normalizes the question so future migrations are reviewed for recovery readiness before execution. **Owner**: Pippen. **Due**: 2026-04-07.\n\n---\n\n*A note on the Kobe/MJ disagreement: This review deliberately does not resolve which recovery path was \"correct.\" Both positions reflected sound engineering judgment applied to incomplete shared context. The disagreement is the most valuable signal from this incident — it tells us exactly where our shared understanding has gaps. Filling those gaps with a pre-agreed framework is more valuable than retroactively declaring a winner. The goal is not to prevent disagreement; it is to ensure that when disagreement happens under pressure, the team has a shared structure for resolving it quickly.*"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2908,
+          "cache_read_input_tokens": 6950,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2908
+          },
+          "output_tokens": 25,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "f96ef76a-5d72-465d-b125-94ebb0c8b953",
+      "uuid": "13373613-4936-4024-a1a5-9b00b8b39478"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774393200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "7e426dc3-9228-4ecf-a3e0-32d6418dc8eb",
+      "session_id": "f96ef76a-5d72-465d-b125-94ebb0c8b953"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 62086,
+      "duration_api_ms": 62075,
+      "num_turns": 1,
+      "result": "# Learning Review: user_preferences Migration Deadlock and Rollback\n\n**Date of incident**: 2026-02-14\n**Review author**: Magic Johnson (Context Synthesizer)\n**Review date**: 2026-03-24\n\n---\n\n## 1. Situation Snapshot\n\nDuring a scheduled maintenance window on 2026-02-14, the team applied a database migration to add a nullable JSON column to the `user_preferences` table (800k rows) and ran a backfill job to populate existing rows. The backfill deadlocked with a live API transaction at 60% completion, leaving the table in a partially-migrated state. A disagreement between Kobe and MJ on the recovery path consumed decision-making time under pressure. The team ultimately rolled back, and the subsequent event log replay degraded service for 47 minutes. No data was lost, but the incident exposed several gaps in the team's shared understanding of migration safety, domain semantics, and operational decision frameworks.\n\n---\n\n## 2. Timeline\n\n| Time (approx.) | Event | What was known | Decision / Action |\n|---|---|---|---|\n| Window opens | Migration applied: nullable JSON column added to `user_preferences` | Column is nullable; API has fallback for missing values. Table has 800k rows. | Shaq runs migration per runbook. |\n| Backfill starts | Single UPDATE statement begins populating all 800k rows | Runbook does not specify batch size. Shaq proceeds with unbatched approach — reasonable given the runbook's silence on the topic. | No batching applied. |\n| ~11 min in | Deadlock detected between backfill UPDATE and a live API `SELECT FOR UPDATE` | 60% of rows migrated. 40% have NULL in the new column. Deadlock kills the backfill. The root lock contention is understood, but whether the condition would recur is not. | Team enters incident response. |\n| Decision point | Kobe advocates rollback; MJ advocates forward-fix | Both positions are internally coherent (see Section 3). No pre-agreed criteria exist for choosing between them. The team has no rehearsed procedure for either path. | Discussion under time pressure. |\n| Decision made | Team rolls back | Rollback is chosen. The implication — that 4 hours of accumulated preference events will need replay — is understood but the replay has not been rehearsed. | Rollback executed. |\n| Post-rollback | Event replay designed (4 hrs) and executed (47 min) | Replay is a new operation introduced under pressure. It succeeds. Service is degraded during the 47-minute execution window. | Replay completes. No data lost. |\n\n---\n\n## 3. Contributing Factors\n\nEach of the following factors independently contributed to the incident's scope and duration. No single factor is the root cause.\n\n**The backfill was unbatched.** Shaq executed the backfill as a single UPDATE across 800k rows. This maximized the lock window and made a deadlock with concurrent API transactions likely. The runbook did not specify a batch size threshold, and Shaq followed the runbook as written. The absence of batching guidance in the runbook is itself a contributing factor — not Shaq's interpretation of it.\n\n**The maintenance window did not fully isolate write traffic.** A live API transaction performed a `SELECT FOR UPDATE` on the same table during the backfill. The team's definition of \"maintenance window\" did not include quiescing write traffic to the migration target, or the quiescing was incomplete. The deadlock was a direct consequence of concurrent writes.\n\n**The semantic meaning of NULL in the new column was ambiguous.** Bird's domain rule is clear: preference data must be consistent per user, and partial states are not permitted at the row level. However, the migration introduced a nullable column where NULL could mean either \"user has no preference\" or \"user hasn't been migrated yet.\" This ambiguity was not surfaced or resolved during migration planning. It meant the partially-migrated state was not just operationally awkward but semantically undefined — a condition that made both rollback and forward-fix riskier than they appeared.\n\n**No pre-agreed decision framework existed for partial migration failure.** Both Kobe and MJ were reasoning from first principles under pressure. Kobe's position (rollback to known-good state, avoid unknown deadlock recurrence) and MJ's position (forward-fix avoids introducing an unrehearsed replay operation and sidesteps event accumulation risk) were both internally sound. The disagreement was not a failure of either individual's reasoning — it was a signal that the team had never aligned on the criteria for rollback vs. forward-fix. Without shared criteria, the decision consumed time and cognitive load during the incident instead of being a quick lookup against a pre-agreed playbook.\n\n**The event replay operation had not been rehearsed.** Regardless of which recovery path was chosen, the team lacked a tested procedure for either completing a partial backfill or replaying accumulated events. The replay ultimately took 4 hours to design and 47 minutes to execute — time that could have been reduced or eliminated with a pre-tested runbook.\n\n**No SLA existed for migration recovery time.** The 47-minute service degradation had no benchmark against which to measure severity. The team cannot currently say whether this was acceptable or not.\n\n---\n\n## 4. Learnings\n\n**We now know that runbook silence is not the same as runbook approval.** The runbook's lack of a batch size threshold was interpreted as \"batching is not required,\" when it should have been interpreted as \"this case was not considered.\" This means runbooks need to explicitly address batch strategy for any data-modifying operation above a stated row threshold, and engineers should treat runbook silence on a relevant concern as a gap to escalate, not a green light.\n\n**We now know that the semantic meaning of NULL must be defined before a nullable column ships.** A nullable column that can mean two different things (no value vs. not-yet-migrated) creates a domain ambiguity that makes every subsequent decision harder — including incident recovery decisions. This means migration plans for columns with domain significance must include a \"what does NULL mean?\" section reviewed by the domain authority (Bird) before approval.\n\n**We now know that the Kobe/MJ disagreement was a symptom, not the problem.** Both positions were reasonable given the information available. The real gap was that the team had no shared decision framework for \"partial migration failure during a maintenance window.\" This means the team needs to establish explicit, pre-agreed criteria — not to prevent disagreement, but to give disagreement a shared vocabulary and resolution path before it occurs under pressure.\n\n**We now know that any migration plan that accumulates events during execution needs a tested replay procedure.** The 4-hour event accumulation and subsequent replay were foreseeable consequences of the migration strategy. This means migration plans that touch tables with active event streams must include a rehearsed replay procedure as part of the rollback plan, not as an improvised recovery step.\n\n**We now know that \"maintenance window\" needs a precise operational definition.** The concurrent `SELECT FOR UPDATE` should not have been possible if the maintenance window fully quiesced write traffic to the target table. This means the team needs to define what \"maintenance window\" means at the table level — which traffic is stopped, which is allowed, and how that's enforced.\n\n---\n\n## 5. Action Items\n\n- `[PREVENT]` **Add batch size guidance to the migration runbook.** Define a row-count threshold (e.g., >10k rows) above which backfills must be batched. Include recommended batch sizes and lock timeout settings. **Owner**: Shaq. **Due**: 2026-04-07.\n\n- `[PREVENT]` **Require a \"NULL semantics\" section in every migration plan that adds a nullable column to a domain entity.** This section must be reviewed and approved by Bird before the migration is scheduled. **Owner**: Bird. **Due**: 2026-04-07.\n\n- `[PREVENT]` **Define and document a rollback-vs-forward-fix decision framework for data migrations.** The framework should include explicit criteria (e.g., percentage migrated, nature of failure, availability of tested replay, domain consistency requirements). This is not about choosing a \"correct\" default — it is about giving the team a shared vocabulary so the decision can be made quickly under pressure. **Owner**: Kobe and MJ jointly. **Due**: 2026-04-14.\n\n- `[DETECT]` **Add deadlock monitoring and alerting for migration target tables during maintenance windows.** The deadlock was detected only when the backfill failed. Earlier detection would have given the team more options. **Owner**: Pippen. **Due**: 2026-04-07.\n\n- `[MITIGATE]` **Require a tested replay/recovery procedure for any migration that touches a table with an active event stream.** The procedure must be executed in staging before the production migration is approved. **Owner**: Shaq and Pippen jointly. **Due**: 2026-04-14.\n\n- `[PROCESS]` **Define \"maintenance window\" operationally at the table level.** Document which traffic is quiesced, how quiescing is enforced (not just requested), and how to verify quiescing is complete before migration begins. **Owner**: Pippen. **Due**: 2026-04-07.\n\n---\n\n## 6. Preserving the Learning\n\n**ADR: Migration Safety Standards** — Document the batch size policy, NULL semantics review requirement, and maintenance window definition as an Architecture Decision Record. This ensures the standards survive beyond the individuals involved in this incident. **Owner**: MJ. **Due**: 2026-04-07.\n\n**Domain Rule Update: Preference Consistency** — Bird to codify the rule that nullable columns on domain entities must have an unambiguous semantic definition for NULL, added to the domain rules reference. **Owner**: Bird. **Due**: 2026-04-07.\n\n**Runbook Addendum: Rollback vs Forward-Fix Framework** — Once Kobe and MJ produce the decision framework (Action Item above), embed it in the migration runbook as a decision tree. This is the artifact most likely to be consulted under pressure — it must be in the place engineers look during incidents, not in a separate document. **Owner**: Kobe and MJ. **Due**: 2026-04-21.\n\n**Incident Retrospective Checklist Item** — Add \"Did we have a pre-agreed recovery path?\" to the post-incident checklist. This normalizes the question so future migrations are reviewed for recovery readiness before execution. **Owner**: Pippen. **Due**: 2026-04-07.\n\n---\n\n*A note on the Kobe/MJ disagreement: This review deliberately does not resolve which recovery path was \"correct.\" Both positions reflected sound engineering judgment applied to incomplete shared context. The disagreement is the most valuable signal from this incident — it tells us exactly where our shared understanding has gaps. Filling those gaps with a pre-agreed framework is more valuable than retroactively declaring a winner. The goal is not to prevent disagreement; it is to ensure that when disagreement happens under pressure, the team has a shared structure for resolving it quickly.*",
+      "stop_reason": "end_turn",
+      "session_id": "f96ef76a-5d72-465d-b125-94ebb0c8b953",
+      "total_cost_usd": 0.08674,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 2908,
+        "cache_read_input_tokens": 6950,
+        "output_tokens": 2603,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 2908,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2603,
+          "cacheReadInputTokens": 6950,
+          "cacheCreationInputTokens": 2908,
+          "webSearchRequests": 0,
+          "costUSD": 0.08674,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "017414f8-80cb-49db-8049-15a563f6145f"
+    }
+  ]
+}

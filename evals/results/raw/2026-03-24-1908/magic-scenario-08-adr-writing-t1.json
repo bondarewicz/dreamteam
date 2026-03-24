@@ -1,0 +1,249 @@
+{
+  "agent": "magic",
+  "scenario_id": "scenario-08-adr-writing",
+  "agent_output": "{\n  \"handoff_brief\": {\n    \"recipient\": \"documentation\",\n    \"task_context\": \"Architecture Decision Record for distributed coordination of the nightly reconciliation batch job. The system is expanding from single-node to multi-node deployment and needs to ensure exactly one node runs the nightly batch. MJ evaluated four options and recommends PostgreSQL advisory locks over introducing new infrastructure.\",\n    \"domain_rules\": [\n      {\n        \"rule\": \"Only one node may execute the nightly reconciliation batch job per scheduling window\",\n        \"testable_assertion\": \"Given multiple nodes are running, when the nightly batch trigger fires on all nodes simultaneously, then exactly one node acquires the lock and executes the job while all others skip execution\"\n      },\n      {\n        \"rule\": \"A crashed coordinator must not permanently block future batch runs\",\n        \"testable_assertion\": \"Given the coordinator node crashes mid-batch, when the database connection is dropped, then the advisory lock is released and the next nightly trigger can acquire it\"\n      }\n    ],\n    \"architecture_guidance\": [\n      {\n        \"decision\": \"Use PostgreSQL session-level advisory locks (pg_try_advisory_lock) for distributed batch coordination\",\n        \"implementation_note\": \"Use pg_try_advisory_lock (non-blocking) rather than pg_advisory_lock (blocking) so that competing nodes fail fast and skip execution instead of queuing. Choose a fixed, well-documented lock ID constant (e.g. 8675309) and comment its purpose in code.\"\n      },\n      {\n        \"decision\": \"Do not introduce Redis solely for lock management\",\n        \"implementation_note\": \"PostgreSQL is already in the infrastructure stack. Adding Redis for a single nightly lock adds operational surface area (monitoring, failover, configuration) disproportionate to the problem.\"\n      }\n    ],\n    \"acceptance_criteria\": [\n      {\n        \"criterion\": \"Distributed mutual exclusion under normal operation\",\n        \"given\": \"Two or more application nodes connected to the same PostgreSQL instance\",\n        \"when\": \"The nightly batch trigger fires and each node attempts pg_try_advisory_lock with the designated lock ID\",\n        \"then\": \"Exactly one node returns true and proceeds; all others return false and log a skip message\"\n      },\n      {\n        \"criterion\": \"Lock release after crash\",\n        \"given\": \"The node holding the advisory lock crashes or loses its database connection\",\n        \"when\": \"PostgreSQL detects the session has ended\",\n        \"then\": \"The advisory lock is automatically released with no manual intervention required\"\n      }\n    ],\n    \"terminology_alignment\": [\n      {\n        \"domain_term\": \"Nightly reconciliation job\",\n        \"technical_term\": \"Scheduled batch process\",\n        \"definition\": \"A periodic job that runs once per night to reconcile data; must execute on exactly one node in a multi-node deployment\"\n      },\n      {\n        \"domain_term\": \"Coordinator node\",\n        \"technical_term\": \"Lock holder\",\n        \"definition\": \"The single application node that successfully acquires the advisory lock and is therefore responsible for executing the batch job in a given scheduling window\"\n      }\n    ],\n    \"contradictions_resolved\": [],\n    \"open_questions\": [\n      \"Should a monitoring alert fire if no node successfully completes the batch job within a defined window (e.g. by 06:00)?\",\n      \"If the batch job runs longer than expected and overlaps with the next scheduling window, should the lock ID incorporate a date component to distinguish runs?\",\n      \"Is there a need for an explicit pg_advisory_unlock call at job completion, or is session-end release sufficient given connection pooling behavior?\"\n    ]\n  },\n  \"escalations\": [],\n  \"confidence\": {\n    \"level\": 92,\n    \"high_confidence_areas\": [\n      \"Advisory locks are the right fit for low-frequency single-leader election against an existing PostgreSQL instance\",\n      \"Trade-off analysis is sound: no TTL, no external visibility, but acceptable given nightly cadence\",\n      \"Crash recovery semantics are correct for session-level advisory locks\"\n    ],\n    \"low_confidence_areas\": [\n      \"Connection pooling (e.g. PgBouncer in transaction mode) can silently break session-level advisory locks -- implementation must ensure a dedicated, non-pooled connection or use transaction-level locks instead\",\n      \"No explicit discussion of observability -- how operators will know the job ran or was skipped\"\n    ],\n    \"assumptions\": [\n      \"The application holds a direct or session-mode-pooled connection to PostgreSQL (not transaction-mode PgBouncer)\",\n      \"The nightly job completes well within a single scheduling window and does not risk overlapping with the next run\",\n      \"All application nodes connect to the same PostgreSQL primary (not separate read replicas)\"\n    ]\n  }\n}\n\n---\n\nBelow is the formatted ADR document for inclusion in your project's decision log:\n\n---\n\n# ADR-NNN: Use PostgreSQL Advisory Locks for Nightly Batch Coordination\n\n**Status:** Accepted\n**Date:** 2026-03-24\n**Deciders:** MJ (architecture), team review\n**Technical area:** Distributed coordination, batch scheduling\n\n## Context\n\nThe nightly reconciliation job has historically run on a single application node with no coordination mechanism. The system is being expanded to a multi-node deployment. Without coordination, every node would execute the batch job independently, causing duplicate processing and potential data inconsistency.\n\nWe need a distributed mutual-exclusion mechanism that ensures exactly one node runs the reconciliation job per night.\n\n## Decision\n\nUse PostgreSQL session-level advisory locks (`pg_try_advisory_lock`) to coordinate nightly batch execution across nodes.\n\nEach node, on its scheduled trigger, will attempt to acquire a well-known advisory lock ID using the non-blocking `pg_try_advisory_lock`. The node that acquires the lock proceeds with the batch job; all other nodes log a skip and exit. The lock is released when the session ends (either via explicit unlock or connection close).\n\n## Rationale\n\n- **No new infrastructure.** PostgreSQL is already in the stack. Advisory locks are a built-in primitive with no additional deployment, monitoring, or failover requirements.\n- **Sufficient for the workload.** The job runs once per night with a single coordinator. There is no need for high-throughput lock contention handling, TTL-based expiration, or complex leader election.\n- **Crash-safe by default.** If the lock-holding node crashes, PostgreSQL detects the dropped connection and releases the session-level lock automatically. The next scheduled trigger can acquire it without manual intervention.\n\n## Alternatives Considered\n\n| Alternative | Why rejected |\n|---|---|\n| **Redis SETNX with TTL** | Introduces a new infrastructure dependency (Redis) solely for one nightly lock. Operationally disproportionate. |\n| **ZooKeeper** | Heavyweight coordination service; unjustified for a single low-frequency batch job. |\n| **Custom heartbeat table in PostgreSQL** | Requires application-level TTL logic, cleanup of stale rows, and polling. Advisory locks provide the same semantics with less code and fewer failure modes. |\n\n## Trade-offs and Risks\n\n| Risk | Severity | Mitigation |\n|---|---|---|\n| Advisory locks are invisible outside the database (no dashboard, no CLI to list them) | Low | Log lock acquisition/release events. Query `pg_locks` for diagnostics when needed. |\n| No built-in TTL -- a zombie connection holding the lock blocks all other nodes | Low | Session-level locks auto-release on connection drop. Set `statement_timeout` and `idle_in_transaction_session_timeout` as a safety net. |\n| Connection poolers in transaction mode (e.g. PgBouncer) silently break session-level locks | Medium | Ensure the batch job uses a dedicated, non-pooled connection or a pooler in session mode. Document this requirement. |\n| No proof that the job actually completed successfully (only that the lock was acquired) | Medium | Add post-job completion logging and a monitoring alert if no successful completion is recorded by a deadline (e.g. 06:00). |\n\n## Consequences\n\n- All application nodes must connect to the same PostgreSQL primary for lock coordination.\n- A single, well-documented lock ID constant must be maintained in the codebase.\n- Operators should monitor for successful batch completion, not just lock acquisition.\n- If the system later requires more sophisticated coordination (multiple jobs, sub-second leader election, cross-service locks), this decision should be revisited in favor of a dedicated coordination service.",
+  "agent_output_excerpt": "{\n  \"handoff_brief\": {\n    \"recipient\": \"documentation\",\n    \"task_context\": \"Architecture Decision Record for distributed coordination of the nightly reconciliation batch job. The system is expanding from single-node to multi-node deployment and needs to ensure exactly one node runs the nightly batch. MJ evaluated four options and recommends PostgreSQL advisory locks over introducing new infrastructure.\",\n    \"domain_rules\": [\n      {\n        \"rule\": \"Only one node may execute the nightly recon",
+  "duration_ms": 47778,
+  "tokens_used": 2050,
+  "input_tokens": 3,
+  "output_tokens": 2047,
+  "cost_usd": 0.06868375,
+  "timestamp": "2026-03-24T18:21:49Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "98b9a43c-5b7a-4252-a5cb-96115992247d",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api"
+      ],
+      "plugins": [
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "f8bcc0d0-5164-4ac3-87e2-2287675856a1",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01VHvHFfva13e2gzYrRFxBB7",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants me to write an ADR (Architecture Decision Record) based on MJ's architecture decision note. This is a straightforward documentation task - no team synthesis needed, just producing a well-structured ADR.",
+            "signature": "EoIDCkYIDBgCKkAk9yr/8ka5/AdkgUIZ3kIQeoGKQF36W9gSp1M1gYzOtj8iFQcJ3LytAI1SYOCkrUvsxLA7LAo0P3vbHekFGeEIEgyDytZdkV3qcHn02pAaDCui9vVSSsxV8ZKdPCIweYex35i8UgaZjwSzqXfQ3cP2TeKi5P9lwsBRGfyoskOBmjOJMwGin/UiY+u4YhKMKukB2rpbtzhMo1tXIcWFANwTa/Q7ygTcFW1Mp0RHCivv+ow/QwkVDPqHOBDjNd5hWJ5O5LJsEVFBeumORsajEI4/K3JeAB5xg+dNVe9Z22CvnmuKcDY2JMs+kSgpevuMvDtmRUhXolo4sJKENW1RTVfsQqeXo4Z0iSusYl7+46tCczIcZfqgHgvftWa9lL4sEUBCXiIYJHZ/yTv6c9ukX3kcU+R+4wyG91GSoii/wntrnsiFYWfCL44YrH8Oq99IQOOKU3Gqur32fHBKreQj1d3MKGMToP+k9DlwcKL7NqeOnDPHZI87JViC5jMYAQ=="
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2243,
+          "cache_read_input_tokens": 6950,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2243
+          },
+          "output_tokens": 37,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "98b9a43c-5b7a-4252-a5cb-96115992247d",
+      "uuid": "04185b6e-404c-483a-a50f-0b75d4c839c1"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01VHvHFfva13e2gzYrRFxBB7",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"handoff_brief\": {\n    \"recipient\": \"documentation\",\n    \"task_context\": \"Architecture Decision Record for distributed coordination of the nightly reconciliation batch job. The system is expanding from single-node to multi-node deployment and needs to ensure exactly one node runs the nightly batch. MJ evaluated four options and recommends PostgreSQL advisory locks over introducing new infrastructure.\",\n    \"domain_rules\": [\n      {\n        \"rule\": \"Only one node may execute the nightly reconciliation batch job per scheduling window\",\n        \"testable_assertion\": \"Given multiple nodes are running, when the nightly batch trigger fires on all nodes simultaneously, then exactly one node acquires the lock and executes the job while all others skip execution\"\n      },\n      {\n        \"rule\": \"A crashed coordinator must not permanently block future batch runs\",\n        \"testable_assertion\": \"Given the coordinator node crashes mid-batch, when the database connection is dropped, then the advisory lock is released and the next nightly trigger can acquire it\"\n      }\n    ],\n    \"architecture_guidance\": [\n      {\n        \"decision\": \"Use PostgreSQL session-level advisory locks (pg_try_advisory_lock) for distributed batch coordination\",\n        \"implementation_note\": \"Use pg_try_advisory_lock (non-blocking) rather than pg_advisory_lock (blocking) so that competing nodes fail fast and skip execution instead of queuing. Choose a fixed, well-documented lock ID constant (e.g. 8675309) and comment its purpose in code.\"\n      },\n      {\n        \"decision\": \"Do not introduce Redis solely for lock management\",\n        \"implementation_note\": \"PostgreSQL is already in the infrastructure stack. Adding Redis for a single nightly lock adds operational surface area (monitoring, failover, configuration) disproportionate to the problem.\"\n      }\n    ],\n    \"acceptance_criteria\": [\n      {\n        \"criterion\": \"Distributed mutual exclusion under normal operation\",\n        \"given\": \"Two or more application nodes connected to the same PostgreSQL instance\",\n        \"when\": \"The nightly batch trigger fires and each node attempts pg_try_advisory_lock with the designated lock ID\",\n        \"then\": \"Exactly one node returns true and proceeds; all others return false and log a skip message\"\n      },\n      {\n        \"criterion\": \"Lock release after crash\",\n        \"given\": \"The node holding the advisory lock crashes or loses its database connection\",\n        \"when\": \"PostgreSQL detects the session has ended\",\n        \"then\": \"The advisory lock is automatically released with no manual intervention required\"\n      }\n    ],\n    \"terminology_alignment\": [\n      {\n        \"domain_term\": \"Nightly reconciliation job\",\n        \"technical_term\": \"Scheduled batch process\",\n        \"definition\": \"A periodic job that runs once per night to reconcile data; must execute on exactly one node in a multi-node deployment\"\n      },\n      {\n        \"domain_term\": \"Coordinator node\",\n        \"technical_term\": \"Lock holder\",\n        \"definition\": \"The single application node that successfully acquires the advisory lock and is therefore responsible for executing the batch job in a given scheduling window\"\n      }\n    ],\n    \"contradictions_resolved\": [],\n    \"open_questions\": [\n      \"Should a monitoring alert fire if no node successfully completes the batch job within a defined window (e.g. by 06:00)?\",\n      \"If the batch job runs longer than expected and overlaps with the next scheduling window, should the lock ID incorporate a date component to distinguish runs?\",\n      \"Is there a need for an explicit pg_advisory_unlock call at job completion, or is session-end release sufficient given connection pooling behavior?\"\n    ]\n  },\n  \"escalations\": [],\n  \"confidence\": {\n    \"level\": 92,\n    \"high_confidence_areas\": [\n      \"Advisory locks are the right fit for low-frequency single-leader election against an existing PostgreSQL instance\",\n      \"Trade-off analysis is sound: no TTL, no external visibility, but acceptable given nightly cadence\",\n      \"Crash recovery semantics are correct for session-level advisory locks\"\n    ],\n    \"low_confidence_areas\": [\n      \"Connection pooling (e.g. PgBouncer in transaction mode) can silently break session-level advisory locks -- implementation must ensure a dedicated, non-pooled connection or use transaction-level locks instead\",\n      \"No explicit discussion of observability -- how operators will know the job ran or was skipped\"\n    ],\n    \"assumptions\": [\n      \"The application holds a direct or session-mode-pooled connection to PostgreSQL (not transaction-mode PgBouncer)\",\n      \"The nightly job completes well within a single scheduling window and does not risk overlapping with the next run\",\n      \"All application nodes connect to the same PostgreSQL primary (not separate read replicas)\"\n    ]\n  }\n}\n\n---\n\nBelow is the formatted ADR document for inclusion in your project's decision log:\n\n---\n\n# ADR-NNN: Use PostgreSQL Advisory Locks for Nightly Batch Coordination\n\n**Status:** Accepted\n**Date:** 2026-03-24\n**Deciders:** MJ (architecture), team review\n**Technical area:** Distributed coordination, batch scheduling\n\n## Context\n\nThe nightly reconciliation job has historically run on a single application node with no coordination mechanism. The system is being expanded to a multi-node deployment. Without coordination, every node would execute the batch job independently, causing duplicate processing and potential data inconsistency.\n\nWe need a distributed mutual-exclusion mechanism that ensures exactly one node runs the reconciliation job per night.\n\n## Decision\n\nUse PostgreSQL session-level advisory locks (`pg_try_advisory_lock`) to coordinate nightly batch execution across nodes.\n\nEach node, on its scheduled trigger, will attempt to acquire a well-known advisory lock ID using the non-blocking `pg_try_advisory_lock`. The node that acquires the lock proceeds with the batch job; all other nodes log a skip and exit. The lock is released when the session ends (either via explicit unlock or connection close).\n\n## Rationale\n\n- **No new infrastructure.** PostgreSQL is already in the stack. Advisory locks are a built-in primitive with no additional deployment, monitoring, or failover requirements.\n- **Sufficient for the workload.** The job runs once per night with a single coordinator. There is no need for high-throughput lock contention handling, TTL-based expiration, or complex leader election.\n- **Crash-safe by default.** If the lock-holding node crashes, PostgreSQL detects the dropped connection and releases the session-level lock automatically. The next scheduled trigger can acquire it without manual intervention.\n\n## Alternatives Considered\n\n| Alternative | Why rejected |\n|---|---|\n| **Redis SETNX with TTL** | Introduces a new infrastructure dependency (Redis) solely for one nightly lock. Operationally disproportionate. |\n| **ZooKeeper** | Heavyweight coordination service; unjustified for a single low-frequency batch job. |\n| **Custom heartbeat table in PostgreSQL** | Requires application-level TTL logic, cleanup of stale rows, and polling. Advisory locks provide the same semantics with less code and fewer failure modes. |\n\n## Trade-offs and Risks\n\n| Risk | Severity | Mitigation |\n|---|---|---|\n| Advisory locks are invisible outside the database (no dashboard, no CLI to list them) | Low | Log lock acquisition/release events. Query `pg_locks` for diagnostics when needed. |\n| No built-in TTL -- a zombie connection holding the lock blocks all other nodes | Low | Session-level locks auto-release on connection drop. Set `statement_timeout` and `idle_in_transaction_session_timeout` as a safety net. |\n| Connection poolers in transaction mode (e.g. PgBouncer) silently break session-level locks | Medium | Ensure the batch job uses a dedicated, non-pooled connection or a pooler in session mode. Document this requirement. |\n| No proof that the job actually completed successfully (only that the lock was acquired) | Medium | Add post-job completion logging and a monitoring alert if no successful completion is recorded by a deadline (e.g. 06:00). |\n\n## Consequences\n\n- All application nodes must connect to the same PostgreSQL primary for lock coordination.\n- A single, well-documented lock ID constant must be maintained in the codebase.\n- Operators should monitor for successful batch completion, not just lock acquisition.\n- If the system later requires more sophisticated coordination (multiple jobs, sub-second leader election, cross-service locks), this decision should be revisited in favor of a dedicated coordination service."
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2243,
+          "cache_read_input_tokens": 6950,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2243
+          },
+          "output_tokens": 37,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "98b9a43c-5b7a-4252-a5cb-96115992247d",
+      "uuid": "5b1b5379-8e3f-476b-a4ef-7e9ce8314960"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774393200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "13be2bf7-101e-4268-b7ac-2b1b322c34e2",
+      "session_id": "98b9a43c-5b7a-4252-a5cb-96115992247d"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 47071,
+      "duration_api_ms": 47057,
+      "num_turns": 1,
+      "result": "{\n  \"handoff_brief\": {\n    \"recipient\": \"documentation\",\n    \"task_context\": \"Architecture Decision Record for distributed coordination of the nightly reconciliation batch job. The system is expanding from single-node to multi-node deployment and needs to ensure exactly one node runs the nightly batch. MJ evaluated four options and recommends PostgreSQL advisory locks over introducing new infrastructure.\",\n    \"domain_rules\": [\n      {\n        \"rule\": \"Only one node may execute the nightly reconciliation batch job per scheduling window\",\n        \"testable_assertion\": \"Given multiple nodes are running, when the nightly batch trigger fires on all nodes simultaneously, then exactly one node acquires the lock and executes the job while all others skip execution\"\n      },\n      {\n        \"rule\": \"A crashed coordinator must not permanently block future batch runs\",\n        \"testable_assertion\": \"Given the coordinator node crashes mid-batch, when the database connection is dropped, then the advisory lock is released and the next nightly trigger can acquire it\"\n      }\n    ],\n    \"architecture_guidance\": [\n      {\n        \"decision\": \"Use PostgreSQL session-level advisory locks (pg_try_advisory_lock) for distributed batch coordination\",\n        \"implementation_note\": \"Use pg_try_advisory_lock (non-blocking) rather than pg_advisory_lock (blocking) so that competing nodes fail fast and skip execution instead of queuing. Choose a fixed, well-documented lock ID constant (e.g. 8675309) and comment its purpose in code.\"\n      },\n      {\n        \"decision\": \"Do not introduce Redis solely for lock management\",\n        \"implementation_note\": \"PostgreSQL is already in the infrastructure stack. Adding Redis for a single nightly lock adds operational surface area (monitoring, failover, configuration) disproportionate to the problem.\"\n      }\n    ],\n    \"acceptance_criteria\": [\n      {\n        \"criterion\": \"Distributed mutual exclusion under normal operation\",\n        \"given\": \"Two or more application nodes connected to the same PostgreSQL instance\",\n        \"when\": \"The nightly batch trigger fires and each node attempts pg_try_advisory_lock with the designated lock ID\",\n        \"then\": \"Exactly one node returns true and proceeds; all others return false and log a skip message\"\n      },\n      {\n        \"criterion\": \"Lock release after crash\",\n        \"given\": \"The node holding the advisory lock crashes or loses its database connection\",\n        \"when\": \"PostgreSQL detects the session has ended\",\n        \"then\": \"The advisory lock is automatically released with no manual intervention required\"\n      }\n    ],\n    \"terminology_alignment\": [\n      {\n        \"domain_term\": \"Nightly reconciliation job\",\n        \"technical_term\": \"Scheduled batch process\",\n        \"definition\": \"A periodic job that runs once per night to reconcile data; must execute on exactly one node in a multi-node deployment\"\n      },\n      {\n        \"domain_term\": \"Coordinator node\",\n        \"technical_term\": \"Lock holder\",\n        \"definition\": \"The single application node that successfully acquires the advisory lock and is therefore responsible for executing the batch job in a given scheduling window\"\n      }\n    ],\n    \"contradictions_resolved\": [],\n    \"open_questions\": [\n      \"Should a monitoring alert fire if no node successfully completes the batch job within a defined window (e.g. by 06:00)?\",\n      \"If the batch job runs longer than expected and overlaps with the next scheduling window, should the lock ID incorporate a date component to distinguish runs?\",\n      \"Is there a need for an explicit pg_advisory_unlock call at job completion, or is session-end release sufficient given connection pooling behavior?\"\n    ]\n  },\n  \"escalations\": [],\n  \"confidence\": {\n    \"level\": 92,\n    \"high_confidence_areas\": [\n      \"Advisory locks are the right fit for low-frequency single-leader election against an existing PostgreSQL instance\",\n      \"Trade-off analysis is sound: no TTL, no external visibility, but acceptable given nightly cadence\",\n      \"Crash recovery semantics are correct for session-level advisory locks\"\n    ],\n    \"low_confidence_areas\": [\n      \"Connection pooling (e.g. PgBouncer in transaction mode) can silently break session-level advisory locks -- implementation must ensure a dedicated, non-pooled connection or use transaction-level locks instead\",\n      \"No explicit discussion of observability -- how operators will know the job ran or was skipped\"\n    ],\n    \"assumptions\": [\n      \"The application holds a direct or session-mode-pooled connection to PostgreSQL (not transaction-mode PgBouncer)\",\n      \"The nightly job completes well within a single scheduling window and does not risk overlapping with the next run\",\n      \"All application nodes connect to the same PostgreSQL primary (not separate read replicas)\"\n    ]\n  }\n}\n\n---\n\nBelow is the formatted ADR document for inclusion in your project's decision log:\n\n---\n\n# ADR-NNN: Use PostgreSQL Advisory Locks for Nightly Batch Coordination\n\n**Status:** Accepted\n**Date:** 2026-03-24\n**Deciders:** MJ (architecture), team review\n**Technical area:** Distributed coordination, batch scheduling\n\n## Context\n\nThe nightly reconciliation job has historically run on a single application node with no coordination mechanism. The system is being expanded to a multi-node deployment. Without coordination, every node would execute the batch job independently, causing duplicate processing and potential data inconsistency.\n\nWe need a distributed mutual-exclusion mechanism that ensures exactly one node runs the reconciliation job per night.\n\n## Decision\n\nUse PostgreSQL session-level advisory locks (`pg_try_advisory_lock`) to coordinate nightly batch execution across nodes.\n\nEach node, on its scheduled trigger, will attempt to acquire a well-known advisory lock ID using the non-blocking `pg_try_advisory_lock`. The node that acquires the lock proceeds with the batch job; all other nodes log a skip and exit. The lock is released when the session ends (either via explicit unlock or connection close).\n\n## Rationale\n\n- **No new infrastructure.** PostgreSQL is already in the stack. Advisory locks are a built-in primitive with no additional deployment, monitoring, or failover requirements.\n- **Sufficient for the workload.** The job runs once per night with a single coordinator. There is no need for high-throughput lock contention handling, TTL-based expiration, or complex leader election.\n- **Crash-safe by default.** If the lock-holding node crashes, PostgreSQL detects the dropped connection and releases the session-level lock automatically. The next scheduled trigger can acquire it without manual intervention.\n\n## Alternatives Considered\n\n| Alternative | Why rejected |\n|---|---|\n| **Redis SETNX with TTL** | Introduces a new infrastructure dependency (Redis) solely for one nightly lock. Operationally disproportionate. |\n| **ZooKeeper** | Heavyweight coordination service; unjustified for a single low-frequency batch job. |\n| **Custom heartbeat table in PostgreSQL** | Requires application-level TTL logic, cleanup of stale rows, and polling. Advisory locks provide the same semantics with less code and fewer failure modes. |\n\n## Trade-offs and Risks\n\n| Risk | Severity | Mitigation |\n|---|---|---|\n| Advisory locks are invisible outside the database (no dashboard, no CLI to list them) | Low | Log lock acquisition/release events. Query `pg_locks` for diagnostics when needed. |\n| No built-in TTL -- a zombie connection holding the lock blocks all other nodes | Low | Session-level locks auto-release on connection drop. Set `statement_timeout` and `idle_in_transaction_session_timeout` as a safety net. |\n| Connection poolers in transaction mode (e.g. PgBouncer) silently break session-level locks | Medium | Ensure the batch job uses a dedicated, non-pooled connection or a pooler in session mode. Document this requirement. |\n| No proof that the job actually completed successfully (only that the lock was acquired) | Medium | Add post-job completion logging and a monitoring alert if no successful completion is recorded by a deadline (e.g. 06:00). |\n\n## Consequences\n\n- All application nodes must connect to the same PostgreSQL primary for lock coordination.\n- A single, well-documented lock ID constant must be maintained in the codebase.\n- Operators should monitor for successful batch completion, not just lock acquisition.\n- If the system later requires more sophisticated coordination (multiple jobs, sub-second leader election, cross-service locks), this decision should be revisited in favor of a dedicated coordination service.",
+      "stop_reason": "end_turn",
+      "session_id": "98b9a43c-5b7a-4252-a5cb-96115992247d",
+      "total_cost_usd": 0.06868375,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 2243,
+        "cache_read_input_tokens": 6950,
+        "output_tokens": 2047,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 2243,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2047,
+          "cacheReadInputTokens": 6950,
+          "cacheCreationInputTokens": 2243,
+          "webSearchRequests": 0,
+          "costUSD": 0.06868375,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "13ca0c11-155f-481c-b79d-e1fbcf828bbc"
+    }
+  ]
+}

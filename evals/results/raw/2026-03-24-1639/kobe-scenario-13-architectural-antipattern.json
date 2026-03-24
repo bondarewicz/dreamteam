@@ -1,0 +1,255 @@
+{
+  "agent": "kobe",
+  "scenario_id": "scenario-13-architectural-antipattern",
+  "agent_output": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Order Service directly queries Courier Service's database — textbook cross-service DB coupling that will break independence, scaling, and data integrity in production.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Cross-service direct database access violates service boundaries\",\n      \"risk\": \"Order Service holds a direct connection pool to Courier Service's database, creating tight coupling that defeats the purpose of service separation. Schema changes in Courier DB will silently break Order Service. Courier team loses ability to independently deploy, migrate, or scale their database.\",\n      \"severity\": \"Critical\",\n      \"location\": \"order.service.ts:4-9 (courierDb Pool declaration)\",\n      \"reproduction\": \"1. Courier team renames `couriers` table or changes `status` enum values. 2. Courier team deploys their migration. 3. Order Service immediately starts throwing query errors with no warning, no version negotiation, no circuit breaker.\",\n      \"fix\": \"Replace direct DB access with a call to a Courier Service API endpoint (e.g., `GET /couriers/available?zone=X`). The Courier Service owns its data and exposes availability through a contract it controls.\",\n      \"time_to_fix\": \"4-8 hours (define API contract, implement endpoint in Courier Service, replace DB call in Order Service)\",\n      \"acceptance_criteria_affected\": \"Service independence, deployment safety, data ownership\"\n    },\n    {\n      \"title\": \"Race condition: courier assigned to multiple orders simultaneously\",\n      \"risk\": \"Reading available couriers and then updating the order is a non-atomic read-then-write across two databases. Under concurrent load, two orders can read the same courier as 'available' and both assign it — the courier's status is never updated to 'assigned' in the courier DB by this code.\",\n      \"severity\": \"Critical\",\n      \"location\": \"order.service.ts:12-22 (assignCourierToOrder function body)\",\n      \"reproduction\": \"1. Two orders arrive simultaneously for the same zone. 2. Both query `couriers WHERE status = 'available'` and get the same courier. 3. Both call `db.orders.update` with the same `courierId`. 4. One courier is double-booked; the courier DB still shows them as 'available'.\",\n      \"fix\": \"This must be owned by the Courier Service via an API like `POST /couriers/claim?zone=X` that atomically selects and marks a courier as assigned (e.g., `UPDATE couriers SET status = 'assigned' WHERE status = 'available' AND zone = $1 LIMIT 1 RETURNING *`). The Order Service should not be responsible for courier state transitions.\",\n      \"time_to_fix\": \"2-4 hours (implement atomic claim endpoint in Courier Service)\",\n      \"acceptance_criteria_affected\": \"Courier assignment correctness, no double-booking\"\n    },\n    {\n      \"title\": \"Courier status never updated — permanent state desync\",\n      \"risk\": \"The code reads from `courier_db` but only writes to Order Service's `db.orders`. The courier's status in the Courier DB is never changed from 'available' to 'assigned'. Every assigned courier remains 'available' in their own service's view, leading to unbounded double-assignments and a completely inconsistent system state.\",\n      \"severity\": \"Critical\",\n      \"location\": \"order.service.ts:21 (only db.orders.update is called, no courier DB update)\",\n      \"reproduction\": \"1. Assign courier C1 to order O1. 2. Query courier DB: C1 still shows status='available'. 3. Next order in same zone gets C1 again. 4. Repeat indefinitely.\",\n      \"fix\": \"Courier state must be updated atomically by the Courier Service (see finding #2). If staying with current architecture temporarily, at minimum add a `courierDb.query('UPDATE couriers SET status = $1 WHERE id = $2', ['assigned', courier.id])` — but this is still wrong without a transaction spanning both databases.\",\n      \"time_to_fix\": \"30 minutes for the band-aid; 4-8 hours for the correct API-based solution\",\n      \"acceptance_criteria_affected\": \"Data consistency, courier availability accuracy\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"Courier DB credentials in Order Service widens blast radius\",\n      \"description\": \"Order Service now requires credentials to a database it should not know about. A compromise of Order Service leaks Courier DB credentials. This also means Courier team cannot rotate credentials without coordinating with Order Service deployments.\",\n      \"location\": \"order.service.ts:4-9\"\n    },\n    {\n      \"title\": \"No error handling or connection management for cross-service DB pool\",\n      \"description\": \"The courierDb pool has no connection timeout, no max pool size, no retry logic, and no health checks. If the Courier DB goes down, the Order Service pool will exhaust connections and hang.\",\n      \"location\": \"order.service.ts:4-9\"\n    },\n    {\n      \"title\": \"SELECT * pulls entire courier row unnecessarily\",\n      \"description\": \"Only `courier.id` is used, but `SELECT *` fetches all columns, coupling to the full schema and wasting bandwidth.\",\n      \"location\": \"order.service.ts:14\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Define a Courier Service API contract (OpenAPI/protobuf) for courier availability and assignment\",\n    \"Add a circuit breaker around any cross-service call to prevent cascading failures\",\n    \"Consider an event-driven approach: Order emits 'order.needs_courier' event, Courier Service claims and emits 'courier.assigned'\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"Any Courier DB schema migration will break the Order Service with no warning. Two teams must coordinate all DB changes.\",\n    \"rollback_capability\": \"Rollback of Order Service alone is safe, but any courier state corruption from double-assignments during the window this code runs cannot be rolled back.\",\n    \"backward_compatibility\": \"N/A — this is a new coupling, not a breaking change to an existing contract.\",\n    \"monitoring_coverage\": \"No monitoring on the cross-service DB connection. Failures will surface as unhandled promise rejections.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": true,\n      \"data_pipeline\": false,\n      \"config_changes\": true,\n      \"details\": [\n        \"Order Service now requires COURIER_DB_HOST, COURIER_DB_USER, COURIER_DB_PASSWORD env vars\",\n        \"Order Service gains direct read access to Courier DB — security boundary violation\"\n      ]\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert the commit and remove Courier DB credentials from Order Service environment. No data migration needed if code has not yet run in production.\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"architectural_concern\",\n      \"description\": \"Order Service directly queries Courier Service's database, creating cross-service database coupling. The fix requires designing an API contract or event-based communication between the two services — this is not a code-level patch.\",\n      \"routed_to\": \"MJ\",\n      \"blocked_criteria\": [\n        \"Service independence — each service must own its data\",\n        \"Atomic courier assignment without cross-DB transactions\",\n        \"Deployment independence between Order and Courier teams\"\n      ],\n      \"recommendation\": \"MJ should design the inter-service contract for courier availability and assignment (sync API or async events), then Shaq implements both sides.\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 72,\n    \"high_confidence_areas\": [\n      \"Cross-service DB coupling is definitively an architectural violation\",\n      \"Race condition on courier assignment is provable under concurrent requests\",\n      \"Missing courier status update is a clear bug visible in the code\"\n    ],\n    \"low_confidence_areas\": [\n      \"Whether there is other code elsewhere that updates courier status (only this snippet was provided)\",\n      \"Whether a Courier Service API already exists and this code is a workaround\"\n    ],\n    \"assumptions\": [\n      \"This is the complete courier assignment logic — no other code updates courier status\",\n      \"Order Service and Courier Service are intended to be independently deployable microservices\"\n    ]\n  }\n}",
+  "agent_output_excerpt": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Order Service directly queries Courier Service's database — textbook cross-service DB coupling that will break independence, scaling, and data integrity in production.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Cross-service direct database access violates service boundaries\",\n      \"risk\": \"Order Service holds a direct connection pool to Courier Service's database, creating tight coupling that defeats the purpose of service s",
+  "duration_ms": 49082,
+  "tokens_used": 2091,
+  "input_tokens": 3,
+  "output_tokens": 2088,
+  "cost_usd": 0.057008,
+  "timestamp": "2026-03-24T15:42:38Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "55acd28e-602f-420d-bf13-60e1cd60b682",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "frontend-design:frontend-design"
+      ],
+      "plugins": [
+        {
+          "name": "frontend-design",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/frontend-design/79caa0d824ac"
+        },
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "2b4a1d57-a2dd-458a-adef-5d1bc4fbd418",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01A2VQGYUR7bCDdHLN566ZRS",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Classification: `architectural_concern` — Order Service directly reads from Courier Service's database, which is cross-service database coupling requiring an API/event-based solution.",
+            "signature": "EuICCkYIDBgCKkCuudSTsEwjOO5ZkLm7w8gBfBt30ht9tSJtkywv+Y9IgdQxFUjtTo5GStMrhIt+f/JIHpDqVB9d4P0CKKfvz/mcEgwodSTVMjyzC5HpbvwaDPeHmzY6ho4ZHj4YiSIwwxKldJE0QaaxTaVqAxBTjoNcdd0WEJKbDxrrtOYD0kHrSs6/wE9io38YOqnx7wsCKskB9JqPJdJI2ish+OIUJUK06nVQMEctlaeaReCnWk+UAAgD7LPnja65c8pgWOPUpeSiwfv+cNviZ48obzDKJZa8z15IebfizD4H7biGbxM9UBu7ydXYLg3rb/vTYNuUMerrl5r7HmdouL5u1YIbdgaB04q753R565VkqKr6gFG6aS7dYKS2i2FvnHxs7vF/Hm4NYIEkh8h4/v6/DGuKUWy2ESYBnYzXiMH32rjuXOORJEDxvjNd7FymH9iWBWrjivjN/HxwhaXIykWPGAE="
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 9586,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 9,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "55acd28e-602f-420d-bf13-60e1cd60b682",
+      "uuid": "f80285ab-8127-4e45-bdd4-03d56f77b8db"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01A2VQGYUR7bCDdHLN566ZRS",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Order Service directly queries Courier Service's database — textbook cross-service DB coupling that will break independence, scaling, and data integrity in production.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Cross-service direct database access violates service boundaries\",\n      \"risk\": \"Order Service holds a direct connection pool to Courier Service's database, creating tight coupling that defeats the purpose of service separation. Schema changes in Courier DB will silently break Order Service. Courier team loses ability to independently deploy, migrate, or scale their database.\",\n      \"severity\": \"Critical\",\n      \"location\": \"order.service.ts:4-9 (courierDb Pool declaration)\",\n      \"reproduction\": \"1. Courier team renames `couriers` table or changes `status` enum values. 2. Courier team deploys their migration. 3. Order Service immediately starts throwing query errors with no warning, no version negotiation, no circuit breaker.\",\n      \"fix\": \"Replace direct DB access with a call to a Courier Service API endpoint (e.g., `GET /couriers/available?zone=X`). The Courier Service owns its data and exposes availability through a contract it controls.\",\n      \"time_to_fix\": \"4-8 hours (define API contract, implement endpoint in Courier Service, replace DB call in Order Service)\",\n      \"acceptance_criteria_affected\": \"Service independence, deployment safety, data ownership\"\n    },\n    {\n      \"title\": \"Race condition: courier assigned to multiple orders simultaneously\",\n      \"risk\": \"Reading available couriers and then updating the order is a non-atomic read-then-write across two databases. Under concurrent load, two orders can read the same courier as 'available' and both assign it — the courier's status is never updated to 'assigned' in the courier DB by this code.\",\n      \"severity\": \"Critical\",\n      \"location\": \"order.service.ts:12-22 (assignCourierToOrder function body)\",\n      \"reproduction\": \"1. Two orders arrive simultaneously for the same zone. 2. Both query `couriers WHERE status = 'available'` and get the same courier. 3. Both call `db.orders.update` with the same `courierId`. 4. One courier is double-booked; the courier DB still shows them as 'available'.\",\n      \"fix\": \"This must be owned by the Courier Service via an API like `POST /couriers/claim?zone=X` that atomically selects and marks a courier as assigned (e.g., `UPDATE couriers SET status = 'assigned' WHERE status = 'available' AND zone = $1 LIMIT 1 RETURNING *`). The Order Service should not be responsible for courier state transitions.\",\n      \"time_to_fix\": \"2-4 hours (implement atomic claim endpoint in Courier Service)\",\n      \"acceptance_criteria_affected\": \"Courier assignment correctness, no double-booking\"\n    },\n    {\n      \"title\": \"Courier status never updated — permanent state desync\",\n      \"risk\": \"The code reads from `courier_db` but only writes to Order Service's `db.orders`. The courier's status in the Courier DB is never changed from 'available' to 'assigned'. Every assigned courier remains 'available' in their own service's view, leading to unbounded double-assignments and a completely inconsistent system state.\",\n      \"severity\": \"Critical\",\n      \"location\": \"order.service.ts:21 (only db.orders.update is called, no courier DB update)\",\n      \"reproduction\": \"1. Assign courier C1 to order O1. 2. Query courier DB: C1 still shows status='available'. 3. Next order in same zone gets C1 again. 4. Repeat indefinitely.\",\n      \"fix\": \"Courier state must be updated atomically by the Courier Service (see finding #2). If staying with current architecture temporarily, at minimum add a `courierDb.query('UPDATE couriers SET status = $1 WHERE id = $2', ['assigned', courier.id])` — but this is still wrong without a transaction spanning both databases.\",\n      \"time_to_fix\": \"30 minutes for the band-aid; 4-8 hours for the correct API-based solution\",\n      \"acceptance_criteria_affected\": \"Data consistency, courier availability accuracy\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"Courier DB credentials in Order Service widens blast radius\",\n      \"description\": \"Order Service now requires credentials to a database it should not know about. A compromise of Order Service leaks Courier DB credentials. This also means Courier team cannot rotate credentials without coordinating with Order Service deployments.\",\n      \"location\": \"order.service.ts:4-9\"\n    },\n    {\n      \"title\": \"No error handling or connection management for cross-service DB pool\",\n      \"description\": \"The courierDb pool has no connection timeout, no max pool size, no retry logic, and no health checks. If the Courier DB goes down, the Order Service pool will exhaust connections and hang.\",\n      \"location\": \"order.service.ts:4-9\"\n    },\n    {\n      \"title\": \"SELECT * pulls entire courier row unnecessarily\",\n      \"description\": \"Only `courier.id` is used, but `SELECT *` fetches all columns, coupling to the full schema and wasting bandwidth.\",\n      \"location\": \"order.service.ts:14\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Define a Courier Service API contract (OpenAPI/protobuf) for courier availability and assignment\",\n    \"Add a circuit breaker around any cross-service call to prevent cascading failures\",\n    \"Consider an event-driven approach: Order emits 'order.needs_courier' event, Courier Service claims and emits 'courier.assigned'\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"Any Courier DB schema migration will break the Order Service with no warning. Two teams must coordinate all DB changes.\",\n    \"rollback_capability\": \"Rollback of Order Service alone is safe, but any courier state corruption from double-assignments during the window this code runs cannot be rolled back.\",\n    \"backward_compatibility\": \"N/A — this is a new coupling, not a breaking change to an existing contract.\",\n    \"monitoring_coverage\": \"No monitoring on the cross-service DB connection. Failures will surface as unhandled promise rejections.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": true,\n      \"data_pipeline\": false,\n      \"config_changes\": true,\n      \"details\": [\n        \"Order Service now requires COURIER_DB_HOST, COURIER_DB_USER, COURIER_DB_PASSWORD env vars\",\n        \"Order Service gains direct read access to Courier DB — security boundary violation\"\n      ]\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert the commit and remove Courier DB credentials from Order Service environment. No data migration needed if code has not yet run in production.\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"architectural_concern\",\n      \"description\": \"Order Service directly queries Courier Service's database, creating cross-service database coupling. The fix requires designing an API contract or event-based communication between the two services — this is not a code-level patch.\",\n      \"routed_to\": \"MJ\",\n      \"blocked_criteria\": [\n        \"Service independence — each service must own its data\",\n        \"Atomic courier assignment without cross-DB transactions\",\n        \"Deployment independence between Order and Courier teams\"\n      ],\n      \"recommendation\": \"MJ should design the inter-service contract for courier availability and assignment (sync API or async events), then Shaq implements both sides.\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 72,\n    \"high_confidence_areas\": [\n      \"Cross-service DB coupling is definitively an architectural violation\",\n      \"Race condition on courier assignment is provable under concurrent requests\",\n      \"Missing courier status update is a clear bug visible in the code\"\n    ],\n    \"low_confidence_areas\": [\n      \"Whether there is other code elsewhere that updates courier status (only this snippet was provided)\",\n      \"Whether a Courier Service API already exists and this code is a workaround\"\n    ],\n    \"assumptions\": [\n      \"This is the complete courier assignment logic — no other code updates courier status\",\n      \"Order Service and Courier Service are intended to be independently deployable microservices\"\n    ]\n  }\n}"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 9586,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 9,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "55acd28e-602f-420d-bf13-60e1cd60b682",
+      "uuid": "c00b083f-9586-43b7-85e7-c63d5b3c6ba9"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774375200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "e0000631-3309-4249-be96-81c28f876e48",
+      "session_id": "55acd28e-602f-420d-bf13-60e1cd60b682"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 47990,
+      "duration_api_ms": 47977,
+      "num_turns": 1,
+      "result": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Order Service directly queries Courier Service's database — textbook cross-service DB coupling that will break independence, scaling, and data integrity in production.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Cross-service direct database access violates service boundaries\",\n      \"risk\": \"Order Service holds a direct connection pool to Courier Service's database, creating tight coupling that defeats the purpose of service separation. Schema changes in Courier DB will silently break Order Service. Courier team loses ability to independently deploy, migrate, or scale their database.\",\n      \"severity\": \"Critical\",\n      \"location\": \"order.service.ts:4-9 (courierDb Pool declaration)\",\n      \"reproduction\": \"1. Courier team renames `couriers` table or changes `status` enum values. 2. Courier team deploys their migration. 3. Order Service immediately starts throwing query errors with no warning, no version negotiation, no circuit breaker.\",\n      \"fix\": \"Replace direct DB access with a call to a Courier Service API endpoint (e.g., `GET /couriers/available?zone=X`). The Courier Service owns its data and exposes availability through a contract it controls.\",\n      \"time_to_fix\": \"4-8 hours (define API contract, implement endpoint in Courier Service, replace DB call in Order Service)\",\n      \"acceptance_criteria_affected\": \"Service independence, deployment safety, data ownership\"\n    },\n    {\n      \"title\": \"Race condition: courier assigned to multiple orders simultaneously\",\n      \"risk\": \"Reading available couriers and then updating the order is a non-atomic read-then-write across two databases. Under concurrent load, two orders can read the same courier as 'available' and both assign it — the courier's status is never updated to 'assigned' in the courier DB by this code.\",\n      \"severity\": \"Critical\",\n      \"location\": \"order.service.ts:12-22 (assignCourierToOrder function body)\",\n      \"reproduction\": \"1. Two orders arrive simultaneously for the same zone. 2. Both query `couriers WHERE status = 'available'` and get the same courier. 3. Both call `db.orders.update` with the same `courierId`. 4. One courier is double-booked; the courier DB still shows them as 'available'.\",\n      \"fix\": \"This must be owned by the Courier Service via an API like `POST /couriers/claim?zone=X` that atomically selects and marks a courier as assigned (e.g., `UPDATE couriers SET status = 'assigned' WHERE status = 'available' AND zone = $1 LIMIT 1 RETURNING *`). The Order Service should not be responsible for courier state transitions.\",\n      \"time_to_fix\": \"2-4 hours (implement atomic claim endpoint in Courier Service)\",\n      \"acceptance_criteria_affected\": \"Courier assignment correctness, no double-booking\"\n    },\n    {\n      \"title\": \"Courier status never updated — permanent state desync\",\n      \"risk\": \"The code reads from `courier_db` but only writes to Order Service's `db.orders`. The courier's status in the Courier DB is never changed from 'available' to 'assigned'. Every assigned courier remains 'available' in their own service's view, leading to unbounded double-assignments and a completely inconsistent system state.\",\n      \"severity\": \"Critical\",\n      \"location\": \"order.service.ts:21 (only db.orders.update is called, no courier DB update)\",\n      \"reproduction\": \"1. Assign courier C1 to order O1. 2. Query courier DB: C1 still shows status='available'. 3. Next order in same zone gets C1 again. 4. Repeat indefinitely.\",\n      \"fix\": \"Courier state must be updated atomically by the Courier Service (see finding #2). If staying with current architecture temporarily, at minimum add a `courierDb.query('UPDATE couriers SET status = $1 WHERE id = $2', ['assigned', courier.id])` — but this is still wrong without a transaction spanning both databases.\",\n      \"time_to_fix\": \"30 minutes for the band-aid; 4-8 hours for the correct API-based solution\",\n      \"acceptance_criteria_affected\": \"Data consistency, courier availability accuracy\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"Courier DB credentials in Order Service widens blast radius\",\n      \"description\": \"Order Service now requires credentials to a database it should not know about. A compromise of Order Service leaks Courier DB credentials. This also means Courier team cannot rotate credentials without coordinating with Order Service deployments.\",\n      \"location\": \"order.service.ts:4-9\"\n    },\n    {\n      \"title\": \"No error handling or connection management for cross-service DB pool\",\n      \"description\": \"The courierDb pool has no connection timeout, no max pool size, no retry logic, and no health checks. If the Courier DB goes down, the Order Service pool will exhaust connections and hang.\",\n      \"location\": \"order.service.ts:4-9\"\n    },\n    {\n      \"title\": \"SELECT * pulls entire courier row unnecessarily\",\n      \"description\": \"Only `courier.id` is used, but `SELECT *` fetches all columns, coupling to the full schema and wasting bandwidth.\",\n      \"location\": \"order.service.ts:14\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Define a Courier Service API contract (OpenAPI/protobuf) for courier availability and assignment\",\n    \"Add a circuit breaker around any cross-service call to prevent cascading failures\",\n    \"Consider an event-driven approach: Order emits 'order.needs_courier' event, Courier Service claims and emits 'courier.assigned'\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"Any Courier DB schema migration will break the Order Service with no warning. Two teams must coordinate all DB changes.\",\n    \"rollback_capability\": \"Rollback of Order Service alone is safe, but any courier state corruption from double-assignments during the window this code runs cannot be rolled back.\",\n    \"backward_compatibility\": \"N/A — this is a new coupling, not a breaking change to an existing contract.\",\n    \"monitoring_coverage\": \"No monitoring on the cross-service DB connection. Failures will surface as unhandled promise rejections.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": true,\n      \"data_pipeline\": false,\n      \"config_changes\": true,\n      \"details\": [\n        \"Order Service now requires COURIER_DB_HOST, COURIER_DB_USER, COURIER_DB_PASSWORD env vars\",\n        \"Order Service gains direct read access to Courier DB — security boundary violation\"\n      ]\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert the commit and remove Courier DB credentials from Order Service environment. No data migration needed if code has not yet run in production.\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"architectural_concern\",\n      \"description\": \"Order Service directly queries Courier Service's database, creating cross-service database coupling. The fix requires designing an API contract or event-based communication between the two services — this is not a code-level patch.\",\n      \"routed_to\": \"MJ\",\n      \"blocked_criteria\": [\n        \"Service independence — each service must own its data\",\n        \"Atomic courier assignment without cross-DB transactions\",\n        \"Deployment independence between Order and Courier teams\"\n      ],\n      \"recommendation\": \"MJ should design the inter-service contract for courier availability and assignment (sync API or async events), then Shaq implements both sides.\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 72,\n    \"high_confidence_areas\": [\n      \"Cross-service DB coupling is definitively an architectural violation\",\n      \"Race condition on courier assignment is provable under concurrent requests\",\n      \"Missing courier status update is a clear bug visible in the code\"\n    ],\n    \"low_confidence_areas\": [\n      \"Whether there is other code elsewhere that updates courier status (only this snippet was provided)\",\n      \"Whether a Courier Service API already exists and this code is a workaround\"\n    ],\n    \"assumptions\": [\n      \"This is the complete courier assignment logic — no other code updates courier status\",\n      \"Order Service and Courier Service are intended to be independently deployable microservices\"\n    ]\n  }\n}",
+      "stop_reason": "end_turn",
+      "session_id": "55acd28e-602f-420d-bf13-60e1cd60b682",
+      "total_cost_usd": 0.057008,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 9586,
+        "output_tokens": 2088,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2088,
+          "cacheReadInputTokens": 9586,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.057008,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "d756eab2-f431-4923-97e7-f56b01290825"
+    }
+  ]
+}

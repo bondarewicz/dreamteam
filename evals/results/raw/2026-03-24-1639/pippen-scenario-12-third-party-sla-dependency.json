@@ -1,0 +1,255 @@
+{
+  "agent": "pippen",
+  "scenario_id": "scenario-12-third-party-sla-dependency",
+  "agent_output": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      {\n        \"from\": \"KYC Verification Service\",\n        \"to\": \"Onfido API\",\n        \"status\": \"risk\",\n        \"issue\": \"Synchronous blocking call with no circuit breaker or fallback. Onfido's SLA (99.9%) is strictly lower than the team's internal SLA target (99.95%), making it mathematically impossible to meet the internal SLA through this integration alone. Any Onfido degradation directly becomes user-facing registration failure (503).\"\n      },\n      {\n        \"from\": \"User Registration Flow\",\n        \"to\": \"KYC Verification Service\",\n        \"status\": \"risk\",\n        \"issue\": \"Registration is hard-blocked on KYC completion. No async or deferred verification path exists. Users cannot proceed at all if Onfido is slow or down, turning an external dependency outage into a total registration outage.\"\n      }\n    ],\n    \"contract_compliance\": \"Onfido API contract appears correctly consumed. However, the service makes no provision for Onfido returning degraded responses, partial failures, or rate-limiting (HTTP 429). Only the happy path and total failure (503) are accounted for.\",\n    \"data_flow_integrity\": \"Data flows synchronously: registration request → Onfido API call → response → registration outcome. No queuing or persistence of in-flight KYC requests means any failure mid-flight loses the attempt entirely with no automatic retry or recovery.\"\n  },\n\n  \"observability_review\": {\n    \"logging\": {\n      \"coverage\": \"adequate\",\n      \"gaps\": [\n        \"No mention of logging Onfido response latency per-request for tail-latency debugging\",\n        \"No mention of logging Onfido error response bodies for root-cause analysis during incidents\"\n      ]\n    },\n    \"metrics\": {\n      \"coverage\": \"Baseline metrics exist (kyc_checks_total, kyc_duration_histogram) but critical operational metrics are missing\",\n      \"gaps\": [\n        \"No error-rate metric broken out by Onfido HTTP status code (4xx vs 5xx)\",\n        \"No metric tracking consecutive Onfido failures (needed for circuit-breaker-like alerting)\",\n        \"No metric for in-flight/queued KYC requests to detect saturation\",\n        \"No SLI metric tracking registration success rate against the 99.95% target\"\n      ]\n    },\n    \"tracing\": {\n      \"coverage\": \"Not mentioned — unclear if distributed tracing spans are propagated through the Onfido call\",\n      \"gaps\": [\n        \"No trace context mentioned for correlating a user registration request end-to-end through KYC\",\n        \"On-call engineer at 3am cannot trace a specific user's failed registration through the Onfido hop without this\"\n      ]\n    },\n    \"debugging_capability\": \"Partial. Structured JSON logging and basic metrics provide a floor. However, an on-call engineer investigating 'why are registrations failing?' would need to manually correlate logs and metrics — no trace IDs, no Onfido-error-specific dashboards, and no way to distinguish 'Onfido is slow' from 'Onfido is down' from metrics alone.\"\n  },\n\n  \"resilience_assessment\": {\n    \"failure_modes\": [\n      {\n        \"scenario\": \"Onfido API is completely down\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"MUST-HAVE: Implement a circuit breaker (e.g., 5 failures in 30s → open for 60s). When open, return a clear 'KYC pending' status and allow registration to proceed in a limited/provisional state. Process KYC asynchronously when Onfido recovers. This is the single highest-priority gap.\"\n      },\n      {\n        \"scenario\": \"Onfido API responds but is slow (2-4s consistently)\",\n        \"handling\": \"partial\",\n        \"recommendation\": \"5s timeout exists but no adaptive behavior. Under sustained Onfido latency, all registration request threads block for up to 5s, risking thread/connection pool exhaustion. Add a shorter 'fast fail' timeout (e.g., 2s) with async retry, or implement bulkhead isolation so slow Onfido calls don't starve other service endpoints.\"\n      },\n      {\n        \"scenario\": \"Onfido rate-limits the service (HTTP 429)\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"MUST-HAVE: Handle 429 responses with exponential backoff and a queue/retry mechanism. Without this, a traffic spike triggers rate-limiting which cascades into mass registration failures.\"\n      },\n      {\n        \"scenario\": \"Onfido returns unexpected/malformed responses\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"SHOULD-HAVE: Defensive deserialization with clear error logging. Do not let a parsing exception produce an unhandled 500 — map it to a retryable KYC-pending state.\"\n      },\n      {\n        \"scenario\": \"Sustained partial Onfido degradation erodes internal SLA\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"MUST-HAVE: Since Onfido SLA (99.9%) < internal SLA (99.95%), the architecture must decouple registration availability from Onfido availability. The only viable path is async/deferred KYC with a provisional registration state.\"\n      }\n    ],\n    \"retry_config\": \"No retry mechanism mentioned. A single transient Onfido failure (network blip, 500) immediately fails the user's registration. At minimum, 1 retry with jitter on 5xx/timeout is a must-have.\",\n    \"timeout_config\": \"5s timeout is set. This is reasonable given Onfido's p99 of 3s, but without a circuit breaker the timeout only protects individual requests — it does not protect the system from sustained degradation.\",\n    \"circuit_breakers\": \"None. This is the critical gap. Without a circuit breaker, every request during an Onfido outage will block for 5s then fail, consuming resources and providing a terrible user experience for the full duration of the outage.\",\n    \"graceful_degradation\": \"None. The service has exactly two modes: fully working or fully broken. There is no provisional/pending KYC state that would allow users to register and complete verification later.\"\n  },\n\n  \"operational_readiness\": {\n    \"deployment_ready\": false,\n    \"rollback_capable\": true,\n    \"rollback_plan\": \"Redeploy previous container image. Acceptable for this service since there are no database migrations mentioned. Rollback is straightforward.\",\n    \"monitoring_coverage\": \"Basic coverage exists (/health endpoint, kyc_checks_total, kyc_duration_histogram). Missing: error-rate alerting by status code, SLI tracking against 99.95% target, circuit-breaker state metrics, Onfido-specific availability dashboard.\",\n    \"on_call_documentation\": \"Not mentioned. On-call engineer needs a runbook covering: (1) what to do when Onfido is down, (2) how to manually unblock users stuck in KYC, (3) escalation contacts at Onfido, (4) how to toggle KYC enforcement if needed.\",\n    \"new_infrastructure_required\": {\n      \"new_env_vars\": [],\n      \"new_services\": [],\n      \"new_queues_topics\": [\n        \"If async KYC fallback is implemented: a durable queue (e.g., SQS/Kafka topic) for deferred KYC checks\"\n      ],\n      \"config_changes\": [\n        \"Circuit breaker configuration (failure threshold, recovery timeout, half-open limits)\",\n        \"Retry policy configuration (max retries, backoff multiplier, jitter)\"\n      ],\n      \"infra_provisioning\": []\n    },\n    \"database_safety\": {\n      \"has_migrations\": false,\n      \"reversible\": true,\n      \"data_preserving\": true,\n      \"large_table_impact\": false,\n      \"details\": \"No database migrations mentioned. If a provisional KYC state is added, a schema change to the user/registration table would be needed to track verification status.\"\n    },\n    \"verdict\": \"NOT READY\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"Onfido SLA (99.9%) is lower than the internal SLA target (99.95%), and the architecture provides zero decoupling — the service's availability is strictly bounded by Onfido's availability\",\n      \"reason\": \"It is mathematically impossible to meet 99.95% uptime when a synchronous, non-bypassable dependency guarantees at most 99.9%. This is not a nice-to-have fix — it is an architectural constraint that requires either (a) async/deferred KYC with provisional registration, or (b) lowering the internal SLA target. This decision has blast radius beyond this service (affects onboarding flows, downstream transaction eligibility, compliance workflows) and needs architectural guidance.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"No circuit breaker, no retry, no fallback — single external dependency failure causes total registration outage\",\n      \"reason\": \"The absence of any resilience pattern (circuit breaker, retry, fallback, bulkhead) on a critical-path external API call means the blast radius of an Onfido outage is unbounded: all registrations fail, thread pools may exhaust under sustained timeouts, and there is no automatic recovery. The on-call engineer's only option is to wait for Onfido to recover or deploy a code change. MJ should define the target architecture for graceful degradation.\",\n      \"routed_to\": \"MJ\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 55,\n    \"high_confidence_areas\": [\n      \"SLA arithmetic: 99.9% dependency cannot support 99.95% target — this is a hard mathematical fact\",\n      \"Missing circuit breaker and retry are clear gaps visible from the described architecture\",\n      \"Rollback strategy is sound for a stateless service redeployment\"\n    ],\n    \"low_confidence_areas\": [\n      \"Cannot verify actual code implementation — reviewing from specification only\",\n      \"Unknown whether Onfido SDK has built-in retry/backoff that might partially mitigate gaps\",\n      \"Unknown thread pool / connection pool sizing — cannot assess saturation risk precisely\",\n      \"Unknown whether compliance/regulatory requirements mandate synchronous KYC before registration completes (would constrain the async fallback recommendation)\"\n    ],\n    \"assumptions\": [\n      \"No built-in resilience in the Onfido client library being used\",\n      \"Regulatory requirements permit a provisional registration state with deferred KYC completion\",\n      \"The /health endpoint checking Onfido reachability is not used as a Kubernetes liveness probe (which would cause cascading restarts during Onfido outages)\"\n    ]\n  }\n}",
+  "agent_output_excerpt": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      {\n        \"from\": \"KYC Verification Service\",\n        \"to\": \"Onfido API\",\n        \"status\": \"risk\",\n        \"issue\": \"Synchronous blocking call with no circuit breaker or fallback. Onfido's SLA (99.9%) is strictly lower than the team's internal SLA target (99.95%), making it mathematically impossible to meet the internal SLA through this integration alone. Any Onfido degradation directly becomes user-facing registration failur",
+  "duration_ms": 59901,
+  "tokens_used": 2765,
+  "input_tokens": 3,
+  "output_tokens": 2762,
+  "cost_usd": 0.105065,
+  "timestamp": "2026-03-24T15:49:30Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "ac8206be-067f-4344-87ce-7eceaf303ec3",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "frontend-design:frontend-design"
+      ],
+      "plugins": [
+        {
+          "name": "frontend-design",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/frontend-design/79caa0d824ac"
+        },
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "0c9a57ef-75af-4e0d-adc3-f28b3629c574",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01SHM3xERLkbN35nNEeGY4p5",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me analyze this KYC verification service for operational readiness.\n\nKey issues:\n1. Onfido SLA (99.9%) is lower than internal SLA (99.95%) - mathematically impossible to meet internal SLA when dependent on a service with a lower SLA\n2. No circuit breaker, no fallback/degraded mode\n3. Synchronous blocking call during registration\n4. No retry logic mentioned\n\nLet me produce the assessment.",
+            "signature": "ErIECkYIDBgCKkA0xStMMqNDRWJjYCKD5u5zCRKxU2RNrF45vkv2+aHlQKMcQkRsJUH+UXXXgg7NfONqUJ1Mfd+cQ9paD5q7NWKDEgzu1TFkXCF62kYXA70aDKBMgip8HZfvoN9PPyIwoSrebwiLjuRbU1pXPiMJBvoJdU/3eBVzDZ2UhO0HTRUjFd+8v82vOJgxX3WP6N/qKpkD/R8FwNATKVy9wTAn6E+7KV3g44IHr/F3iaXMjUnN8+YYwcUe7QYC4Sr57vjceEowRHXsEb0j0OTHzFN4s8Cb6zNDrnC4o7O2HjLEaHhnQhzAXjfZS7nEOUdXTeNXIgue3GzlKSoRYZBbhnFs8vOeVL/nDQobPHE44Q2px6rLZh8n1Yfhyif2wayPgsroYCaromWR6tzUhu+scynq4fxF/GQ6osuDE8asbzhq03Cup6vlfZ3+Vl70lPT930IHG7wom8i8Z4LaJKCb+g3QlGpMiCoC6rKWrN5ZL6t8ZG/TDZZKms7FSU3VOhRhAEXB5lHml41sTmtrmEW9G/WhT9Nd9UdelvTazAF2YgrV+OyZGJpRlyFLTucudWV93R8WZIKkfyXmWns4LLmxQQF4Putazz2SSRItTCsHGWlblZHpIzvnBvY7DC6uF0xExY8HbNVsP1ydneNsQvh6nepWkZ1Tw9vEokBQlJVWhOwpgrKPumWGVoQ7LivQXjcowrwNtxmWsATNhGJvOI1lZ0Dq5nFQNtzIiVKH9u54YBgB"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 5760,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 5760
+          },
+          "output_tokens": 34,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "ac8206be-067f-4344-87ce-7eceaf303ec3",
+      "uuid": "89515a67-3053-40c0-b80e-1c3a26737993"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01SHM3xERLkbN35nNEeGY4p5",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      {\n        \"from\": \"KYC Verification Service\",\n        \"to\": \"Onfido API\",\n        \"status\": \"risk\",\n        \"issue\": \"Synchronous blocking call with no circuit breaker or fallback. Onfido's SLA (99.9%) is strictly lower than the team's internal SLA target (99.95%), making it mathematically impossible to meet the internal SLA through this integration alone. Any Onfido degradation directly becomes user-facing registration failure (503).\"\n      },\n      {\n        \"from\": \"User Registration Flow\",\n        \"to\": \"KYC Verification Service\",\n        \"status\": \"risk\",\n        \"issue\": \"Registration is hard-blocked on KYC completion. No async or deferred verification path exists. Users cannot proceed at all if Onfido is slow or down, turning an external dependency outage into a total registration outage.\"\n      }\n    ],\n    \"contract_compliance\": \"Onfido API contract appears correctly consumed. However, the service makes no provision for Onfido returning degraded responses, partial failures, or rate-limiting (HTTP 429). Only the happy path and total failure (503) are accounted for.\",\n    \"data_flow_integrity\": \"Data flows synchronously: registration request → Onfido API call → response → registration outcome. No queuing or persistence of in-flight KYC requests means any failure mid-flight loses the attempt entirely with no automatic retry or recovery.\"\n  },\n\n  \"observability_review\": {\n    \"logging\": {\n      \"coverage\": \"adequate\",\n      \"gaps\": [\n        \"No mention of logging Onfido response latency per-request for tail-latency debugging\",\n        \"No mention of logging Onfido error response bodies for root-cause analysis during incidents\"\n      ]\n    },\n    \"metrics\": {\n      \"coverage\": \"Baseline metrics exist (kyc_checks_total, kyc_duration_histogram) but critical operational metrics are missing\",\n      \"gaps\": [\n        \"No error-rate metric broken out by Onfido HTTP status code (4xx vs 5xx)\",\n        \"No metric tracking consecutive Onfido failures (needed for circuit-breaker-like alerting)\",\n        \"No metric for in-flight/queued KYC requests to detect saturation\",\n        \"No SLI metric tracking registration success rate against the 99.95% target\"\n      ]\n    },\n    \"tracing\": {\n      \"coverage\": \"Not mentioned — unclear if distributed tracing spans are propagated through the Onfido call\",\n      \"gaps\": [\n        \"No trace context mentioned for correlating a user registration request end-to-end through KYC\",\n        \"On-call engineer at 3am cannot trace a specific user's failed registration through the Onfido hop without this\"\n      ]\n    },\n    \"debugging_capability\": \"Partial. Structured JSON logging and basic metrics provide a floor. However, an on-call engineer investigating 'why are registrations failing?' would need to manually correlate logs and metrics — no trace IDs, no Onfido-error-specific dashboards, and no way to distinguish 'Onfido is slow' from 'Onfido is down' from metrics alone.\"\n  },\n\n  \"resilience_assessment\": {\n    \"failure_modes\": [\n      {\n        \"scenario\": \"Onfido API is completely down\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"MUST-HAVE: Implement a circuit breaker (e.g., 5 failures in 30s → open for 60s). When open, return a clear 'KYC pending' status and allow registration to proceed in a limited/provisional state. Process KYC asynchronously when Onfido recovers. This is the single highest-priority gap.\"\n      },\n      {\n        \"scenario\": \"Onfido API responds but is slow (2-4s consistently)\",\n        \"handling\": \"partial\",\n        \"recommendation\": \"5s timeout exists but no adaptive behavior. Under sustained Onfido latency, all registration request threads block for up to 5s, risking thread/connection pool exhaustion. Add a shorter 'fast fail' timeout (e.g., 2s) with async retry, or implement bulkhead isolation so slow Onfido calls don't starve other service endpoints.\"\n      },\n      {\n        \"scenario\": \"Onfido rate-limits the service (HTTP 429)\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"MUST-HAVE: Handle 429 responses with exponential backoff and a queue/retry mechanism. Without this, a traffic spike triggers rate-limiting which cascades into mass registration failures.\"\n      },\n      {\n        \"scenario\": \"Onfido returns unexpected/malformed responses\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"SHOULD-HAVE: Defensive deserialization with clear error logging. Do not let a parsing exception produce an unhandled 500 — map it to a retryable KYC-pending state.\"\n      },\n      {\n        \"scenario\": \"Sustained partial Onfido degradation erodes internal SLA\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"MUST-HAVE: Since Onfido SLA (99.9%) < internal SLA (99.95%), the architecture must decouple registration availability from Onfido availability. The only viable path is async/deferred KYC with a provisional registration state.\"\n      }\n    ],\n    \"retry_config\": \"No retry mechanism mentioned. A single transient Onfido failure (network blip, 500) immediately fails the user's registration. At minimum, 1 retry with jitter on 5xx/timeout is a must-have.\",\n    \"timeout_config\": \"5s timeout is set. This is reasonable given Onfido's p99 of 3s, but without a circuit breaker the timeout only protects individual requests — it does not protect the system from sustained degradation.\",\n    \"circuit_breakers\": \"None. This is the critical gap. Without a circuit breaker, every request during an Onfido outage will block for 5s then fail, consuming resources and providing a terrible user experience for the full duration of the outage.\",\n    \"graceful_degradation\": \"None. The service has exactly two modes: fully working or fully broken. There is no provisional/pending KYC state that would allow users to register and complete verification later.\"\n  },\n\n  \"operational_readiness\": {\n    \"deployment_ready\": false,\n    \"rollback_capable\": true,\n    \"rollback_plan\": \"Redeploy previous container image. Acceptable for this service since there are no database migrations mentioned. Rollback is straightforward.\",\n    \"monitoring_coverage\": \"Basic coverage exists (/health endpoint, kyc_checks_total, kyc_duration_histogram). Missing: error-rate alerting by status code, SLI tracking against 99.95% target, circuit-breaker state metrics, Onfido-specific availability dashboard.\",\n    \"on_call_documentation\": \"Not mentioned. On-call engineer needs a runbook covering: (1) what to do when Onfido is down, (2) how to manually unblock users stuck in KYC, (3) escalation contacts at Onfido, (4) how to toggle KYC enforcement if needed.\",\n    \"new_infrastructure_required\": {\n      \"new_env_vars\": [],\n      \"new_services\": [],\n      \"new_queues_topics\": [\n        \"If async KYC fallback is implemented: a durable queue (e.g., SQS/Kafka topic) for deferred KYC checks\"\n      ],\n      \"config_changes\": [\n        \"Circuit breaker configuration (failure threshold, recovery timeout, half-open limits)\",\n        \"Retry policy configuration (max retries, backoff multiplier, jitter)\"\n      ],\n      \"infra_provisioning\": []\n    },\n    \"database_safety\": {\n      \"has_migrations\": false,\n      \"reversible\": true,\n      \"data_preserving\": true,\n      \"large_table_impact\": false,\n      \"details\": \"No database migrations mentioned. If a provisional KYC state is added, a schema change to the user/registration table would be needed to track verification status.\"\n    },\n    \"verdict\": \"NOT READY\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"Onfido SLA (99.9%) is lower than the internal SLA target (99.95%), and the architecture provides zero decoupling — the service's availability is strictly bounded by Onfido's availability\",\n      \"reason\": \"It is mathematically impossible to meet 99.95% uptime when a synchronous, non-bypassable dependency guarantees at most 99.9%. This is not a nice-to-have fix — it is an architectural constraint that requires either (a) async/deferred KYC with provisional registration, or (b) lowering the internal SLA target. This decision has blast radius beyond this service (affects onboarding flows, downstream transaction eligibility, compliance workflows) and needs architectural guidance.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"No circuit breaker, no retry, no fallback — single external dependency failure causes total registration outage\",\n      \"reason\": \"The absence of any resilience pattern (circuit breaker, retry, fallback, bulkhead) on a critical-path external API call means the blast radius of an Onfido outage is unbounded: all registrations fail, thread pools may exhaust under sustained timeouts, and there is no automatic recovery. The on-call engineer's only option is to wait for Onfido to recover or deploy a code change. MJ should define the target architecture for graceful degradation.\",\n      \"routed_to\": \"MJ\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 55,\n    \"high_confidence_areas\": [\n      \"SLA arithmetic: 99.9% dependency cannot support 99.95% target — this is a hard mathematical fact\",\n      \"Missing circuit breaker and retry are clear gaps visible from the described architecture\",\n      \"Rollback strategy is sound for a stateless service redeployment\"\n    ],\n    \"low_confidence_areas\": [\n      \"Cannot verify actual code implementation — reviewing from specification only\",\n      \"Unknown whether Onfido SDK has built-in retry/backoff that might partially mitigate gaps\",\n      \"Unknown thread pool / connection pool sizing — cannot assess saturation risk precisely\",\n      \"Unknown whether compliance/regulatory requirements mandate synchronous KYC before registration completes (would constrain the async fallback recommendation)\"\n    ],\n    \"assumptions\": [\n      \"No built-in resilience in the Onfido client library being used\",\n      \"Regulatory requirements permit a provisional registration state with deferred KYC completion\",\n      \"The /health endpoint checking Onfido reachability is not used as a Kubernetes liveness probe (which would cause cascading restarts during Onfido outages)\"\n    ]\n  }\n}"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 5760,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 5760
+          },
+          "output_tokens": 34,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "ac8206be-067f-4344-87ce-7eceaf303ec3",
+      "uuid": "65dbdc4e-e18b-4a5e-9203-5278cc3a269d"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774375200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "d7bdc433-87d6-41e0-b77a-730d7a6d95ac",
+      "session_id": "ac8206be-067f-4344-87ce-7eceaf303ec3"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 59289,
+      "duration_api_ms": 59275,
+      "num_turns": 1,
+      "result": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      {\n        \"from\": \"KYC Verification Service\",\n        \"to\": \"Onfido API\",\n        \"status\": \"risk\",\n        \"issue\": \"Synchronous blocking call with no circuit breaker or fallback. Onfido's SLA (99.9%) is strictly lower than the team's internal SLA target (99.95%), making it mathematically impossible to meet the internal SLA through this integration alone. Any Onfido degradation directly becomes user-facing registration failure (503).\"\n      },\n      {\n        \"from\": \"User Registration Flow\",\n        \"to\": \"KYC Verification Service\",\n        \"status\": \"risk\",\n        \"issue\": \"Registration is hard-blocked on KYC completion. No async or deferred verification path exists. Users cannot proceed at all if Onfido is slow or down, turning an external dependency outage into a total registration outage.\"\n      }\n    ],\n    \"contract_compliance\": \"Onfido API contract appears correctly consumed. However, the service makes no provision for Onfido returning degraded responses, partial failures, or rate-limiting (HTTP 429). Only the happy path and total failure (503) are accounted for.\",\n    \"data_flow_integrity\": \"Data flows synchronously: registration request → Onfido API call → response → registration outcome. No queuing or persistence of in-flight KYC requests means any failure mid-flight loses the attempt entirely with no automatic retry or recovery.\"\n  },\n\n  \"observability_review\": {\n    \"logging\": {\n      \"coverage\": \"adequate\",\n      \"gaps\": [\n        \"No mention of logging Onfido response latency per-request for tail-latency debugging\",\n        \"No mention of logging Onfido error response bodies for root-cause analysis during incidents\"\n      ]\n    },\n    \"metrics\": {\n      \"coverage\": \"Baseline metrics exist (kyc_checks_total, kyc_duration_histogram) but critical operational metrics are missing\",\n      \"gaps\": [\n        \"No error-rate metric broken out by Onfido HTTP status code (4xx vs 5xx)\",\n        \"No metric tracking consecutive Onfido failures (needed for circuit-breaker-like alerting)\",\n        \"No metric for in-flight/queued KYC requests to detect saturation\",\n        \"No SLI metric tracking registration success rate against the 99.95% target\"\n      ]\n    },\n    \"tracing\": {\n      \"coverage\": \"Not mentioned — unclear if distributed tracing spans are propagated through the Onfido call\",\n      \"gaps\": [\n        \"No trace context mentioned for correlating a user registration request end-to-end through KYC\",\n        \"On-call engineer at 3am cannot trace a specific user's failed registration through the Onfido hop without this\"\n      ]\n    },\n    \"debugging_capability\": \"Partial. Structured JSON logging and basic metrics provide a floor. However, an on-call engineer investigating 'why are registrations failing?' would need to manually correlate logs and metrics — no trace IDs, no Onfido-error-specific dashboards, and no way to distinguish 'Onfido is slow' from 'Onfido is down' from metrics alone.\"\n  },\n\n  \"resilience_assessment\": {\n    \"failure_modes\": [\n      {\n        \"scenario\": \"Onfido API is completely down\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"MUST-HAVE: Implement a circuit breaker (e.g., 5 failures in 30s → open for 60s). When open, return a clear 'KYC pending' status and allow registration to proceed in a limited/provisional state. Process KYC asynchronously when Onfido recovers. This is the single highest-priority gap.\"\n      },\n      {\n        \"scenario\": \"Onfido API responds but is slow (2-4s consistently)\",\n        \"handling\": \"partial\",\n        \"recommendation\": \"5s timeout exists but no adaptive behavior. Under sustained Onfido latency, all registration request threads block for up to 5s, risking thread/connection pool exhaustion. Add a shorter 'fast fail' timeout (e.g., 2s) with async retry, or implement bulkhead isolation so slow Onfido calls don't starve other service endpoints.\"\n      },\n      {\n        \"scenario\": \"Onfido rate-limits the service (HTTP 429)\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"MUST-HAVE: Handle 429 responses with exponential backoff and a queue/retry mechanism. Without this, a traffic spike triggers rate-limiting which cascades into mass registration failures.\"\n      },\n      {\n        \"scenario\": \"Onfido returns unexpected/malformed responses\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"SHOULD-HAVE: Defensive deserialization with clear error logging. Do not let a parsing exception produce an unhandled 500 — map it to a retryable KYC-pending state.\"\n      },\n      {\n        \"scenario\": \"Sustained partial Onfido degradation erodes internal SLA\",\n        \"handling\": \"unhandled\",\n        \"recommendation\": \"MUST-HAVE: Since Onfido SLA (99.9%) < internal SLA (99.95%), the architecture must decouple registration availability from Onfido availability. The only viable path is async/deferred KYC with a provisional registration state.\"\n      }\n    ],\n    \"retry_config\": \"No retry mechanism mentioned. A single transient Onfido failure (network blip, 500) immediately fails the user's registration. At minimum, 1 retry with jitter on 5xx/timeout is a must-have.\",\n    \"timeout_config\": \"5s timeout is set. This is reasonable given Onfido's p99 of 3s, but without a circuit breaker the timeout only protects individual requests — it does not protect the system from sustained degradation.\",\n    \"circuit_breakers\": \"None. This is the critical gap. Without a circuit breaker, every request during an Onfido outage will block for 5s then fail, consuming resources and providing a terrible user experience for the full duration of the outage.\",\n    \"graceful_degradation\": \"None. The service has exactly two modes: fully working or fully broken. There is no provisional/pending KYC state that would allow users to register and complete verification later.\"\n  },\n\n  \"operational_readiness\": {\n    \"deployment_ready\": false,\n    \"rollback_capable\": true,\n    \"rollback_plan\": \"Redeploy previous container image. Acceptable for this service since there are no database migrations mentioned. Rollback is straightforward.\",\n    \"monitoring_coverage\": \"Basic coverage exists (/health endpoint, kyc_checks_total, kyc_duration_histogram). Missing: error-rate alerting by status code, SLI tracking against 99.95% target, circuit-breaker state metrics, Onfido-specific availability dashboard.\",\n    \"on_call_documentation\": \"Not mentioned. On-call engineer needs a runbook covering: (1) what to do when Onfido is down, (2) how to manually unblock users stuck in KYC, (3) escalation contacts at Onfido, (4) how to toggle KYC enforcement if needed.\",\n    \"new_infrastructure_required\": {\n      \"new_env_vars\": [],\n      \"new_services\": [],\n      \"new_queues_topics\": [\n        \"If async KYC fallback is implemented: a durable queue (e.g., SQS/Kafka topic) for deferred KYC checks\"\n      ],\n      \"config_changes\": [\n        \"Circuit breaker configuration (failure threshold, recovery timeout, half-open limits)\",\n        \"Retry policy configuration (max retries, backoff multiplier, jitter)\"\n      ],\n      \"infra_provisioning\": []\n    },\n    \"database_safety\": {\n      \"has_migrations\": false,\n      \"reversible\": true,\n      \"data_preserving\": true,\n      \"large_table_impact\": false,\n      \"details\": \"No database migrations mentioned. If a provisional KYC state is added, a schema change to the user/registration table would be needed to track verification status.\"\n    },\n    \"verdict\": \"NOT READY\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"Onfido SLA (99.9%) is lower than the internal SLA target (99.95%), and the architecture provides zero decoupling — the service's availability is strictly bounded by Onfido's availability\",\n      \"reason\": \"It is mathematically impossible to meet 99.95% uptime when a synchronous, non-bypassable dependency guarantees at most 99.9%. This is not a nice-to-have fix — it is an architectural constraint that requires either (a) async/deferred KYC with provisional registration, or (b) lowering the internal SLA target. This decision has blast radius beyond this service (affects onboarding flows, downstream transaction eligibility, compliance workflows) and needs architectural guidance.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"No circuit breaker, no retry, no fallback — single external dependency failure causes total registration outage\",\n      \"reason\": \"The absence of any resilience pattern (circuit breaker, retry, fallback, bulkhead) on a critical-path external API call means the blast radius of an Onfido outage is unbounded: all registrations fail, thread pools may exhaust under sustained timeouts, and there is no automatic recovery. The on-call engineer's only option is to wait for Onfido to recover or deploy a code change. MJ should define the target architecture for graceful degradation.\",\n      \"routed_to\": \"MJ\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 55,\n    \"high_confidence_areas\": [\n      \"SLA arithmetic: 99.9% dependency cannot support 99.95% target — this is a hard mathematical fact\",\n      \"Missing circuit breaker and retry are clear gaps visible from the described architecture\",\n      \"Rollback strategy is sound for a stateless service redeployment\"\n    ],\n    \"low_confidence_areas\": [\n      \"Cannot verify actual code implementation — reviewing from specification only\",\n      \"Unknown whether Onfido SDK has built-in retry/backoff that might partially mitigate gaps\",\n      \"Unknown thread pool / connection pool sizing — cannot assess saturation risk precisely\",\n      \"Unknown whether compliance/regulatory requirements mandate synchronous KYC before registration completes (would constrain the async fallback recommendation)\"\n    ],\n    \"assumptions\": [\n      \"No built-in resilience in the Onfido client library being used\",\n      \"Regulatory requirements permit a provisional registration state with deferred KYC completion\",\n      \"The /health endpoint checking Onfido reachability is not used as a Kubernetes liveness probe (which would cause cascading restarts during Onfido outages)\"\n    ]\n  }\n}",
+      "stop_reason": "end_turn",
+      "session_id": "ac8206be-067f-4344-87ce-7eceaf303ec3",
+      "total_cost_usd": 0.105065,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 5760,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 2762,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5760,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2762,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 5760,
+          "webSearchRequests": 0,
+          "costUSD": 0.105065,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "42889ecc-8492-43ff-9925-ce4f6773b5a8"
+    }
+  ]
+}

@@ -1,0 +1,249 @@
+{
+  "agent": "kobe",
+  "scenario_id": "scenario-18-expert-subtle-bug",
+  "agent_output": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Synchronous XML parsing blocks the event loop under load, unhandled rejections crash the process after early 200, and fire-and-forget pattern silently loses events\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"parseXmlSync blocks the Node.js event loop, causing cascading failure at scale\",\n      \"risk\": \"At 200 webhooks/min (~3.3/sec), synchronous parsing of up to 2MB XML payloads will block the single-threaded event loop for hundreds of milliseconds per request. Incoming connections queue up, health checks time out, and the service gets killed by the orchestrator or load balancer.\",\n      \"severity\": \"Critical\",\n      \"location\": \"webhooks/carrier endpoint — `const parsed = parseXmlSync(xmlData)`\",\n      \"reproduction\": \"Send 4 concurrent webhooks each with a 2MB XML payload. Measure event loop lag with `monitorEventLoopDelay()` — expect >500ms blocking per parse. Simultaneously hit a health-check endpoint; it will hang.\",\n      \"fix\": \"Replace `parseXmlSync` with an async streaming XML parser (e.g., `xml2js.parseStringPromise`, `fast-xml-parser` with async wrapper, or offload to a worker thread via `worker_threads` for CPU-bound work). Example: `const parsed = await parseXmlAsync(xmlData);`\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Throughput and availability under peak webhook load\"\n    },\n    {\n      \"title\": \"Unhandled promise rejection after early res.send() will crash the process\",\n      \"risk\": \"After sending `res.status(200).send('OK')`, the remaining async work (db queries, XML parsing, status updates) runs in a detached promise with no try/catch. Any failure — db timeout, malformed XML, network blip — throws an unhandled rejection. In Node.js 15+ this terminates the process. Every in-flight request is lost.\",\n      \"severity\": \"Critical\",\n      \"location\": \"webhooks/carrier endpoint — entire async block after `res.send('OK')`\",\n      \"reproduction\": \"Send a webhook with `rawXmlPayload` set to invalid XML (e.g., `<broken`). The `parseXmlSync` call throws, there is no catch, and the process exits with `UnhandledPromiseRejectionWarning` / crash.\",\n      \"fix\": \"Wrap all post-response logic in a try/catch that logs the error and records the failed event for retry: ```\\ntry {\\n  const event = req.body;\\n  // ... processing\\n} catch (err) {\\n  logger.error('Webhook processing failed', { err, body: req.body });\\n  await failedEventQueue.enqueue(req.body);\\n}\\n```\",\n      \"time_to_fix\": \"15 minutes\",\n      \"acceptance_criteria_affected\": \"Process stability and zero silent data loss\"\n    },\n    {\n      \"title\": \"Fire-and-forget pattern with no persistence guarantees silently drops events\",\n      \"risk\": \"The 200 OK is sent before any processing begins. If the process restarts (deploy, OOM, crash from finding #2), all in-flight events are permanently lost. The carrier believes delivery was successful and will not retry. At 200 webhooks/min, a 30-second restart window loses ~100 events with no trace.\",\n      \"severity\": \"Critical\",\n      \"location\": \"webhooks/carrier endpoint — `res.status(200).send('OK')` before processing\",\n      \"risk_multiplier\": \"Compounds with finding #2 — every unhandled rejection both crashes the process AND loses all buffered events.\",\n      \"reproduction\": \"Start processing a webhook, then `kill -9` the process before `updateStatus` completes. Verify the delivery status was never updated. The carrier shows 200 OK — no retry will come.\",\n      \"fix\": \"Either (a) persist the raw event to a durable queue (Redis stream, SQS, database table) before sending 200, then process from the queue; or (b) defer the 200 until processing completes so the carrier retries on failure: ```\\ntry {\\n  // ... all processing\\n  res.status(200).send('OK');\\n} catch (err) {\\n  logger.error(err);\\n  res.status(500).send('Retry');\\n}\\n```\",\n      \"time_to_fix\": \"1–2 hours (option b: 15 min; option a with durable queue: 1-2h)\",\n      \"acceptance_criteria_affected\": \"Delivery status accuracy and event durability\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"DeliveryMap keyed by trackingNumber collapses duplicate deliveries\",\n      \"description\": \"`findByTrackingNumber(event.trackingNumber)` returns multiple deliveries with the same tracking number. The map `deliveryMap[delivery.trackingNumber] = delivery` overwrites previous entries — only the last delivery survives. If multiple delivery records share a tracking number (re-ships, split shipments), all but one are silently skipped.\",\n      \"location\": \"webhooks/carrier endpoint — deliveryMap construction loop\"\n    },\n    {\n      \"title\": \"No idempotency protection against duplicate webhooks\",\n      \"description\": \"Carriers frequently send duplicate webhook events (network retries, at-least-once delivery). Without deduplication (e.g., checking a unique event ID), the same status update is applied multiple times. If status transitions have side effects (notifications, billing), duplicates cause user-visible problems.\",\n      \"location\": \"webhooks/carrier endpoint — no event ID check\"\n    },\n    {\n      \"title\": \"Sequential await in update loop serializes DB writes unnecessarily\",\n      \"description\": \"The `for...of` loop with `await db.deliveries.updateStatus()` executes each update serially. With many updates per payload, this multiplies latency and extends the window for the issues in findings #2 and #3. Use `Promise.all` or batch update.\",\n      \"location\": \"webhooks/carrier endpoint — `for (const update of parsed.updates)`\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Add structured logging with correlation IDs (webhook event ID + tracking number) so failed events can be traced and replayed\",\n    \"Validate `req.body` schema before processing — reject malformed payloads early with a 400 instead of discovering failures deep in processing\",\n    \"Add a circuit breaker or backpressure mechanism — if the DB is slow, stop accepting new webhooks rather than buffering unbounded in-memory promises\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"The parseXmlSync call will degrade the entire Node.js process under peak load, affecting all other routes on the same server. This is not a graceful degradation — it's a hard block of the event loop.\",\n    \"rollback_capability\": \"No schema changes mentioned, so rollback is safe from a data perspective. However, any events lost during the fire-and-forget window are permanently gone regardless of rollback.\",\n    \"backward_compatibility\": \"No breaking API changes — this is an inbound webhook receiver.\",\n    \"monitoring_coverage\": \"No logging or metrics on webhook processing. Failures after the 200 OK are completely invisible — no alerts, no error counts, no latency tracking.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert the deployment. Lost events during the window cannot be recovered without carrier-side replay.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Event loop blocking from parseXmlSync is a textbook Node.js anti-pattern with deterministic impact\",\n      \"Unhandled promise rejection behavior is well-documented in Node.js 15+\",\n      \"Fire-and-forget after 200 OK is a known durability anti-pattern\"\n    ],\n    \"low_confidence_areas\": [\n      \"Actual XML payload sizes in production — impact scales with size\",\n      \"Whether the carrier supports retry on non-200 responses\"\n    ],\n    \"assumptions\": [\n      \"Node.js 15+ runtime where unhandled rejections terminate the process\",\n      \"No external queue or retry mechanism exists outside this code\",\n      \"parseXmlSync is truly synchronous as named\"\n    ]\n  }\n}",
+  "agent_output_excerpt": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Synchronous XML parsing blocks the event loop under load, unhandled rejections crash the process after early 200, and fire-and-forget pattern silently loses events\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"parseXmlSync blocks the Node.js event loop, causing cascading failure at scale\",\n      \"risk\": \"At 200 webhooks/min (~3.3/sec), synchronous parsing of up to 2MB XML payloads will block the single-threaded event loop for hun",
+  "duration_ms": 58894,
+  "tokens_used": 2675,
+  "input_tokens": 3,
+  "output_tokens": 2672,
+  "cost_usd": 0.0715895,
+  "timestamp": "2026-03-24T18:19:56Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "7e4deafc-bd51-4d68-a003-e365a12bd64e",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api"
+      ],
+      "plugins": [
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "64b2bd82-4164-4520-969c-2e0756e37e25",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_013ztybm995ZciHEZqku1LF1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me analyze this webhook endpoint for critical issues.\n\nKey hypotheses:\n1. Responding before processing - if the server crashes mid-processing, events are lost with no retry\n2. Synchronous XML parsing of up to 2MB blocks the event loop\n3. No idempotency protection - duplicate webhooks cause duplicate processing\n4. The deliveryMap is keyed by trackingNumber but all results from findByTrackingNumber will have the same tracking number, so the map collapses to one entry\n5. No error handling - unhandled promise rejection after res.send()\n\n\n6. The fire-and-forget pattern means any crash during async processing loses the event permanently since there's no queue or persistence layer\n7. At typical webhook volumes, synchronous XML parsing will block the event loop and cascade into failures\n8. Unhandled promise rejections after sending the response will crash the process in Node.js 15+\n9. The DeliveryMap lookup has a collision issue—if multiple deliveries share the same tracking number, only the last one persists in the map, creating a logic bug\n10. Concurrent webhooks for the same tracking number can race and cause out-of-order updates\n\nThe three most critical issues are the blocking XML parsing that degrades the server at scale, the unhandled promise rejection that crashes the process, and the fire-and-forget architecture with no persistence.",
+            "signature": "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"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 9549,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 20,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "7e4deafc-bd51-4d68-a003-e365a12bd64e",
+      "uuid": "cec425b2-e1c2-46a2-bcbf-e330d0467616"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_013ztybm995ZciHEZqku1LF1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Synchronous XML parsing blocks the event loop under load, unhandled rejections crash the process after early 200, and fire-and-forget pattern silently loses events\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"parseXmlSync blocks the Node.js event loop, causing cascading failure at scale\",\n      \"risk\": \"At 200 webhooks/min (~3.3/sec), synchronous parsing of up to 2MB XML payloads will block the single-threaded event loop for hundreds of milliseconds per request. Incoming connections queue up, health checks time out, and the service gets killed by the orchestrator or load balancer.\",\n      \"severity\": \"Critical\",\n      \"location\": \"webhooks/carrier endpoint — `const parsed = parseXmlSync(xmlData)`\",\n      \"reproduction\": \"Send 4 concurrent webhooks each with a 2MB XML payload. Measure event loop lag with `monitorEventLoopDelay()` — expect >500ms blocking per parse. Simultaneously hit a health-check endpoint; it will hang.\",\n      \"fix\": \"Replace `parseXmlSync` with an async streaming XML parser (e.g., `xml2js.parseStringPromise`, `fast-xml-parser` with async wrapper, or offload to a worker thread via `worker_threads` for CPU-bound work). Example: `const parsed = await parseXmlAsync(xmlData);`\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Throughput and availability under peak webhook load\"\n    },\n    {\n      \"title\": \"Unhandled promise rejection after early res.send() will crash the process\",\n      \"risk\": \"After sending `res.status(200).send('OK')`, the remaining async work (db queries, XML parsing, status updates) runs in a detached promise with no try/catch. Any failure — db timeout, malformed XML, network blip — throws an unhandled rejection. In Node.js 15+ this terminates the process. Every in-flight request is lost.\",\n      \"severity\": \"Critical\",\n      \"location\": \"webhooks/carrier endpoint — entire async block after `res.send('OK')`\",\n      \"reproduction\": \"Send a webhook with `rawXmlPayload` set to invalid XML (e.g., `<broken`). The `parseXmlSync` call throws, there is no catch, and the process exits with `UnhandledPromiseRejectionWarning` / crash.\",\n      \"fix\": \"Wrap all post-response logic in a try/catch that logs the error and records the failed event for retry: ```\\ntry {\\n  const event = req.body;\\n  // ... processing\\n} catch (err) {\\n  logger.error('Webhook processing failed', { err, body: req.body });\\n  await failedEventQueue.enqueue(req.body);\\n}\\n```\",\n      \"time_to_fix\": \"15 minutes\",\n      \"acceptance_criteria_affected\": \"Process stability and zero silent data loss\"\n    },\n    {\n      \"title\": \"Fire-and-forget pattern with no persistence guarantees silently drops events\",\n      \"risk\": \"The 200 OK is sent before any processing begins. If the process restarts (deploy, OOM, crash from finding #2), all in-flight events are permanently lost. The carrier believes delivery was successful and will not retry. At 200 webhooks/min, a 30-second restart window loses ~100 events with no trace.\",\n      \"severity\": \"Critical\",\n      \"location\": \"webhooks/carrier endpoint — `res.status(200).send('OK')` before processing\",\n      \"risk_multiplier\": \"Compounds with finding #2 — every unhandled rejection both crashes the process AND loses all buffered events.\",\n      \"reproduction\": \"Start processing a webhook, then `kill -9` the process before `updateStatus` completes. Verify the delivery status was never updated. The carrier shows 200 OK — no retry will come.\",\n      \"fix\": \"Either (a) persist the raw event to a durable queue (Redis stream, SQS, database table) before sending 200, then process from the queue; or (b) defer the 200 until processing completes so the carrier retries on failure: ```\\ntry {\\n  // ... all processing\\n  res.status(200).send('OK');\\n} catch (err) {\\n  logger.error(err);\\n  res.status(500).send('Retry');\\n}\\n```\",\n      \"time_to_fix\": \"1–2 hours (option b: 15 min; option a with durable queue: 1-2h)\",\n      \"acceptance_criteria_affected\": \"Delivery status accuracy and event durability\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"DeliveryMap keyed by trackingNumber collapses duplicate deliveries\",\n      \"description\": \"`findByTrackingNumber(event.trackingNumber)` returns multiple deliveries with the same tracking number. The map `deliveryMap[delivery.trackingNumber] = delivery` overwrites previous entries — only the last delivery survives. If multiple delivery records share a tracking number (re-ships, split shipments), all but one are silently skipped.\",\n      \"location\": \"webhooks/carrier endpoint — deliveryMap construction loop\"\n    },\n    {\n      \"title\": \"No idempotency protection against duplicate webhooks\",\n      \"description\": \"Carriers frequently send duplicate webhook events (network retries, at-least-once delivery). Without deduplication (e.g., checking a unique event ID), the same status update is applied multiple times. If status transitions have side effects (notifications, billing), duplicates cause user-visible problems.\",\n      \"location\": \"webhooks/carrier endpoint — no event ID check\"\n    },\n    {\n      \"title\": \"Sequential await in update loop serializes DB writes unnecessarily\",\n      \"description\": \"The `for...of` loop with `await db.deliveries.updateStatus()` executes each update serially. With many updates per payload, this multiplies latency and extends the window for the issues in findings #2 and #3. Use `Promise.all` or batch update.\",\n      \"location\": \"webhooks/carrier endpoint — `for (const update of parsed.updates)`\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Add structured logging with correlation IDs (webhook event ID + tracking number) so failed events can be traced and replayed\",\n    \"Validate `req.body` schema before processing — reject malformed payloads early with a 400 instead of discovering failures deep in processing\",\n    \"Add a circuit breaker or backpressure mechanism — if the DB is slow, stop accepting new webhooks rather than buffering unbounded in-memory promises\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"The parseXmlSync call will degrade the entire Node.js process under peak load, affecting all other routes on the same server. This is not a graceful degradation — it's a hard block of the event loop.\",\n    \"rollback_capability\": \"No schema changes mentioned, so rollback is safe from a data perspective. However, any events lost during the fire-and-forget window are permanently gone regardless of rollback.\",\n    \"backward_compatibility\": \"No breaking API changes — this is an inbound webhook receiver.\",\n    \"monitoring_coverage\": \"No logging or metrics on webhook processing. Failures after the 200 OK are completely invisible — no alerts, no error counts, no latency tracking.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert the deployment. Lost events during the window cannot be recovered without carrier-side replay.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Event loop blocking from parseXmlSync is a textbook Node.js anti-pattern with deterministic impact\",\n      \"Unhandled promise rejection behavior is well-documented in Node.js 15+\",\n      \"Fire-and-forget after 200 OK is a known durability anti-pattern\"\n    ],\n    \"low_confidence_areas\": [\n      \"Actual XML payload sizes in production — impact scales with size\",\n      \"Whether the carrier supports retry on non-200 responses\"\n    ],\n    \"assumptions\": [\n      \"Node.js 15+ runtime where unhandled rejections terminate the process\",\n      \"No external queue or retry mechanism exists outside this code\",\n      \"parseXmlSync is truly synchronous as named\"\n    ]\n  }\n}"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 9549,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 20,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "7e4deafc-bd51-4d68-a003-e365a12bd64e",
+      "uuid": "f30f2397-5901-48d9-af75-7492b0d3a8b9"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774393200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "20aefbab-a120-4806-aa09-c0bdeed20da5",
+      "session_id": "7e4deafc-bd51-4d68-a003-e365a12bd64e"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 58172,
+      "duration_api_ms": 58157,
+      "num_turns": 1,
+      "result": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Synchronous XML parsing blocks the event loop under load, unhandled rejections crash the process after early 200, and fire-and-forget pattern silently loses events\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"parseXmlSync blocks the Node.js event loop, causing cascading failure at scale\",\n      \"risk\": \"At 200 webhooks/min (~3.3/sec), synchronous parsing of up to 2MB XML payloads will block the single-threaded event loop for hundreds of milliseconds per request. Incoming connections queue up, health checks time out, and the service gets killed by the orchestrator or load balancer.\",\n      \"severity\": \"Critical\",\n      \"location\": \"webhooks/carrier endpoint — `const parsed = parseXmlSync(xmlData)`\",\n      \"reproduction\": \"Send 4 concurrent webhooks each with a 2MB XML payload. Measure event loop lag with `monitorEventLoopDelay()` — expect >500ms blocking per parse. Simultaneously hit a health-check endpoint; it will hang.\",\n      \"fix\": \"Replace `parseXmlSync` with an async streaming XML parser (e.g., `xml2js.parseStringPromise`, `fast-xml-parser` with async wrapper, or offload to a worker thread via `worker_threads` for CPU-bound work). Example: `const parsed = await parseXmlAsync(xmlData);`\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Throughput and availability under peak webhook load\"\n    },\n    {\n      \"title\": \"Unhandled promise rejection after early res.send() will crash the process\",\n      \"risk\": \"After sending `res.status(200).send('OK')`, the remaining async work (db queries, XML parsing, status updates) runs in a detached promise with no try/catch. Any failure — db timeout, malformed XML, network blip — throws an unhandled rejection. In Node.js 15+ this terminates the process. Every in-flight request is lost.\",\n      \"severity\": \"Critical\",\n      \"location\": \"webhooks/carrier endpoint — entire async block after `res.send('OK')`\",\n      \"reproduction\": \"Send a webhook with `rawXmlPayload` set to invalid XML (e.g., `<broken`). The `parseXmlSync` call throws, there is no catch, and the process exits with `UnhandledPromiseRejectionWarning` / crash.\",\n      \"fix\": \"Wrap all post-response logic in a try/catch that logs the error and records the failed event for retry: ```\\ntry {\\n  const event = req.body;\\n  // ... processing\\n} catch (err) {\\n  logger.error('Webhook processing failed', { err, body: req.body });\\n  await failedEventQueue.enqueue(req.body);\\n}\\n```\",\n      \"time_to_fix\": \"15 minutes\",\n      \"acceptance_criteria_affected\": \"Process stability and zero silent data loss\"\n    },\n    {\n      \"title\": \"Fire-and-forget pattern with no persistence guarantees silently drops events\",\n      \"risk\": \"The 200 OK is sent before any processing begins. If the process restarts (deploy, OOM, crash from finding #2), all in-flight events are permanently lost. The carrier believes delivery was successful and will not retry. At 200 webhooks/min, a 30-second restart window loses ~100 events with no trace.\",\n      \"severity\": \"Critical\",\n      \"location\": \"webhooks/carrier endpoint — `res.status(200).send('OK')` before processing\",\n      \"risk_multiplier\": \"Compounds with finding #2 — every unhandled rejection both crashes the process AND loses all buffered events.\",\n      \"reproduction\": \"Start processing a webhook, then `kill -9` the process before `updateStatus` completes. Verify the delivery status was never updated. The carrier shows 200 OK — no retry will come.\",\n      \"fix\": \"Either (a) persist the raw event to a durable queue (Redis stream, SQS, database table) before sending 200, then process from the queue; or (b) defer the 200 until processing completes so the carrier retries on failure: ```\\ntry {\\n  // ... all processing\\n  res.status(200).send('OK');\\n} catch (err) {\\n  logger.error(err);\\n  res.status(500).send('Retry');\\n}\\n```\",\n      \"time_to_fix\": \"1–2 hours (option b: 15 min; option a with durable queue: 1-2h)\",\n      \"acceptance_criteria_affected\": \"Delivery status accuracy and event durability\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"DeliveryMap keyed by trackingNumber collapses duplicate deliveries\",\n      \"description\": \"`findByTrackingNumber(event.trackingNumber)` returns multiple deliveries with the same tracking number. The map `deliveryMap[delivery.trackingNumber] = delivery` overwrites previous entries — only the last delivery survives. If multiple delivery records share a tracking number (re-ships, split shipments), all but one are silently skipped.\",\n      \"location\": \"webhooks/carrier endpoint — deliveryMap construction loop\"\n    },\n    {\n      \"title\": \"No idempotency protection against duplicate webhooks\",\n      \"description\": \"Carriers frequently send duplicate webhook events (network retries, at-least-once delivery). Without deduplication (e.g., checking a unique event ID), the same status update is applied multiple times. If status transitions have side effects (notifications, billing), duplicates cause user-visible problems.\",\n      \"location\": \"webhooks/carrier endpoint — no event ID check\"\n    },\n    {\n      \"title\": \"Sequential await in update loop serializes DB writes unnecessarily\",\n      \"description\": \"The `for...of` loop with `await db.deliveries.updateStatus()` executes each update serially. With many updates per payload, this multiplies latency and extends the window for the issues in findings #2 and #3. Use `Promise.all` or batch update.\",\n      \"location\": \"webhooks/carrier endpoint — `for (const update of parsed.updates)`\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Add structured logging with correlation IDs (webhook event ID + tracking number) so failed events can be traced and replayed\",\n    \"Validate `req.body` schema before processing — reject malformed payloads early with a 400 instead of discovering failures deep in processing\",\n    \"Add a circuit breaker or backpressure mechanism — if the DB is slow, stop accepting new webhooks rather than buffering unbounded in-memory promises\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"The parseXmlSync call will degrade the entire Node.js process under peak load, affecting all other routes on the same server. This is not a graceful degradation — it's a hard block of the event loop.\",\n    \"rollback_capability\": \"No schema changes mentioned, so rollback is safe from a data perspective. However, any events lost during the fire-and-forget window are permanently gone regardless of rollback.\",\n    \"backward_compatibility\": \"No breaking API changes — this is an inbound webhook receiver.\",\n    \"monitoring_coverage\": \"No logging or metrics on webhook processing. Failures after the 200 OK are completely invisible — no alerts, no error counts, no latency tracking.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert the deployment. Lost events during the window cannot be recovered without carrier-side replay.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Event loop blocking from parseXmlSync is a textbook Node.js anti-pattern with deterministic impact\",\n      \"Unhandled promise rejection behavior is well-documented in Node.js 15+\",\n      \"Fire-and-forget after 200 OK is a known durability anti-pattern\"\n    ],\n    \"low_confidence_areas\": [\n      \"Actual XML payload sizes in production — impact scales with size\",\n      \"Whether the carrier supports retry on non-200 responses\"\n    ],\n    \"assumptions\": [\n      \"Node.js 15+ runtime where unhandled rejections terminate the process\",\n      \"No external queue or retry mechanism exists outside this code\",\n      \"parseXmlSync is truly synchronous as named\"\n    ]\n  }\n}",
+      "stop_reason": "end_turn",
+      "session_id": "7e4deafc-bd51-4d68-a003-e365a12bd64e",
+      "total_cost_usd": 0.0715895,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 9549,
+        "output_tokens": 2672,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2672,
+          "cacheReadInputTokens": 9549,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.0715895,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "fa6dba20-aa79-4f80-891a-a8b0cbd1cb9b"
+    }
+  ]
+}

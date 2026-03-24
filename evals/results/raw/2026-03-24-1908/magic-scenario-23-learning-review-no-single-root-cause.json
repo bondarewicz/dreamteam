@@ -1,0 +1,215 @@
+{
+  "agent": "magic",
+  "scenario_id": "scenario-23-learning-review-no-single-root-cause",
+  "agent_output": "\n\n# Learning Review: Payment Service Double-Charge During Infrastructure Failover\n\n**Date**: 2026-03-05 | **Review authored**: 2026-03-24\n\n---\n\n## 1. Situation Snapshot\n\nDuring a scheduled infrastructure failover on 2026-03-05, the payment processing service double-charged 312 customers, each billed twice for a single transaction. Total financial exposure was £28,400. The incident spanned a 4-minute failover window but was not detected by internal systems — it was surfaced by a customer complaint 40 minutes later. Refunds were issued within 6 hours of the failover. The failure involved the interaction of four independent systems: the payment service, the counter service, the failover runbook, and the monitoring stack.\n\n---\n\n## 2. Timeline\n\n| Time | Event | What was known | Decision made |\n|------|-------|----------------|---------------|\n| T+0:00 | Scheduled infrastructure failover begins | Ops team follows established runbook; failover is routine | Proceed per runbook |\n| T+0:00 – T+~2:00 | Payment service restarts and comes online | Payment service is up; counter service not yet restarted (classified as non-critical) | No hold placed on payment processing — runbook does not flag this dependency |\n| T+0:00 – T+4:00 | 312 payment requests arrive while counter service is unreachable | Payment service hits fallback path: attempt_number resets to 1 | Fallback operates as designed — service continues accepting payments rather than failing |\n| T+~4:00 | Counter service restarted (last in dependency order) | Failover considered complete; no anomalies visible in dashboards | Ops team closes failover window |\n| T+40:00 | Customer reports being charged twice | First signal that something went wrong | Investigation begins |\n| T+~60:00 | Engineering identifies counter-reset fallback as cause | Correlation between failover window and 312 duplicate idempotency keys | Decision to issue bulk refunds |\n| T+6:00:00 | All 312 refunds processed | Full scope confirmed at 312 customers, £28,400 | Incident closed for customer impact; review opened |\n\n---\n\n## 3. Contributing Factors\n\nEach of the following conditions was independently necessary for this outcome. Remove any single one and the double-charges do not occur.\n\n**Factor 1: The counter-reset fallback defaulted to a valid-looking value instead of failing safely.**\nShaq's fallback logic reset `attempt_number` to 1 when the counter service was unreachable. This produced idempotency keys identical in structure to legitimate first-attempt keys. A fallback that returned an error, used a distinguishable sentinel value, or paused payment processing would have prevented the collision. The fallback was a reasonable defensive choice at the time — keeping the payment service available during brief counter-service blips — but it silently degraded a safety invariant rather than surfacing the degradation.\n\n**Factor 2: The idempotency key design encoded an assumption that the counter service is always reachable.**\nThe key formula (`order_id + attempt_number`) only guarantees uniqueness if `attempt_number` is monotonically increasing and never reused for a given order. The design did not account for counter-service unavailability as a state that could produce key collisions. This assumption was implicit — not documented in the key design, the PR review, or the architecture decision record.\n\n**Factor 3: The failover runbook classified the counter service as non-critical.**\nThe runbook's restart ordering placed the counter service last. This meant the payment service came online and began processing charges while its dependency for idempotency enforcement was still down. The runbook had been updated 3 months prior for a different dependency (by Kobe), but the payment-to-counter dependency was not documented. The classification of \"non-critical\" was locally correct — the counter service is not required for the payment service to start — but it missed that it is required for the payment service to operate *safely*.\n\n**Factor 4: No monitoring existed for idempotency key uniqueness or duplicate charge detection.**\nPippen's monitoring tracked charge success/failure rates but not whether the same customer-order pair was being charged more than once. A uniqueness check or duplicate-charge alert would have caught the 312 collisions within minutes, not 40 minutes. The monitoring was designed around the assumption that the idempotency layer was reliable, so it focused on downstream outcomes rather than upstream invariant violations.\n\n**Factor 5: Acceptance criteria for the payment service did not cover counter-service-unavailable scenarios.**\nBird's domain rule — \"a customer must never be charged more than once for a single order\" — was clear, but the test suite did not include a scenario where the mechanism enforcing that rule was degraded. The fallback path introduced 8 months ago was never tested against a full failover. This meant the violation of the domain rule was invisible in CI/CD and in acceptance testing.\n\n**Factor 6: The PR review for the fallback did not surface the collision risk.**\nMJ reviewed Shaq's original fallback PR and assessed it as a reasonable defensive measure. The review did not trace the consequence of counter-reset through to idempotency key collision. This is understandable — the review focused on the immediate behavior (keep payments flowing) rather than the second-order interaction (key reuse at the payment processor). PR reviews are time-constrained and cannot catch every emergent interaction, but this is a case where a \"what if this runs during failover?\" prompt would have surfaced the risk.\n\n**Factor 7: Stripe's 24-hour idempotency window did not protect against the collision.**\nStripe deduplicates on idempotency keys within a 24-hour window — if the *same* key is submitted twice, Stripe returns the original charge. This would have prevented the double-charge *if* the fallback had produced the same key as the original attempt. But because the counter reset to 1, the second charge used a key that was technically new to Stripe (different `attempt_number`), so Stripe correctly processed it as a distinct charge. The safety net existed but could not catch a key that looked legitimate.\n\n---\n\n## 4. Learnings\n\n- **We now know that fallback paths can silently violate domain invariants**, which means every fallback that degrades a safety mechanism (not just an availability mechanism) needs explicit review for invariant preservation. \"Keep the service running\" is not always the safest option.\n\n- **We now know that implicit assumptions in key-generation schemes are a class of risk**, which means idempotency key designs should document their preconditions explicitly — what must be true for the key to guarantee uniqueness — and those preconditions should be monitored at runtime.\n\n- **We now know that \"non-critical for startup\" is not the same as \"non-critical for safe operation\"**, which means runbook dependency classifications need a second dimension: not just \"required to start\" but \"required for correctness.\"\n\n- **We now know that monitoring charge outcomes without monitoring charge invariants creates a blind spot**, which means our observability needs to cover not just \"did it work?\" but \"did it work *correctly*?\" — especially for financial operations.\n\n- **We now know that domain rules and their technical enforcement mechanisms can drift apart without anyone noticing**, which means domain acceptance criteria must be re-evaluated whenever the technical implementation of a domain rule changes (e.g., when a fallback is added).\n\n---\n\n## 5. Action Items\n\n| # | Action | Tag | Owner | Due |\n|---|--------|-----|-------|-----|\n| 1 | Change counter-reset fallback to fail open (return error / queue for retry) instead of resetting to 1. Payment service should reject or defer charges when counter service is unreachable. | `[PREVENT]` | Shaq | 2026-04-01 |\n| 2 | Add duplicate-charge detection alert: flag any `(customer_id, order_id)` pair charged more than once within a 1-hour window. | `[DETECT]` | Pippen | 2026-04-01 |\n| 3 | Add idempotency key uniqueness monitoring: track and alert on key collisions in the payment service before they reach Stripe. | `[DETECT]` | Pippen | 2026-04-08 |\n| 4 | Update failover runbook to classify counter service as critical-for-correctness; payment service must not process charges until counter service is confirmed healthy. | `[PREVENT]` | Kobe | 2026-03-31 |\n| 5 | Add acceptance test: \"Given counter service is unreachable, when a payment request arrives, then the customer is not charged and the request is queued or rejected.\" | `[PREVENT]` | Bird + Shaq | 2026-04-08 |\n| 6 | Document idempotency key preconditions in an ADR: what must be true for the key to guarantee uniqueness, and what happens when those preconditions are violated. | `[PROCESS]` | MJ | 2026-04-08 |\n| 7 | Implement automatic refund trigger: if duplicate-charge alert fires, initiate refund workflow automatically rather than waiting for manual investigation. | `[MITIGATE]` | Shaq + Pippen | 2026-04-15 |\n| 8 | Add \"fallback-path invariant review\" as a checklist item for PR reviews on any code that introduces a fallback or degraded-mode path in financial-critical services. | `[PROCESS]` | MJ + Kobe | 2026-04-01 |\n\n---\n\n## 6. Preserving the Learning\n\n- **ADR: Idempotency Key Preconditions and Fallback Policy** — Documents the key design, its assumptions, and the new policy that fallbacks in financial-critical paths must preserve domain invariants or fail safely. **Owner: MJ. Due: 2026-04-08.**\n\n- **Domain Rule Addition (Bird's rule registry)**: \"No fallback or degraded-mode path may silently violate the single-charge invariant. If idempotency cannot be guaranteed, the payment must be deferred, not attempted.\" **Owner: Bird. Due: 2026-03-31.**\n\n- **Runbook Dependency Classification Schema**: Add a \"correctness-critical\" tier to the existing runbook dependency model, distinct from \"startup-critical.\" All services with financial invariant dependencies must be tagged. **Owner: Kobe. Due: 2026-03-31.**\n\n- **Observability Checklist for Financial Services**: A standing checklist requiring that any financial service have monitoring on both outcomes (success/failure) and invariants (uniqueness, idempotency, single-charge). Added to the service onboarding template. **Owner: Pippen. Due: 2026-04-08.**\n\n- **PR Review Checklist Item**: \"Does this change introduce a fallback or degraded mode? If yes: what domain invariants does the primary path enforce? Does the fallback preserve all of them? If not, what is the failure mode?\" Added to the team's review template. **Owner: Kobe. Due: 2026-04-01.**",
+  "agent_output_excerpt": "\n\n# Learning Review: Payment Service Double-Charge During Infrastructure Failover\n\n**Date**: 2026-03-05 | **Review authored**: 2026-03-24\n\n---\n\n## 1. Situation Snapshot\n\nDuring a scheduled infrastructure failover on 2026-03-05, the payment processing service double-charged 312 customers, each billed twice for a single transaction. Total financial exposure was £28,400. The incident spanned a 4-minute failover window but was not detected by internal systems — it was surfaced by a customer complain",
+  "duration_ms": 63447,
+  "tokens_used": 2605,
+  "input_tokens": 3,
+  "output_tokens": 2602,
+  "cost_usd": 0.085365,
+  "timestamp": "2026-03-24T18:24:10Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "9d9bf214-bef4-487a-8f1c-d50a1804a8e7",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api"
+      ],
+      "plugins": [
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "ff4ba2b9-4899-4e42-92c0-4b76ecaac980",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01FgSZZ2ZwbrM2UTL3WmsSiY",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "\n\n# Learning Review: Payment Service Double-Charge During Infrastructure Failover\n\n**Date**: 2026-03-05 | **Review authored**: 2026-03-24\n\n---\n\n## 1. Situation Snapshot\n\nDuring a scheduled infrastructure failover on 2026-03-05, the payment processing service double-charged 312 customers, each billed twice for a single transaction. Total financial exposure was £28,400. The incident spanned a 4-minute failover window but was not detected by internal systems — it was surfaced by a customer complaint 40 minutes later. Refunds were issued within 6 hours of the failover. The failure involved the interaction of four independent systems: the payment service, the counter service, the failover runbook, and the monitoring stack.\n\n---\n\n## 2. Timeline\n\n| Time | Event | What was known | Decision made |\n|------|-------|----------------|---------------|\n| T+0:00 | Scheduled infrastructure failover begins | Ops team follows established runbook; failover is routine | Proceed per runbook |\n| T+0:00 – T+~2:00 | Payment service restarts and comes online | Payment service is up; counter service not yet restarted (classified as non-critical) | No hold placed on payment processing — runbook does not flag this dependency |\n| T+0:00 – T+4:00 | 312 payment requests arrive while counter service is unreachable | Payment service hits fallback path: attempt_number resets to 1 | Fallback operates as designed — service continues accepting payments rather than failing |\n| T+~4:00 | Counter service restarted (last in dependency order) | Failover considered complete; no anomalies visible in dashboards | Ops team closes failover window |\n| T+40:00 | Customer reports being charged twice | First signal that something went wrong | Investigation begins |\n| T+~60:00 | Engineering identifies counter-reset fallback as cause | Correlation between failover window and 312 duplicate idempotency keys | Decision to issue bulk refunds |\n| T+6:00:00 | All 312 refunds processed | Full scope confirmed at 312 customers, £28,400 | Incident closed for customer impact; review opened |\n\n---\n\n## 3. Contributing Factors\n\nEach of the following conditions was independently necessary for this outcome. Remove any single one and the double-charges do not occur.\n\n**Factor 1: The counter-reset fallback defaulted to a valid-looking value instead of failing safely.**\nShaq's fallback logic reset `attempt_number` to 1 when the counter service was unreachable. This produced idempotency keys identical in structure to legitimate first-attempt keys. A fallback that returned an error, used a distinguishable sentinel value, or paused payment processing would have prevented the collision. The fallback was a reasonable defensive choice at the time — keeping the payment service available during brief counter-service blips — but it silently degraded a safety invariant rather than surfacing the degradation.\n\n**Factor 2: The idempotency key design encoded an assumption that the counter service is always reachable.**\nThe key formula (`order_id + attempt_number`) only guarantees uniqueness if `attempt_number` is monotonically increasing and never reused for a given order. The design did not account for counter-service unavailability as a state that could produce key collisions. This assumption was implicit — not documented in the key design, the PR review, or the architecture decision record.\n\n**Factor 3: The failover runbook classified the counter service as non-critical.**\nThe runbook's restart ordering placed the counter service last. This meant the payment service came online and began processing charges while its dependency for idempotency enforcement was still down. The runbook had been updated 3 months prior for a different dependency (by Kobe), but the payment-to-counter dependency was not documented. The classification of \"non-critical\" was locally correct — the counter service is not required for the payment service to start — but it missed that it is required for the payment service to operate *safely*.\n\n**Factor 4: No monitoring existed for idempotency key uniqueness or duplicate charge detection.**\nPippen's monitoring tracked charge success/failure rates but not whether the same customer-order pair was being charged more than once. A uniqueness check or duplicate-charge alert would have caught the 312 collisions within minutes, not 40 minutes. The monitoring was designed around the assumption that the idempotency layer was reliable, so it focused on downstream outcomes rather than upstream invariant violations.\n\n**Factor 5: Acceptance criteria for the payment service did not cover counter-service-unavailable scenarios.**\nBird's domain rule — \"a customer must never be charged more than once for a single order\" — was clear, but the test suite did not include a scenario where the mechanism enforcing that rule was degraded. The fallback path introduced 8 months ago was never tested against a full failover. This meant the violation of the domain rule was invisible in CI/CD and in acceptance testing.\n\n**Factor 6: The PR review for the fallback did not surface the collision risk.**\nMJ reviewed Shaq's original fallback PR and assessed it as a reasonable defensive measure. The review did not trace the consequence of counter-reset through to idempotency key collision. This is understandable — the review focused on the immediate behavior (keep payments flowing) rather than the second-order interaction (key reuse at the payment processor). PR reviews are time-constrained and cannot catch every emergent interaction, but this is a case where a \"what if this runs during failover?\" prompt would have surfaced the risk.\n\n**Factor 7: Stripe's 24-hour idempotency window did not protect against the collision.**\nStripe deduplicates on idempotency keys within a 24-hour window — if the *same* key is submitted twice, Stripe returns the original charge. This would have prevented the double-charge *if* the fallback had produced the same key as the original attempt. But because the counter reset to 1, the second charge used a key that was technically new to Stripe (different `attempt_number`), so Stripe correctly processed it as a distinct charge. The safety net existed but could not catch a key that looked legitimate.\n\n---\n\n## 4. Learnings\n\n- **We now know that fallback paths can silently violate domain invariants**, which means every fallback that degrades a safety mechanism (not just an availability mechanism) needs explicit review for invariant preservation. \"Keep the service running\" is not always the safest option.\n\n- **We now know that implicit assumptions in key-generation schemes are a class of risk**, which means idempotency key designs should document their preconditions explicitly — what must be true for the key to guarantee uniqueness — and those preconditions should be monitored at runtime.\n\n- **We now know that \"non-critical for startup\" is not the same as \"non-critical for safe operation\"**, which means runbook dependency classifications need a second dimension: not just \"required to start\" but \"required for correctness.\"\n\n- **We now know that monitoring charge outcomes without monitoring charge invariants creates a blind spot**, which means our observability needs to cover not just \"did it work?\" but \"did it work *correctly*?\" — especially for financial operations.\n\n- **We now know that domain rules and their technical enforcement mechanisms can drift apart without anyone noticing**, which means domain acceptance criteria must be re-evaluated whenever the technical implementation of a domain rule changes (e.g., when a fallback is added).\n\n---\n\n## 5. Action Items\n\n| # | Action | Tag | Owner | Due |\n|---|--------|-----|-------|-----|\n| 1 | Change counter-reset fallback to fail open (return error / queue for retry) instead of resetting to 1. Payment service should reject or defer charges when counter service is unreachable. | `[PREVENT]` | Shaq | 2026-04-01 |\n| 2 | Add duplicate-charge detection alert: flag any `(customer_id, order_id)` pair charged more than once within a 1-hour window. | `[DETECT]` | Pippen | 2026-04-01 |\n| 3 | Add idempotency key uniqueness monitoring: track and alert on key collisions in the payment service before they reach Stripe. | `[DETECT]` | Pippen | 2026-04-08 |\n| 4 | Update failover runbook to classify counter service as critical-for-correctness; payment service must not process charges until counter service is confirmed healthy. | `[PREVENT]` | Kobe | 2026-03-31 |\n| 5 | Add acceptance test: \"Given counter service is unreachable, when a payment request arrives, then the customer is not charged and the request is queued or rejected.\" | `[PREVENT]` | Bird + Shaq | 2026-04-08 |\n| 6 | Document idempotency key preconditions in an ADR: what must be true for the key to guarantee uniqueness, and what happens when those preconditions are violated. | `[PROCESS]` | MJ | 2026-04-08 |\n| 7 | Implement automatic refund trigger: if duplicate-charge alert fires, initiate refund workflow automatically rather than waiting for manual investigation. | `[MITIGATE]` | Shaq + Pippen | 2026-04-15 |\n| 8 | Add \"fallback-path invariant review\" as a checklist item for PR reviews on any code that introduces a fallback or degraded-mode path in financial-critical services. | `[PROCESS]` | MJ + Kobe | 2026-04-01 |\n\n---\n\n## 6. Preserving the Learning\n\n- **ADR: Idempotency Key Preconditions and Fallback Policy** — Documents the key design, its assumptions, and the new policy that fallbacks in financial-critical paths must preserve domain invariants or fail safely. **Owner: MJ. Due: 2026-04-08.**\n\n- **Domain Rule Addition (Bird's rule registry)**: \"No fallback or degraded-mode path may silently violate the single-charge invariant. If idempotency cannot be guaranteed, the payment must be deferred, not attempted.\" **Owner: Bird. Due: 2026-03-31.**\n\n- **Runbook Dependency Classification Schema**: Add a \"correctness-critical\" tier to the existing runbook dependency model, distinct from \"startup-critical.\" All services with financial invariant dependencies must be tagged. **Owner: Kobe. Due: 2026-03-31.**\n\n- **Observability Checklist for Financial Services**: A standing checklist requiring that any financial service have monitoring on both outcomes (success/failure) and invariants (uniqueness, idempotency, single-charge). Added to the service onboarding template. **Owner: Pippen. Due: 2026-04-08.**\n\n- **PR Review Checklist Item**: \"Does this change introduce a fallback or degraded mode? If yes: what domain invariants does the primary path enforce? Does the fallback preserve all of them? If not, what is the failure mode?\" Added to the team's review template. **Owner: Kobe. Due: 2026-04-01.**"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 2692,
+          "cache_read_input_tokens": 6950,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2692
+          },
+          "output_tokens": 6,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "9d9bf214-bef4-487a-8f1c-d50a1804a8e7",
+      "uuid": "2cd73515-99d0-46c8-bd6b-0931233fb7b0"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774393200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "8b6c57c7-b711-47df-9927-458ad1586567",
+      "session_id": "9d9bf214-bef4-487a-8f1c-d50a1804a8e7"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 62806,
+      "duration_api_ms": 62795,
+      "num_turns": 1,
+      "result": "\n\n# Learning Review: Payment Service Double-Charge During Infrastructure Failover\n\n**Date**: 2026-03-05 | **Review authored**: 2026-03-24\n\n---\n\n## 1. Situation Snapshot\n\nDuring a scheduled infrastructure failover on 2026-03-05, the payment processing service double-charged 312 customers, each billed twice for a single transaction. Total financial exposure was £28,400. The incident spanned a 4-minute failover window but was not detected by internal systems — it was surfaced by a customer complaint 40 minutes later. Refunds were issued within 6 hours of the failover. The failure involved the interaction of four independent systems: the payment service, the counter service, the failover runbook, and the monitoring stack.\n\n---\n\n## 2. Timeline\n\n| Time | Event | What was known | Decision made |\n|------|-------|----------------|---------------|\n| T+0:00 | Scheduled infrastructure failover begins | Ops team follows established runbook; failover is routine | Proceed per runbook |\n| T+0:00 – T+~2:00 | Payment service restarts and comes online | Payment service is up; counter service not yet restarted (classified as non-critical) | No hold placed on payment processing — runbook does not flag this dependency |\n| T+0:00 – T+4:00 | 312 payment requests arrive while counter service is unreachable | Payment service hits fallback path: attempt_number resets to 1 | Fallback operates as designed — service continues accepting payments rather than failing |\n| T+~4:00 | Counter service restarted (last in dependency order) | Failover considered complete; no anomalies visible in dashboards | Ops team closes failover window |\n| T+40:00 | Customer reports being charged twice | First signal that something went wrong | Investigation begins |\n| T+~60:00 | Engineering identifies counter-reset fallback as cause | Correlation between failover window and 312 duplicate idempotency keys | Decision to issue bulk refunds |\n| T+6:00:00 | All 312 refunds processed | Full scope confirmed at 312 customers, £28,400 | Incident closed for customer impact; review opened |\n\n---\n\n## 3. Contributing Factors\n\nEach of the following conditions was independently necessary for this outcome. Remove any single one and the double-charges do not occur.\n\n**Factor 1: The counter-reset fallback defaulted to a valid-looking value instead of failing safely.**\nShaq's fallback logic reset `attempt_number` to 1 when the counter service was unreachable. This produced idempotency keys identical in structure to legitimate first-attempt keys. A fallback that returned an error, used a distinguishable sentinel value, or paused payment processing would have prevented the collision. The fallback was a reasonable defensive choice at the time — keeping the payment service available during brief counter-service blips — but it silently degraded a safety invariant rather than surfacing the degradation.\n\n**Factor 2: The idempotency key design encoded an assumption that the counter service is always reachable.**\nThe key formula (`order_id + attempt_number`) only guarantees uniqueness if `attempt_number` is monotonically increasing and never reused for a given order. The design did not account for counter-service unavailability as a state that could produce key collisions. This assumption was implicit — not documented in the key design, the PR review, or the architecture decision record.\n\n**Factor 3: The failover runbook classified the counter service as non-critical.**\nThe runbook's restart ordering placed the counter service last. This meant the payment service came online and began processing charges while its dependency for idempotency enforcement was still down. The runbook had been updated 3 months prior for a different dependency (by Kobe), but the payment-to-counter dependency was not documented. The classification of \"non-critical\" was locally correct — the counter service is not required for the payment service to start — but it missed that it is required for the payment service to operate *safely*.\n\n**Factor 4: No monitoring existed for idempotency key uniqueness or duplicate charge detection.**\nPippen's monitoring tracked charge success/failure rates but not whether the same customer-order pair was being charged more than once. A uniqueness check or duplicate-charge alert would have caught the 312 collisions within minutes, not 40 minutes. The monitoring was designed around the assumption that the idempotency layer was reliable, so it focused on downstream outcomes rather than upstream invariant violations.\n\n**Factor 5: Acceptance criteria for the payment service did not cover counter-service-unavailable scenarios.**\nBird's domain rule — \"a customer must never be charged more than once for a single order\" — was clear, but the test suite did not include a scenario where the mechanism enforcing that rule was degraded. The fallback path introduced 8 months ago was never tested against a full failover. This meant the violation of the domain rule was invisible in CI/CD and in acceptance testing.\n\n**Factor 6: The PR review for the fallback did not surface the collision risk.**\nMJ reviewed Shaq's original fallback PR and assessed it as a reasonable defensive measure. The review did not trace the consequence of counter-reset through to idempotency key collision. This is understandable — the review focused on the immediate behavior (keep payments flowing) rather than the second-order interaction (key reuse at the payment processor). PR reviews are time-constrained and cannot catch every emergent interaction, but this is a case where a \"what if this runs during failover?\" prompt would have surfaced the risk.\n\n**Factor 7: Stripe's 24-hour idempotency window did not protect against the collision.**\nStripe deduplicates on idempotency keys within a 24-hour window — if the *same* key is submitted twice, Stripe returns the original charge. This would have prevented the double-charge *if* the fallback had produced the same key as the original attempt. But because the counter reset to 1, the second charge used a key that was technically new to Stripe (different `attempt_number`), so Stripe correctly processed it as a distinct charge. The safety net existed but could not catch a key that looked legitimate.\n\n---\n\n## 4. Learnings\n\n- **We now know that fallback paths can silently violate domain invariants**, which means every fallback that degrades a safety mechanism (not just an availability mechanism) needs explicit review for invariant preservation. \"Keep the service running\" is not always the safest option.\n\n- **We now know that implicit assumptions in key-generation schemes are a class of risk**, which means idempotency key designs should document their preconditions explicitly — what must be true for the key to guarantee uniqueness — and those preconditions should be monitored at runtime.\n\n- **We now know that \"non-critical for startup\" is not the same as \"non-critical for safe operation\"**, which means runbook dependency classifications need a second dimension: not just \"required to start\" but \"required for correctness.\"\n\n- **We now know that monitoring charge outcomes without monitoring charge invariants creates a blind spot**, which means our observability needs to cover not just \"did it work?\" but \"did it work *correctly*?\" — especially for financial operations.\n\n- **We now know that domain rules and their technical enforcement mechanisms can drift apart without anyone noticing**, which means domain acceptance criteria must be re-evaluated whenever the technical implementation of a domain rule changes (e.g., when a fallback is added).\n\n---\n\n## 5. Action Items\n\n| # | Action | Tag | Owner | Due |\n|---|--------|-----|-------|-----|\n| 1 | Change counter-reset fallback to fail open (return error / queue for retry) instead of resetting to 1. Payment service should reject or defer charges when counter service is unreachable. | `[PREVENT]` | Shaq | 2026-04-01 |\n| 2 | Add duplicate-charge detection alert: flag any `(customer_id, order_id)` pair charged more than once within a 1-hour window. | `[DETECT]` | Pippen | 2026-04-01 |\n| 3 | Add idempotency key uniqueness monitoring: track and alert on key collisions in the payment service before they reach Stripe. | `[DETECT]` | Pippen | 2026-04-08 |\n| 4 | Update failover runbook to classify counter service as critical-for-correctness; payment service must not process charges until counter service is confirmed healthy. | `[PREVENT]` | Kobe | 2026-03-31 |\n| 5 | Add acceptance test: \"Given counter service is unreachable, when a payment request arrives, then the customer is not charged and the request is queued or rejected.\" | `[PREVENT]` | Bird + Shaq | 2026-04-08 |\n| 6 | Document idempotency key preconditions in an ADR: what must be true for the key to guarantee uniqueness, and what happens when those preconditions are violated. | `[PROCESS]` | MJ | 2026-04-08 |\n| 7 | Implement automatic refund trigger: if duplicate-charge alert fires, initiate refund workflow automatically rather than waiting for manual investigation. | `[MITIGATE]` | Shaq + Pippen | 2026-04-15 |\n| 8 | Add \"fallback-path invariant review\" as a checklist item for PR reviews on any code that introduces a fallback or degraded-mode path in financial-critical services. | `[PROCESS]` | MJ + Kobe | 2026-04-01 |\n\n---\n\n## 6. Preserving the Learning\n\n- **ADR: Idempotency Key Preconditions and Fallback Policy** — Documents the key design, its assumptions, and the new policy that fallbacks in financial-critical paths must preserve domain invariants or fail safely. **Owner: MJ. Due: 2026-04-08.**\n\n- **Domain Rule Addition (Bird's rule registry)**: \"No fallback or degraded-mode path may silently violate the single-charge invariant. If idempotency cannot be guaranteed, the payment must be deferred, not attempted.\" **Owner: Bird. Due: 2026-03-31.**\n\n- **Runbook Dependency Classification Schema**: Add a \"correctness-critical\" tier to the existing runbook dependency model, distinct from \"startup-critical.\" All services with financial invariant dependencies must be tagged. **Owner: Kobe. Due: 2026-03-31.**\n\n- **Observability Checklist for Financial Services**: A standing checklist requiring that any financial service have monitoring on both outcomes (success/failure) and invariants (uniqueness, idempotency, single-charge). Added to the service onboarding template. **Owner: Pippen. Due: 2026-04-08.**\n\n- **PR Review Checklist Item**: \"Does this change introduce a fallback or degraded mode? If yes: what domain invariants does the primary path enforce? Does the fallback preserve all of them? If not, what is the failure mode?\" Added to the team's review template. **Owner: Kobe. Due: 2026-04-01.**",
+      "stop_reason": "end_turn",
+      "session_id": "9d9bf214-bef4-487a-8f1c-d50a1804a8e7",
+      "total_cost_usd": 0.085365,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 2692,
+        "cache_read_input_tokens": 6950,
+        "output_tokens": 2602,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 2692,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2602,
+          "cacheReadInputTokens": 6950,
+          "cacheCreationInputTokens": 2692,
+          "webSearchRequests": 0,
+          "costUSD": 0.085365,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "b586deef-8c9d-4760-8a33-469a6efad413"
+    }
+  ]
+}

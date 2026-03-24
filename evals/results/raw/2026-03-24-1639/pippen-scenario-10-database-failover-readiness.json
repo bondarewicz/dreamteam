@@ -1,0 +1,255 @@
+{
+  "agent": "pippen",
+  "scenario_id": "scenario-10-database-failover-readiness",
+  "agent_output": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      { \"from\": \"order_history_service\", \"to\": \"postgresql_primary\", \"status\": \"risk\", \"issue\": \"All traffic (95% reads) hits primary; no read replica routing. Primary bears unnecessary load and is a single point of failure for reads.\" },\n      { \"from\": \"order_history_service\", \"to\": \"postgresql_primary\", \"status\": \"risk\", \"issue\": \"Connection string is baked into app config. Primary failover requires manual restart — minutes of downtime during an already stressful incident.\" },\n      { \"from\": \"caller\", \"to\": \"order_history_service\", \"status\": \"risk\", \"issue\": \"No retry on database connection errors. Transient network blips (common in cloud environments) surface as 500s to callers immediately.\" }\n    ],\n    \"contract_compliance\": \"Service exposes standard HTTP and Prometheus endpoints. No contract issues at the API layer.\",\n    \"data_flow_integrity\": \"Read/write path is straightforward single-primary. No data flow integrity concerns beyond the operational risks listed.\"\n  },\n\n  \"observability_review\": {\n    \"logging\": { \"coverage\": \"adequate\", \"gaps\": [\"No mention of logging connection pool exhaustion events (pool full, waiters queued)\", \"No mention of slow-query threshold logging for queries exceeding p99\"] },\n    \"metrics\": { \"coverage\": \"Good baseline with query duration histogram and error counter\", \"gaps\": [\"No connection pool utilization metric (active/idle/overflow connections)\", \"No metric for connection acquisition wait time\", \"No request throughput or HTTP status code metrics mentioned\", \"No replica lag metric (will be needed once replica routing is added)\"] },\n    \"tracing\": { \"coverage\": \"Request ID present in logs, but no distributed tracing mentioned\", \"gaps\": [\"No OpenTelemetry / distributed trace spans for cross-service correlation\", \"No database span linking query execution to parent request trace\"] },\n    \"debugging_capability\": \"Moderate. Request ID + query duration + error type in structured logs is a solid foundation. Missing connection pool visibility will make pool exhaustion incidents hard to diagnose at 3am.\"\n  },\n\n  \"resilience_assessment\": {\n    \"failure_modes\": [\n      { \"scenario\": \"Transient database connection failure (network blip, TCP reset)\", \"handling\": \"unhandled\", \"recommendation\": \"MUST-HAVE: Add retry with exponential backoff (1-2 retries, short timeout) for connection acquisition. Most transient errors resolve in <1s.\" },\n      { \"scenario\": \"Primary database failover (planned or unplanned)\", \"handling\": \"unhandled\", \"recommendation\": \"MUST-HAVE: Use DNS-based connection resolution (e.g., PgBouncer, cloud provider endpoint, or periodic DNS re-resolution) so failover is picked up without restart. Manual restart during an incident is a recipe for extended outages.\" },\n      { \"scenario\": \"Connection pool exhaustion under load spike\", \"handling\": \"partial\", \"recommendation\": \"Pool of 20 + overflow 5 = 25 max connections. For a read-heavy service this may be tight. Add pool exhaustion metrics and a configurable pool wait timeout with a clear error (503 with Retry-After) rather than hanging or 500.\" },\n      { \"scenario\": \"Slow queries holding connections\", \"handling\": \"partial\", \"recommendation\": \"Add statement_timeout on the PostgreSQL session (e.g., 5s) to prevent long-running queries from draining the pool.\" },\n      { \"scenario\": \"Primary is up but degraded (high latency)\", \"handling\": \"unhandled\", \"recommendation\": \"NICE-TO-HAVE: Add circuit breaker or adaptive timeout that sheds load when p99 latency exceeds threshold, returning 503 instead of cascading slowness to callers.\" },\n      { \"scenario\": \"Health check passes but queries fail (partial database issue)\", \"handling\": \"partial\", \"recommendation\": \"Health check only verifies connectivity. Consider a lightweight canary query (SELECT 1) and expose a readiness vs liveness distinction.\" }\n    ],\n    \"retry_config\": \"None. Database connection errors are not retried. This is a critical gap for a production service.\",\n    \"timeout_config\": \"Not specified. No mention of connection acquisition timeout, query timeout, or statement_timeout. Queries can hang indefinitely.\",\n    \"circuit_breakers\": \"None implemented. A degraded primary will cascade latency to all callers.\",\n    \"graceful_degradation\": \"None. No read replica fallback, no cached response fallback, no partial availability strategy. Service is all-or-nothing on the primary.\"\n  },\n\n  \"operational_readiness\": {\n    \"deployment_ready\": false,\n    \"rollback_capable\": true,\n    \"rollback_plan\": \"Redeploy previous image. Straightforward and low-risk given no database migrations mentioned.\",\n    \"monitoring_coverage\": \"Partial. Good baseline (query duration, error counts, structured logs) but missing connection pool metrics and alerting thresholds. On-call cannot see pool saturation, which is the most likely failure mode under load.\",\n    \"on_call_documentation\": \"Not mentioned. Runbooks needed for: (1) connection pool exhaustion, (2) primary failover procedure, (3) manual restart steps and verification, (4) how to identify and kill slow queries.\",\n    \"new_infrastructure_required\": {\n      \"new_env_vars\": [\"DATABASE_URL should be dynamically resolved (DNS or service discovery) rather than static\"],\n      \"new_services\": [\"Consider PgBouncer or equivalent connection pooler for replica routing and failover\"],\n      \"new_queues_topics\": [],\n      \"config_changes\": [\"Add statement_timeout to PostgreSQL session config\", \"Add connection pool wait timeout\", \"Make retry count and backoff configurable\"],\n      \"infra_provisioning\": []\n    },\n    \"database_safety\": {\n      \"has_migrations\": false,\n      \"reversible\": true,\n      \"data_preserving\": true,\n      \"large_table_impact\": false,\n      \"details\": \"No migrations mentioned. Read-heavy service against existing order history tables.\"\n    },\n    \"verdict\": \"NOT READY\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"Primary failover requires manual service restart\",\n      \"reason\": \"Baked-in connection string means any primary failover (planned maintenance or unplanned crash) causes extended downtime until an operator manually restarts the service. In a production environment with SLA expectations, this is unacceptable. The blast radius is 100% of order history reads and writes. This needs DNS-based endpoint resolution or a connection proxy, which changes the infrastructure topology.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"No retry on transient database connection errors\",\n      \"reason\": \"A single TCP reset or momentary network partition (routine in cloud environments) immediately returns 500 to every affected caller. For a service handling 95% reads at production scale, this will generate noisy error spikes during normal infrastructure operations (e.g., security group changes, AZ rebalancing). Cannot assess acceptable error budget without knowing the SLA, but zero retries is below any reasonable production bar.\",\n      \"routed_to\": \"MJ\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 60,\n    \"high_confidence_areas\": [\n      \"Logging foundation is solid (structured JSON, request ID, query duration, error type)\",\n      \"Prometheus metrics baseline exists\",\n      \"Rollback path is clean\"\n    ],\n    \"low_confidence_areas\": [\n      \"Connection pool sizing adequacy — no traffic volume or concurrency numbers provided\",\n      \"Whether callers have their own retry/fallback logic that might mitigate the no-retry gap\",\n      \"SLA requirements that would determine how critical the failover gap is\",\n      \"Whether a connection proxy (PgBouncer) already exists in the infrastructure\"\n    ],\n    \"assumptions\": [\n      \"No existing PgBouncer or connection proxy in front of PostgreSQL\",\n      \"Service is directly exposed to production callers (not behind a retry-capable API gateway)\",\n      \"Order history is a business-critical path (users expect to see their orders reliably)\"\n    ]\n  }\n}",
+  "agent_output_excerpt": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      { \"from\": \"order_history_service\", \"to\": \"postgresql_primary\", \"status\": \"risk\", \"issue\": \"All traffic (95% reads) hits primary; no read replica routing. Primary bears unnecessary load and is a single point of failure for reads.\" },\n      { \"from\": \"order_history_service\", \"to\": \"postgresql_primary\", \"status\": \"risk\", \"issue\": \"Connection string is baked into app config. Primary failover requires manual restart — minutes of do",
+  "duration_ms": 46203,
+  "tokens_used": 2002,
+  "input_tokens": 3,
+  "output_tokens": 1999,
+  "cost_usd": 0.08567749999999999,
+  "timestamp": "2026-03-24T15:49:12Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "3db98ab8-68f7-4d22-a884-bb30cbce98d8",
+      "tools": [
+        "Task",
+        "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        "ExitPlanMode",
+        "Read",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitWorktree",
+        "SendMessage",
+        "TeamCreate",
+        "TeamDelete",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "RemoteTrigger",
+        "ToolSearch"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.81",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "frontend-design:frontend-design"
+      ],
+      "plugins": [
+        {
+          "name": "frontend-design",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/frontend-design/79caa0d824ac"
+        },
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/cache/claude-plugins-official/code-review/79caa0d824ac"
+        }
+      ],
+      "uuid": "3e6e0945-8789-410b-b9d3-cabf8b9438fc",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_019BMt1uGsAuekRXarnxjQaB",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me assess this order history service for operational readiness based on the provided specifications.",
+            "signature": "EpACCkYIDBgCKkCPBar5Dq1nWewxazCnP/BdSmsEpz+dU6s5L6xz83qggpeuxLguUdIsELzim2Om5SPOKcduwwF3aSjzWAgO/cg3Egy71+iYciFUk6UkwJQaDOka95ZBrvc/xdvPByIwwdeGuXoyNh1yr68lS50dlqXBCQ5nwd1+FbBG0GgBWMpmDV2y4jGRoFwo9jDbrDcOKnijKxsp7z2woxf9YFi04eGzpdTBWScTdj10Ty7kKmYVnUAP+5Pjh3FyI1rRW6WzHLVp8/otrhUHZh4dKkfcpsCjTpgckjgBqLtbekkGbNpWp5WAc3oQ5rcRMWIP6t5m2ecfuXiuJ5pPnLGeXOMAcc1J5jqcXL70LjAYAQ=="
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 5710,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 5710
+          },
+          "output_tokens": 34,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "3db98ab8-68f7-4d22-a884-bb30cbce98d8",
+      "uuid": "af704f14-4294-47e4-b730-c17b84c8d6f5"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_019BMt1uGsAuekRXarnxjQaB",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      { \"from\": \"order_history_service\", \"to\": \"postgresql_primary\", \"status\": \"risk\", \"issue\": \"All traffic (95% reads) hits primary; no read replica routing. Primary bears unnecessary load and is a single point of failure for reads.\" },\n      { \"from\": \"order_history_service\", \"to\": \"postgresql_primary\", \"status\": \"risk\", \"issue\": \"Connection string is baked into app config. Primary failover requires manual restart — minutes of downtime during an already stressful incident.\" },\n      { \"from\": \"caller\", \"to\": \"order_history_service\", \"status\": \"risk\", \"issue\": \"No retry on database connection errors. Transient network blips (common in cloud environments) surface as 500s to callers immediately.\" }\n    ],\n    \"contract_compliance\": \"Service exposes standard HTTP and Prometheus endpoints. No contract issues at the API layer.\",\n    \"data_flow_integrity\": \"Read/write path is straightforward single-primary. No data flow integrity concerns beyond the operational risks listed.\"\n  },\n\n  \"observability_review\": {\n    \"logging\": { \"coverage\": \"adequate\", \"gaps\": [\"No mention of logging connection pool exhaustion events (pool full, waiters queued)\", \"No mention of slow-query threshold logging for queries exceeding p99\"] },\n    \"metrics\": { \"coverage\": \"Good baseline with query duration histogram and error counter\", \"gaps\": [\"No connection pool utilization metric (active/idle/overflow connections)\", \"No metric for connection acquisition wait time\", \"No request throughput or HTTP status code metrics mentioned\", \"No replica lag metric (will be needed once replica routing is added)\"] },\n    \"tracing\": { \"coverage\": \"Request ID present in logs, but no distributed tracing mentioned\", \"gaps\": [\"No OpenTelemetry / distributed trace spans for cross-service correlation\", \"No database span linking query execution to parent request trace\"] },\n    \"debugging_capability\": \"Moderate. Request ID + query duration + error type in structured logs is a solid foundation. Missing connection pool visibility will make pool exhaustion incidents hard to diagnose at 3am.\"\n  },\n\n  \"resilience_assessment\": {\n    \"failure_modes\": [\n      { \"scenario\": \"Transient database connection failure (network blip, TCP reset)\", \"handling\": \"unhandled\", \"recommendation\": \"MUST-HAVE: Add retry with exponential backoff (1-2 retries, short timeout) for connection acquisition. Most transient errors resolve in <1s.\" },\n      { \"scenario\": \"Primary database failover (planned or unplanned)\", \"handling\": \"unhandled\", \"recommendation\": \"MUST-HAVE: Use DNS-based connection resolution (e.g., PgBouncer, cloud provider endpoint, or periodic DNS re-resolution) so failover is picked up without restart. Manual restart during an incident is a recipe for extended outages.\" },\n      { \"scenario\": \"Connection pool exhaustion under load spike\", \"handling\": \"partial\", \"recommendation\": \"Pool of 20 + overflow 5 = 25 max connections. For a read-heavy service this may be tight. Add pool exhaustion metrics and a configurable pool wait timeout with a clear error (503 with Retry-After) rather than hanging or 500.\" },\n      { \"scenario\": \"Slow queries holding connections\", \"handling\": \"partial\", \"recommendation\": \"Add statement_timeout on the PostgreSQL session (e.g., 5s) to prevent long-running queries from draining the pool.\" },\n      { \"scenario\": \"Primary is up but degraded (high latency)\", \"handling\": \"unhandled\", \"recommendation\": \"NICE-TO-HAVE: Add circuit breaker or adaptive timeout that sheds load when p99 latency exceeds threshold, returning 503 instead of cascading slowness to callers.\" },\n      { \"scenario\": \"Health check passes but queries fail (partial database issue)\", \"handling\": \"partial\", \"recommendation\": \"Health check only verifies connectivity. Consider a lightweight canary query (SELECT 1) and expose a readiness vs liveness distinction.\" }\n    ],\n    \"retry_config\": \"None. Database connection errors are not retried. This is a critical gap for a production service.\",\n    \"timeout_config\": \"Not specified. No mention of connection acquisition timeout, query timeout, or statement_timeout. Queries can hang indefinitely.\",\n    \"circuit_breakers\": \"None implemented. A degraded primary will cascade latency to all callers.\",\n    \"graceful_degradation\": \"None. No read replica fallback, no cached response fallback, no partial availability strategy. Service is all-or-nothing on the primary.\"\n  },\n\n  \"operational_readiness\": {\n    \"deployment_ready\": false,\n    \"rollback_capable\": true,\n    \"rollback_plan\": \"Redeploy previous image. Straightforward and low-risk given no database migrations mentioned.\",\n    \"monitoring_coverage\": \"Partial. Good baseline (query duration, error counts, structured logs) but missing connection pool metrics and alerting thresholds. On-call cannot see pool saturation, which is the most likely failure mode under load.\",\n    \"on_call_documentation\": \"Not mentioned. Runbooks needed for: (1) connection pool exhaustion, (2) primary failover procedure, (3) manual restart steps and verification, (4) how to identify and kill slow queries.\",\n    \"new_infrastructure_required\": {\n      \"new_env_vars\": [\"DATABASE_URL should be dynamically resolved (DNS or service discovery) rather than static\"],\n      \"new_services\": [\"Consider PgBouncer or equivalent connection pooler for replica routing and failover\"],\n      \"new_queues_topics\": [],\n      \"config_changes\": [\"Add statement_timeout to PostgreSQL session config\", \"Add connection pool wait timeout\", \"Make retry count and backoff configurable\"],\n      \"infra_provisioning\": []\n    },\n    \"database_safety\": {\n      \"has_migrations\": false,\n      \"reversible\": true,\n      \"data_preserving\": true,\n      \"large_table_impact\": false,\n      \"details\": \"No migrations mentioned. Read-heavy service against existing order history tables.\"\n    },\n    \"verdict\": \"NOT READY\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"Primary failover requires manual service restart\",\n      \"reason\": \"Baked-in connection string means any primary failover (planned maintenance or unplanned crash) causes extended downtime until an operator manually restarts the service. In a production environment with SLA expectations, this is unacceptable. The blast radius is 100% of order history reads and writes. This needs DNS-based endpoint resolution or a connection proxy, which changes the infrastructure topology.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"No retry on transient database connection errors\",\n      \"reason\": \"A single TCP reset or momentary network partition (routine in cloud environments) immediately returns 500 to every affected caller. For a service handling 95% reads at production scale, this will generate noisy error spikes during normal infrastructure operations (e.g., security group changes, AZ rebalancing). Cannot assess acceptable error budget without knowing the SLA, but zero retries is below any reasonable production bar.\",\n      \"routed_to\": \"MJ\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 60,\n    \"high_confidence_areas\": [\n      \"Logging foundation is solid (structured JSON, request ID, query duration, error type)\",\n      \"Prometheus metrics baseline exists\",\n      \"Rollback path is clean\"\n    ],\n    \"low_confidence_areas\": [\n      \"Connection pool sizing adequacy — no traffic volume or concurrency numbers provided\",\n      \"Whether callers have their own retry/fallback logic that might mitigate the no-retry gap\",\n      \"SLA requirements that would determine how critical the failover gap is\",\n      \"Whether a connection proxy (PgBouncer) already exists in the infrastructure\"\n    ],\n    \"assumptions\": [\n      \"No existing PgBouncer or connection proxy in front of PostgreSQL\",\n      \"Service is directly exposed to production callers (not behind a retry-capable API gateway)\",\n      \"Order history is a business-critical path (users expect to see their orders reliably)\"\n    ]\n  }\n}"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 5710,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 5710
+          },
+          "output_tokens": 34,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "3db98ab8-68f7-4d22-a884-bb30cbce98d8",
+      "uuid": "eef5870a-e02b-4e8c-8c0b-072c433307d6"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774375200,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "92de4c21-10a5-4099-90fd-f4b88eb874b2",
+      "session_id": "3db98ab8-68f7-4d22-a884-bb30cbce98d8"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 45481,
+      "duration_api_ms": 45467,
+      "num_turns": 1,
+      "result": "{\n  \"integration_assessment\": {\n    \"component_interactions\": [\n      { \"from\": \"order_history_service\", \"to\": \"postgresql_primary\", \"status\": \"risk\", \"issue\": \"All traffic (95% reads) hits primary; no read replica routing. Primary bears unnecessary load and is a single point of failure for reads.\" },\n      { \"from\": \"order_history_service\", \"to\": \"postgresql_primary\", \"status\": \"risk\", \"issue\": \"Connection string is baked into app config. Primary failover requires manual restart — minutes of downtime during an already stressful incident.\" },\n      { \"from\": \"caller\", \"to\": \"order_history_service\", \"status\": \"risk\", \"issue\": \"No retry on database connection errors. Transient network blips (common in cloud environments) surface as 500s to callers immediately.\" }\n    ],\n    \"contract_compliance\": \"Service exposes standard HTTP and Prometheus endpoints. No contract issues at the API layer.\",\n    \"data_flow_integrity\": \"Read/write path is straightforward single-primary. No data flow integrity concerns beyond the operational risks listed.\"\n  },\n\n  \"observability_review\": {\n    \"logging\": { \"coverage\": \"adequate\", \"gaps\": [\"No mention of logging connection pool exhaustion events (pool full, waiters queued)\", \"No mention of slow-query threshold logging for queries exceeding p99\"] },\n    \"metrics\": { \"coverage\": \"Good baseline with query duration histogram and error counter\", \"gaps\": [\"No connection pool utilization metric (active/idle/overflow connections)\", \"No metric for connection acquisition wait time\", \"No request throughput or HTTP status code metrics mentioned\", \"No replica lag metric (will be needed once replica routing is added)\"] },\n    \"tracing\": { \"coverage\": \"Request ID present in logs, but no distributed tracing mentioned\", \"gaps\": [\"No OpenTelemetry / distributed trace spans for cross-service correlation\", \"No database span linking query execution to parent request trace\"] },\n    \"debugging_capability\": \"Moderate. Request ID + query duration + error type in structured logs is a solid foundation. Missing connection pool visibility will make pool exhaustion incidents hard to diagnose at 3am.\"\n  },\n\n  \"resilience_assessment\": {\n    \"failure_modes\": [\n      { \"scenario\": \"Transient database connection failure (network blip, TCP reset)\", \"handling\": \"unhandled\", \"recommendation\": \"MUST-HAVE: Add retry with exponential backoff (1-2 retries, short timeout) for connection acquisition. Most transient errors resolve in <1s.\" },\n      { \"scenario\": \"Primary database failover (planned or unplanned)\", \"handling\": \"unhandled\", \"recommendation\": \"MUST-HAVE: Use DNS-based connection resolution (e.g., PgBouncer, cloud provider endpoint, or periodic DNS re-resolution) so failover is picked up without restart. Manual restart during an incident is a recipe for extended outages.\" },\n      { \"scenario\": \"Connection pool exhaustion under load spike\", \"handling\": \"partial\", \"recommendation\": \"Pool of 20 + overflow 5 = 25 max connections. For a read-heavy service this may be tight. Add pool exhaustion metrics and a configurable pool wait timeout with a clear error (503 with Retry-After) rather than hanging or 500.\" },\n      { \"scenario\": \"Slow queries holding connections\", \"handling\": \"partial\", \"recommendation\": \"Add statement_timeout on the PostgreSQL session (e.g., 5s) to prevent long-running queries from draining the pool.\" },\n      { \"scenario\": \"Primary is up but degraded (high latency)\", \"handling\": \"unhandled\", \"recommendation\": \"NICE-TO-HAVE: Add circuit breaker or adaptive timeout that sheds load when p99 latency exceeds threshold, returning 503 instead of cascading slowness to callers.\" },\n      { \"scenario\": \"Health check passes but queries fail (partial database issue)\", \"handling\": \"partial\", \"recommendation\": \"Health check only verifies connectivity. Consider a lightweight canary query (SELECT 1) and expose a readiness vs liveness distinction.\" }\n    ],\n    \"retry_config\": \"None. Database connection errors are not retried. This is a critical gap for a production service.\",\n    \"timeout_config\": \"Not specified. No mention of connection acquisition timeout, query timeout, or statement_timeout. Queries can hang indefinitely.\",\n    \"circuit_breakers\": \"None implemented. A degraded primary will cascade latency to all callers.\",\n    \"graceful_degradation\": \"None. No read replica fallback, no cached response fallback, no partial availability strategy. Service is all-or-nothing on the primary.\"\n  },\n\n  \"operational_readiness\": {\n    \"deployment_ready\": false,\n    \"rollback_capable\": true,\n    \"rollback_plan\": \"Redeploy previous image. Straightforward and low-risk given no database migrations mentioned.\",\n    \"monitoring_coverage\": \"Partial. Good baseline (query duration, error counts, structured logs) but missing connection pool metrics and alerting thresholds. On-call cannot see pool saturation, which is the most likely failure mode under load.\",\n    \"on_call_documentation\": \"Not mentioned. Runbooks needed for: (1) connection pool exhaustion, (2) primary failover procedure, (3) manual restart steps and verification, (4) how to identify and kill slow queries.\",\n    \"new_infrastructure_required\": {\n      \"new_env_vars\": [\"DATABASE_URL should be dynamically resolved (DNS or service discovery) rather than static\"],\n      \"new_services\": [\"Consider PgBouncer or equivalent connection pooler for replica routing and failover\"],\n      \"new_queues_topics\": [],\n      \"config_changes\": [\"Add statement_timeout to PostgreSQL session config\", \"Add connection pool wait timeout\", \"Make retry count and backoff configurable\"],\n      \"infra_provisioning\": []\n    },\n    \"database_safety\": {\n      \"has_migrations\": false,\n      \"reversible\": true,\n      \"data_preserving\": true,\n      \"large_table_impact\": false,\n      \"details\": \"No migrations mentioned. Read-heavy service against existing order history tables.\"\n    },\n    \"verdict\": \"NOT READY\"\n  },\n\n  \"escalations\": [\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"Primary failover requires manual service restart\",\n      \"reason\": \"Baked-in connection string means any primary failover (planned maintenance or unplanned crash) causes extended downtime until an operator manually restarts the service. In a production environment with SLA expectations, this is unacceptable. The blast radius is 100% of order history reads and writes. This needs DNS-based endpoint resolution or a connection proxy, which changes the infrastructure topology.\",\n      \"routed_to\": \"MJ\"\n    },\n    {\n      \"type\": \"integration_risk\",\n      \"issue\": \"No retry on transient database connection errors\",\n      \"reason\": \"A single TCP reset or momentary network partition (routine in cloud environments) immediately returns 500 to every affected caller. For a service handling 95% reads at production scale, this will generate noisy error spikes during normal infrastructure operations (e.g., security group changes, AZ rebalancing). Cannot assess acceptable error budget without knowing the SLA, but zero retries is below any reasonable production bar.\",\n      \"routed_to\": \"MJ\"\n    }\n  ],\n\n  \"confidence\": {\n    \"level\": 60,\n    \"high_confidence_areas\": [\n      \"Logging foundation is solid (structured JSON, request ID, query duration, error type)\",\n      \"Prometheus metrics baseline exists\",\n      \"Rollback path is clean\"\n    ],\n    \"low_confidence_areas\": [\n      \"Connection pool sizing adequacy — no traffic volume or concurrency numbers provided\",\n      \"Whether callers have their own retry/fallback logic that might mitigate the no-retry gap\",\n      \"SLA requirements that would determine how critical the failover gap is\",\n      \"Whether a connection proxy (PgBouncer) already exists in the infrastructure\"\n    ],\n    \"assumptions\": [\n      \"No existing PgBouncer or connection proxy in front of PostgreSQL\",\n      \"Service is directly exposed to production callers (not behind a retry-capable API gateway)\",\n      \"Order history is a business-critical path (users expect to see their orders reliably)\"\n    ]\n  }\n}",
+      "stop_reason": "end_turn",
+      "session_id": "3db98ab8-68f7-4d22-a884-bb30cbce98d8",
+      "total_cost_usd": 0.08567749999999999,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 5710,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 1999,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5710,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 1999,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 5710,
+          "webSearchRequests": 0,
+          "costUSD": 0.08567749999999999,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "893e33c2-a00e-4503-b0a7-313917d1faf7"
+    }
+  ]
+}
