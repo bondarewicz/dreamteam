@@ -1,0 +1,75 @@
+/**
+ * DreamTeam Web — Bun.serve() entry point
+ * Start: bun run web/index.ts
+ */
+import { Router } from "./src/router.ts";
+import { getDb, isDbEmpty } from "./src/db.ts";
+import { migrate } from "./src/migrate.ts";
+import {
+  dashboardHandler,
+  evalsIndexHandler,
+  evalRunHandler,
+  evalResultsFragment,
+  traceHandler,
+} from "./src/routes/evals.ts";
+import { serveStatic } from "./src/routes/static.ts";
+
+const PORT = parseInt(process.env.PORT ?? "3000", 10);
+
+// Initialize DB and migrate if empty
+console.log("Initializing database...");
+const db = getDb();
+if (isDbEmpty()) {
+  console.log("Database empty — migrating from JSON files...");
+  migrate(db);
+  console.log("Migration complete.");
+} else {
+  const count = (db.query("SELECT COUNT(*) as c FROM eval_runs").get() as { c: number }).c;
+  console.log(`Database ready (${count} runs loaded).`);
+}
+
+// Set up router
+const router = new Router();
+router.get("/", dashboardHandler);
+router.get("/evals", evalsIndexHandler);
+router.get("/evals/:runId", evalRunHandler);
+router.get("/evals/:runId/results", evalResultsFragment);
+router.get("/evals/:runId/trace/:resultId", traceHandler);
+
+// Static file serving — manual pattern since router doesn't support wildcards directly
+const server = Bun.serve({
+  port: PORT,
+  async fetch(req) {
+    const url = new URL(req.url);
+
+    // Static files
+    if (url.pathname.startsWith("/static/")) {
+      const file = url.pathname.slice("/static/".length);
+      const fakeReq = req;
+      const fakeParams = { "*": file };
+      return serveStatic(fakeReq, fakeParams);
+    }
+
+    return router.handle(req);
+  },
+  error(err) {
+    console.error("Server error:", err);
+    return new Response("Internal Server Error", { status: 500 });
+  },
+});
+
+console.log(`DreamTeam running at http://localhost:${PORT}`);
+
+// Auto-open browser
+try {
+  const platform = process.platform;
+  if (platform === "darwin") {
+    Bun.spawn(["open", `http://localhost:${PORT}`]);
+  } else if (platform === "linux") {
+    Bun.spawn(["xdg-open", `http://localhost:${PORT}`]);
+  } else if (platform === "win32") {
+    Bun.spawn(["cmd", "/c", "start", `http://localhost:${PORT}`]);
+  }
+} catch {
+  // Browser open is optional
+}
