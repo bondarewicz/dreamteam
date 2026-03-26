@@ -71,10 +71,17 @@ export function DashboardPage(runs: EvalRun[]): string {
   }).join("");
 
   return `
-    <div class="page-title">
-      <h1>DreamTeam Eval Dashboard</h1>
-      <p>Browse eval runs, track agent performance, and drill into traces.</p>
+    <div class="page-title" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div>
+        <h1>DreamTeam Eval Dashboard</h1>
+        <p>Browse eval runs, track agent performance, and drill into traces.</p>
+      </div>
+      <a href="/evals/new" class="btn-new-run">+ New Run</a>
     </div>
+    <style>
+      .btn-new-run { display:inline-flex; align-items:center; background:var(--accent); color:#fff; border-radius:6px; padding:8px 16px; font-size:13px; font-weight:600; text-decoration:none; white-space:nowrap; transition:opacity 0.15s; }
+      .btn-new-run:hover { opacity:0.85; }
+    </style>
     ${statsHtml}
     <div class="section-gap">
       <h2>All Eval Runs</h2>
