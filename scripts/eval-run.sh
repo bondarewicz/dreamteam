@@ -140,15 +140,18 @@ if not DRY_RUN and PHASE in ('all', 'agents') and not RESUME_DIR:
 # ── Discover scenarios ────────────────────────────────────────────────────────
 
 SCENARIOS = []
+ALL_SCENARIOS_TOTAL = 0  # count of ALL scenarios across all agents, before any filters
 
+import fnmatch as _fnmatch
 for agent_dir in sorted(glob.glob(os.path.join(EVALS_DIR, '*/'))):
     agent = os.path.basename(agent_dir.rstrip('/'))
     if agent in ('results', ) or agent.startswith('README'):
         continue
+    agent_scenario_files = sorted(glob.glob(os.path.join(agent_dir, 'scenario-*.md')))
+    ALL_SCENARIOS_TOTAL += len([f for f in agent_scenario_files if os.path.isfile(f)])
     if AGENT_FILTER and agent != AGENT_FILTER:
         continue
-    import fnmatch as _fnmatch
-    for scenario_file in sorted(glob.glob(os.path.join(agent_dir, 'scenario-*.md'))):
+    for scenario_file in agent_scenario_files:
         if os.path.isfile(scenario_file):
             if SCENARIO_FILTER:
                 basename = os.path.splitext(os.path.basename(scenario_file))[0]
@@ -157,7 +160,7 @@ for agent_dir in sorted(glob.glob(os.path.join(EVALS_DIR, '*/'))):
             SCENARIOS.append(scenario_file)
 
 TOTAL = len(SCENARIOS)
-print(f'Discovered {TOTAL} scenarios')
+print(f'Discovered {TOTAL} scenarios (total across all agents: {ALL_SCENARIOS_TOTAL})')
 if AGENT_FILTER:
     print(f'  (filtered to agent: {AGENT_FILTER})')
 if SCENARIO_FILTER:
@@ -773,7 +776,11 @@ def phase_assemble():
         pass
 
     now_iso     = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-    is_complete = (scenarios_run == TOTAL)
+    # A run is a real baseline only when it covers all available scenarios across all agents.
+    # Using ALL_SCENARIOS_TOTAL (unfiltered count) with a threshold of 100 to tolerate slight
+    # additions/removals over time. Do NOT use TOTAL (filtered count) — it equals scenarios_run
+    # even for single-scenario filtered runs, causing false positives.
+    is_complete = (scenarios_run >= 100 and scenarios_run >= ALL_SCENARIOS_TOTAL * 0.8)
 
     final = {
         'run_id':                f'eval/run-{RUN_DATETIME}',
