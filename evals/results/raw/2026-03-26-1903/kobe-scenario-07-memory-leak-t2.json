@@ -1,0 +1,258 @@
+{
+  "agent": "kobe",
+  "scenario_id": "scenario-07-memory-leak",
+  "agent_output": "```json\n{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Memory leak from never-cleaned-up CourierTracker instances and WebSocket listeners, plus unguarded JSON.parse will crash the process.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Memory leak: CourierTracker instances never garbage collected\",\n      \"risk\": \"Each courier reconnect creates a new CourierTracker with event listeners bound to the WebSocket. There is no 'close' handler to tear down the instance or remove listeners. With 5-minute average sessions, every courier generates ~288 orphaned instances per day. After 3 months, this explains the steadily increasing memory usage — classic listener leak.\",\n      \"severity\": \"Critical\",\n      \"location\": \"CourierTracker.setupListeners() — missing ws.on('close', ...) handler\",\n      \"reproduction\": \"1. Connect courier via WebSocket. 2. Disconnect. 3. Reconnect (new CourierTracker created). 4. Repeat. 5. Observe process.memoryUsage().heapUsed growing monotonically. The old CourierTracker is retained because the WebSocket object still holds references to its bound listener closures, and nothing calls ws.removeAllListeners() or nulls the references.\",\n      \"fix\": \"Add a 'close' handler that removes all listeners and nulls references: this.ws.on('close', () => { this.ws.removeAllListeners(); this.ws = null; }). Additionally, the caller that creates CourierTracker instances likely holds them in a Map — ensure the close handler also removes the entry from that Map so the instance itself becomes GC-eligible.\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Service stability — the process will eventually OOM and crash, dropping all active courier connections.\"\n    },\n    {\n      \"title\": \"Unguarded JSON.parse crashes the process on malformed data\",\n      \"risk\": \"A single malformed WebSocket message (network corruption, client bug, or malicious payload) will throw a SyntaxError from JSON.parse. Since this is inside an event listener with no try/catch, the uncaught exception will crash the entire Node.js process, killing all courier connections — not just the one that sent bad data.\",\n      \"severity\": \"Critical\",\n      \"location\": \"CourierTracker.setupListeners() — ws.on('message', ...) callback\",\n      \"reproduction\": \"Send a non-JSON string (e.g. 'ping' or a binary frame) over the WebSocket. JSON.parse throws, process exits.\",\n      \"fix\": \"Wrap the message handler in try/catch: try { const location = JSON.parse(data); this.updateLocation(location); } catch (err) { console.error(`Invalid message from courier ${this.courierId}:`, err); }. Also validate that the parsed object has numeric lat/lng before passing to updateLocation.\",\n      \"time_to_fix\": \"15 minutes\",\n      \"acceptance_criteria_affected\": \"Service availability — one bad message should not take down the entire service.\"\n    },\n    {\n      \"title\": \"No input validation on location coordinates enables database corruption\",\n      \"risk\": \"The parsed location object is passed directly to the database with no validation. A payload like {\\\"lat\\\": \\\"DROP TABLE\\\", \\\"lng\\\": null} or {\\\"lat\\\": 9999, \\\"lng\\\": -9999} will write garbage into the couriers table. There is no check that lat is in [-90, 90], lng is in [-180, 180], or that both are finite numbers.\",\n      \"severity\": \"High\",\n      \"location\": \"CourierTracker.updateLocation()\",\n      \"reproduction\": \"Send '{\\\"lat\\\": NaN, \\\"lng\\\": Infinity}' or '{\\\"foo\\\": 1}' over the WebSocket. location.lat will be undefined/NaN, written directly to the database.\",\n      \"fix\": \"Add validation before the DB call: if (typeof location.lat !== 'number' || typeof location.lng !== 'number' || !isFinite(location.lat) || !isFinite(location.lng) || Math.abs(location.lat) > 90 || Math.abs(location.lng) > 180) return;\",\n      \"time_to_fix\": \"15 minutes\",\n      \"acceptance_criteria_affected\": \"Data integrity — downstream services consuming courier locations will receive invalid coordinates.\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"Database write on every message with no throttling\",\n      \"description\": \"If couriers send location updates at high frequency (e.g. every second), every single message triggers a database write with no batching, debouncing, or rate limiting. Under load this will saturate the database connection pool. Consider throttling to one write per N seconds per courier.\",\n      \"location\": \"CourierTracker.updateLocation()\"\n    },\n    {\n      \"title\": \"Fire-and-forget database call with no error handling\",\n      \"description\": \"db.couriers.updateLocation() is called without await or .catch(). If the DB write fails (connection timeout, constraint violation), the error is silently swallowed or becomes an unhandled promise rejection, which in Node 15+ terminates the process.\",\n      \"location\": \"CourierTracker.updateLocation()\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Add a heartbeat/ping-pong mechanism to detect stale connections that never fire 'close'.\",\n    \"Consider using a WeakRef or explicit registry pattern (Map<courierId, CourierTracker>) with cleanup on disconnect to make instance lifecycle explicit.\",\n    \"Add structured logging (not console.error) with courier ID context for observability.\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"The memory leak is already in production and worsening. A fix deployment is safe, but the current state will eventually OOM.\",\n    \"rollback_capability\": \"Rolling back to current code is safe but perpetuates the leak.\",\n    \"backward_compatibility\": \"Fixes are purely additive (close handler, try/catch, validation) — no breaking changes.\",\n    \"monitoring_coverage\": \"No monitoring visible — process memory, DB write errors, and malformed message rates should all be tracked.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert to previous version if fix introduces regressions, though the existing code is itself the problem.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Memory leak diagnosis — missing close handler with frequent reconnects is textbook Node.js listener leak\",\n      \"JSON.parse crash — deterministic, no try/catch present\",\n      \"Input validation gap — no guards exist in the code\"\n    ],\n    \"low_confidence_areas\": [\n      \"Cannot see the caller code — the outer Map/registry management is assumed but not visible\"\n    ],\n    \"assumptions\": [\n      \"A new CourierTracker is created per reconnect as stated, and old instances are not explicitly destroyed elsewhere\",\n      \"db.couriers.updateLocation returns a Promise (standard for Node.js DB libraries)\"\n    ]\n  }\n}\n```",
+  "agent_output_excerpt": "```json\n{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Memory leak from never-cleaned-up CourierTracker instances and WebSocket listeners, plus unguarded JSON.parse will crash the process.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Memory leak: CourierTracker instances never garbage collected\",\n      \"risk\": \"Each courier reconnect creates a new CourierTracker with event listeners bound to the WebSocket. There is no 'close' handler to tear down the instance or remove liste",
+  "duration_ms": 41409,
+  "tokens_used": 1872,
+  "input_tokens": 3,
+  "output_tokens": 1869,
+  "cost_usd": 0.056386500000000006,
+  "timestamp": "2026-03-26T18:12:00Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "32480e43-7662-4376-bbde-43fdac5766cd",
+      "tools": [
+        "Task",
+        "AskUserQuestion",
+        "Bash",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "Edit",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitPlanMode",
+        "ExitWorktree",
+        "Glob",
+        "Grep",
+        "NotebookEdit",
+        "Read",
+        "RemoteTrigger",
+        "SendMessage",
+        "Skill",
+        "TaskOutput",
+        "TaskStop",
+        "TeamCreate",
+        "TeamDelete",
+        "TodoWrite",
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "Write"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "reload-plugins",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.84",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "frontend-design:frontend-design"
+      ],
+      "plugins": [
+        {
+          "name": "frontend-design",
+          "path": "/Users/lb/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design",
+          "source": "frontend-design@claude-plugins-official"
+        },
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/marketplaces/claude-plugins-official/plugins/code-review",
+          "source": "code-review@claude-plugins-official"
+        }
+      ],
+      "uuid": "2b1e5fcc-47ed-4a4e-9798-876205fda7bb",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01SxcwojWiDFq8rLyA4Bwq2D",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me analyze this code for production risks.\n\nKey hypotheses:\n1. Memory leak from CourierTracker instances not being cleaned up on disconnect\n2. JSON.parse crash on malformed WebSocket data\n3. No cleanup of WebSocket listeners / no close handler\n\nLet me produce the review.",
+            "signature": "Es8DClkIDBgCKkC3u6uDzQzc3+AV3/k7yWiKi27DHIf89CETAI4WFfRltzX3t3ZLCB5Yk6AhazhQvSrgfeDEGQIe+d5sUdbk2JkFMg9jbGF1ZGUtb3B1cy00LTY4ABIM7f59ANEnaS/sU9BQGgwA8Ps5Br4W/e70vzgiMBTeYVOW1qxIIDm2gFQKjdL0aMERcXPZtG81kZNEfED4mAbbOqVauY9MktDuDTZyCSqjAqT1YAHpRCj2khKWnKyGBWy3sJOgR8/Gv3b6VIbhbwVB4rL22zzpcEVyl30/K3uwa4LGgumuutK9D/rZTnYpPaIkMqbLCfMKR4vh6zja4gBV4dc0CmMZvWl9Gy3XZexaGpj7rssMGUnmvqX3QQ+UKl+M9+4Hq4DcNiP87avL7DGgRITc3oD24k3Epcw9DG4y/2ub/SfZJna9/7JWHQzmt2+4MlrslCA2DwvM+5o7z5oa0cuzLXXPnAB5fa1MB/QkncyxjRxqHi4tqgjZJ1ISVxMg7B/g1i1OBkYDs5hydkr8EYoSAoLiABXGHylHwQ85MOy6vaNcnq5MeUpQb0CmaoI4oi63xAfUxlfaIDEPB0WEziRKKdSiXvu7zVKqVLO4HNLCURgB"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 19293,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 26,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "32480e43-7662-4376-bbde-43fdac5766cd",
+      "uuid": "8cc0c5c5-3699-4911-8c41-b79bf2c6e822"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01SxcwojWiDFq8rLyA4Bwq2D",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "```json\n{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Memory leak from never-cleaned-up CourierTracker instances and WebSocket listeners, plus unguarded JSON.parse will crash the process.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Memory leak: CourierTracker instances never garbage collected\",\n      \"risk\": \"Each courier reconnect creates a new CourierTracker with event listeners bound to the WebSocket. There is no 'close' handler to tear down the instance or remove listeners. With 5-minute average sessions, every courier generates ~288 orphaned instances per day. After 3 months, this explains the steadily increasing memory usage — classic listener leak.\",\n      \"severity\": \"Critical\",\n      \"location\": \"CourierTracker.setupListeners() — missing ws.on('close', ...) handler\",\n      \"reproduction\": \"1. Connect courier via WebSocket. 2. Disconnect. 3. Reconnect (new CourierTracker created). 4. Repeat. 5. Observe process.memoryUsage().heapUsed growing monotonically. The old CourierTracker is retained because the WebSocket object still holds references to its bound listener closures, and nothing calls ws.removeAllListeners() or nulls the references.\",\n      \"fix\": \"Add a 'close' handler that removes all listeners and nulls references: this.ws.on('close', () => { this.ws.removeAllListeners(); this.ws = null; }). Additionally, the caller that creates CourierTracker instances likely holds them in a Map — ensure the close handler also removes the entry from that Map so the instance itself becomes GC-eligible.\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Service stability — the process will eventually OOM and crash, dropping all active courier connections.\"\n    },\n    {\n      \"title\": \"Unguarded JSON.parse crashes the process on malformed data\",\n      \"risk\": \"A single malformed WebSocket message (network corruption, client bug, or malicious payload) will throw a SyntaxError from JSON.parse. Since this is inside an event listener with no try/catch, the uncaught exception will crash the entire Node.js process, killing all courier connections — not just the one that sent bad data.\",\n      \"severity\": \"Critical\",\n      \"location\": \"CourierTracker.setupListeners() — ws.on('message', ...) callback\",\n      \"reproduction\": \"Send a non-JSON string (e.g. 'ping' or a binary frame) over the WebSocket. JSON.parse throws, process exits.\",\n      \"fix\": \"Wrap the message handler in try/catch: try { const location = JSON.parse(data); this.updateLocation(location); } catch (err) { console.error(`Invalid message from courier ${this.courierId}:`, err); }. Also validate that the parsed object has numeric lat/lng before passing to updateLocation.\",\n      \"time_to_fix\": \"15 minutes\",\n      \"acceptance_criteria_affected\": \"Service availability — one bad message should not take down the entire service.\"\n    },\n    {\n      \"title\": \"No input validation on location coordinates enables database corruption\",\n      \"risk\": \"The parsed location object is passed directly to the database with no validation. A payload like {\\\"lat\\\": \\\"DROP TABLE\\\", \\\"lng\\\": null} or {\\\"lat\\\": 9999, \\\"lng\\\": -9999} will write garbage into the couriers table. There is no check that lat is in [-90, 90], lng is in [-180, 180], or that both are finite numbers.\",\n      \"severity\": \"High\",\n      \"location\": \"CourierTracker.updateLocation()\",\n      \"reproduction\": \"Send '{\\\"lat\\\": NaN, \\\"lng\\\": Infinity}' or '{\\\"foo\\\": 1}' over the WebSocket. location.lat will be undefined/NaN, written directly to the database.\",\n      \"fix\": \"Add validation before the DB call: if (typeof location.lat !== 'number' || typeof location.lng !== 'number' || !isFinite(location.lat) || !isFinite(location.lng) || Math.abs(location.lat) > 90 || Math.abs(location.lng) > 180) return;\",\n      \"time_to_fix\": \"15 minutes\",\n      \"acceptance_criteria_affected\": \"Data integrity — downstream services consuming courier locations will receive invalid coordinates.\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"Database write on every message with no throttling\",\n      \"description\": \"If couriers send location updates at high frequency (e.g. every second), every single message triggers a database write with no batching, debouncing, or rate limiting. Under load this will saturate the database connection pool. Consider throttling to one write per N seconds per courier.\",\n      \"location\": \"CourierTracker.updateLocation()\"\n    },\n    {\n      \"title\": \"Fire-and-forget database call with no error handling\",\n      \"description\": \"db.couriers.updateLocation() is called without await or .catch(). If the DB write fails (connection timeout, constraint violation), the error is silently swallowed or becomes an unhandled promise rejection, which in Node 15+ terminates the process.\",\n      \"location\": \"CourierTracker.updateLocation()\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Add a heartbeat/ping-pong mechanism to detect stale connections that never fire 'close'.\",\n    \"Consider using a WeakRef or explicit registry pattern (Map<courierId, CourierTracker>) with cleanup on disconnect to make instance lifecycle explicit.\",\n    \"Add structured logging (not console.error) with courier ID context for observability.\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"The memory leak is already in production and worsening. A fix deployment is safe, but the current state will eventually OOM.\",\n    \"rollback_capability\": \"Rolling back to current code is safe but perpetuates the leak.\",\n    \"backward_compatibility\": \"Fixes are purely additive (close handler, try/catch, validation) — no breaking changes.\",\n    \"monitoring_coverage\": \"No monitoring visible — process memory, DB write errors, and malformed message rates should all be tracked.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert to previous version if fix introduces regressions, though the existing code is itself the problem.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Memory leak diagnosis — missing close handler with frequent reconnects is textbook Node.js listener leak\",\n      \"JSON.parse crash — deterministic, no try/catch present\",\n      \"Input validation gap — no guards exist in the code\"\n    ],\n    \"low_confidence_areas\": [\n      \"Cannot see the caller code — the outer Map/registry management is assumed but not visible\"\n    ],\n    \"assumptions\": [\n      \"A new CourierTracker is created per reconnect as stated, and old instances are not explicitly destroyed elsewhere\",\n      \"db.couriers.updateLocation returns a Promise (standard for Node.js DB libraries)\"\n    ]\n  }\n}\n```"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 19293,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 26,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "32480e43-7662-4376-bbde-43fdac5766cd",
+      "uuid": "58d3f73c-a06c-4922-ae57-a07ef2dc57eb"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774566000,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "12d23e6b-8d7d-4407-a0e8-cecdafb21090",
+      "session_id": "32480e43-7662-4376-bbde-43fdac5766cd"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 40599,
+      "duration_api_ms": 40590,
+      "num_turns": 1,
+      "result": "```json\n{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Memory leak from never-cleaned-up CourierTracker instances and WebSocket listeners, plus unguarded JSON.parse will crash the process.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Memory leak: CourierTracker instances never garbage collected\",\n      \"risk\": \"Each courier reconnect creates a new CourierTracker with event listeners bound to the WebSocket. There is no 'close' handler to tear down the instance or remove listeners. With 5-minute average sessions, every courier generates ~288 orphaned instances per day. After 3 months, this explains the steadily increasing memory usage — classic listener leak.\",\n      \"severity\": \"Critical\",\n      \"location\": \"CourierTracker.setupListeners() — missing ws.on('close', ...) handler\",\n      \"reproduction\": \"1. Connect courier via WebSocket. 2. Disconnect. 3. Reconnect (new CourierTracker created). 4. Repeat. 5. Observe process.memoryUsage().heapUsed growing monotonically. The old CourierTracker is retained because the WebSocket object still holds references to its bound listener closures, and nothing calls ws.removeAllListeners() or nulls the references.\",\n      \"fix\": \"Add a 'close' handler that removes all listeners and nulls references: this.ws.on('close', () => { this.ws.removeAllListeners(); this.ws = null; }). Additionally, the caller that creates CourierTracker instances likely holds them in a Map — ensure the close handler also removes the entry from that Map so the instance itself becomes GC-eligible.\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Service stability — the process will eventually OOM and crash, dropping all active courier connections.\"\n    },\n    {\n      \"title\": \"Unguarded JSON.parse crashes the process on malformed data\",\n      \"risk\": \"A single malformed WebSocket message (network corruption, client bug, or malicious payload) will throw a SyntaxError from JSON.parse. Since this is inside an event listener with no try/catch, the uncaught exception will crash the entire Node.js process, killing all courier connections — not just the one that sent bad data.\",\n      \"severity\": \"Critical\",\n      \"location\": \"CourierTracker.setupListeners() — ws.on('message', ...) callback\",\n      \"reproduction\": \"Send a non-JSON string (e.g. 'ping' or a binary frame) over the WebSocket. JSON.parse throws, process exits.\",\n      \"fix\": \"Wrap the message handler in try/catch: try { const location = JSON.parse(data); this.updateLocation(location); } catch (err) { console.error(`Invalid message from courier ${this.courierId}:`, err); }. Also validate that the parsed object has numeric lat/lng before passing to updateLocation.\",\n      \"time_to_fix\": \"15 minutes\",\n      \"acceptance_criteria_affected\": \"Service availability — one bad message should not take down the entire service.\"\n    },\n    {\n      \"title\": \"No input validation on location coordinates enables database corruption\",\n      \"risk\": \"The parsed location object is passed directly to the database with no validation. A payload like {\\\"lat\\\": \\\"DROP TABLE\\\", \\\"lng\\\": null} or {\\\"lat\\\": 9999, \\\"lng\\\": -9999} will write garbage into the couriers table. There is no check that lat is in [-90, 90], lng is in [-180, 180], or that both are finite numbers.\",\n      \"severity\": \"High\",\n      \"location\": \"CourierTracker.updateLocation()\",\n      \"reproduction\": \"Send '{\\\"lat\\\": NaN, \\\"lng\\\": Infinity}' or '{\\\"foo\\\": 1}' over the WebSocket. location.lat will be undefined/NaN, written directly to the database.\",\n      \"fix\": \"Add validation before the DB call: if (typeof location.lat !== 'number' || typeof location.lng !== 'number' || !isFinite(location.lat) || !isFinite(location.lng) || Math.abs(location.lat) > 90 || Math.abs(location.lng) > 180) return;\",\n      \"time_to_fix\": \"15 minutes\",\n      \"acceptance_criteria_affected\": \"Data integrity — downstream services consuming courier locations will receive invalid coordinates.\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"Database write on every message with no throttling\",\n      \"description\": \"If couriers send location updates at high frequency (e.g. every second), every single message triggers a database write with no batching, debouncing, or rate limiting. Under load this will saturate the database connection pool. Consider throttling to one write per N seconds per courier.\",\n      \"location\": \"CourierTracker.updateLocation()\"\n    },\n    {\n      \"title\": \"Fire-and-forget database call with no error handling\",\n      \"description\": \"db.couriers.updateLocation() is called without await or .catch(). If the DB write fails (connection timeout, constraint violation), the error is silently swallowed or becomes an unhandled promise rejection, which in Node 15+ terminates the process.\",\n      \"location\": \"CourierTracker.updateLocation()\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Add a heartbeat/ping-pong mechanism to detect stale connections that never fire 'close'.\",\n    \"Consider using a WeakRef or explicit registry pattern (Map<courierId, CourierTracker>) with cleanup on disconnect to make instance lifecycle explicit.\",\n    \"Add structured logging (not console.error) with courier ID context for observability.\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"The memory leak is already in production and worsening. A fix deployment is safe, but the current state will eventually OOM.\",\n    \"rollback_capability\": \"Rolling back to current code is safe but perpetuates the leak.\",\n    \"backward_compatibility\": \"Fixes are purely additive (close handler, try/catch, validation) — no breaking changes.\",\n    \"monitoring_coverage\": \"No monitoring visible — process memory, DB write errors, and malformed message rates should all be tracked.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert to previous version if fix introduces regressions, though the existing code is itself the problem.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Memory leak diagnosis — missing close handler with frequent reconnects is textbook Node.js listener leak\",\n      \"JSON.parse crash — deterministic, no try/catch present\",\n      \"Input validation gap — no guards exist in the code\"\n    ],\n    \"low_confidence_areas\": [\n      \"Cannot see the caller code — the outer Map/registry management is assumed but not visible\"\n    ],\n    \"assumptions\": [\n      \"A new CourierTracker is created per reconnect as stated, and old instances are not explicitly destroyed elsewhere\",\n      \"db.couriers.updateLocation returns a Promise (standard for Node.js DB libraries)\"\n    ]\n  }\n}\n```",
+      "stop_reason": "end_turn",
+      "session_id": "32480e43-7662-4376-bbde-43fdac5766cd",
+      "total_cost_usd": 0.056386500000000006,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 19293,
+        "output_tokens": 1869,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 1869,
+          "cacheReadInputTokens": 19293,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.056386500000000006,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "27ebf2b0-e5b5-425f-9527-030c7765300c"
+    }
+  ]
+}

@@ -1,0 +1,258 @@
+{
+  "agent": "kobe",
+  "scenario_id": "scenario-18-expert-subtle-bug",
+  "agent_output": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Synchronous XML parsing blocks the event loop under load, early 200 OK loses events on failure, and no error handling means silent data loss.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Synchronous XML parsing blocks the Node.js event loop\",\n      \"risk\": \"At 200 webhooks/minute with payloads up to 2MB, `parseXmlSync` blocks the single-threaded event loop for potentially hundreds of milliseconds per call. This starves all other requests — including health checks, other webhooks, and the HTTP server's ability to accept connections — causing cascading timeouts and dropped webhooks across the entire service.\",\n      \"severity\": \"Critical\",\n      \"location\": \"app.post('/webhooks/carrier') — `const parsed = parseXmlSync(xmlData)`\",\n      \"reproduction\": \"Send 10 concurrent webhooks each with a 1-2MB XML payload. Measure event loop lag — it will spike to seconds, causing subsequent webhook accepts to timeout and the carrier to begin retrying, amplifying the load.\",\n      \"fix\": \"Replace `parseXmlSync` with an async XML parser (e.g., `xml2js.parseStringPromise`) or offload parsing to a worker thread via `worker_threads`. For sustained load, push the raw event onto a queue (Redis, SQS) and process asynchronously in a worker.\",\n      \"time_to_fix\": \"30 minutes for async parser swap; 2-4 hours for worker thread or queue-based approach\",\n      \"acceptance_criteria_affected\": \"Webhook processing must not degrade service availability under peak load\"\n    },\n    {\n      \"title\": \"Early 200 OK with no error handling guarantees silent event loss\",\n      \"risk\": \"The endpoint sends `200 OK` before any processing begins. If `findByTrackingNumber`, `parseXmlSync`, or `updateStatus` throws, the event is permanently lost — the carrier believes it was delivered and will never retry. There is no try/catch, no dead-letter queue, and no logging. Under the 200 webhooks/minute load, failures will be invisible and unrecoverable.\",\n      \"severity\": \"Critical\",\n      \"location\": \"app.post('/webhooks/carrier') — `res.status(200).send('OK')` on line 1, entire async block unwrapped\",\n      \"reproduction\": \"Send a webhook with a trackingNumber that does not exist in the database or with malformed XML. The 200 is returned, the promise rejects as an unhandled rejection, and the event vanishes. No log, no alert, no retry.\",\n      \"fix\": \"Either (a) move `res.status(200)` after successful processing so the carrier retries on failure, or (b) keep the early ack but persist the raw event to a durable store (database/queue) *before* sending 200, then process from that store with retry logic. Wrap the entire processing block in try/catch with structured error logging and a dead-letter mechanism.\",\n      \"time_to_fix\": \"1-2 hours\",\n      \"acceptance_criteria_affected\": \"No webhook event should be silently dropped\"\n    },\n    {\n      \"title\": \"Sequential DB updates without a transaction cause partial updates and are O(n) round-trips\",\n      \"risk\": \"Each `updateStatus` is an independent await — a single DB query per update, executed sequentially. If the process crashes or a query fails mid-loop, some deliveries are updated and others are not, leaving the system in an inconsistent state. At 200 webhooks/minute with multiple updates per webhook, this creates significant DB connection pressure and latency.\",\n      \"severity\": \"High\",\n      \"location\": \"app.post('/webhooks/carrier') — `for (const update of parsed.updates) { await db.deliveries.updateStatus(...) }`\",\n      \"reproduction\": \"Send a webhook with 50 updates. Kill the process after 25 have been written. Half the deliveries show the new status, half show the old — with no way to detect or recover from the partial state.\",\n      \"fix\": \"Wrap all updates in a database transaction so they commit or rollback atomically. Batch the updates into a single query (`UPDATE ... WHERE id IN (...)`) or use `Promise.all` with a transaction to reduce round-trips. Add idempotency keys so reprocessed webhooks don't double-apply updates.\",\n      \"time_to_fix\": \"1-2 hours\",\n      \"acceptance_criteria_affected\": \"Delivery status updates must be atomically consistent\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"DeliveryMap overwrites duplicate trackingNumbers\",\n      \"description\": \"The lookup map is keyed by `delivery.trackingNumber`, but the query `findByTrackingNumber` could return multiple deliveries with the same tracking number (e.g., split shipments, re-ships). Each subsequent delivery overwrites the previous one in the map, so only the last delivery per tracking number is ever updated. All others are silently skipped.\",\n      \"location\": \"deliveryMap[delivery.trackingNumber] = delivery\"\n    },\n    {\n      \"title\": \"No request body validation or authentication\",\n      \"description\": \"The endpoint blindly trusts `req.body` with no schema validation, signature verification, or authentication. Any party that knows the URL can send fake webhook events to manipulate delivery statuses. Carrier webhooks typically include an HMAC signature header that must be verified.\",\n      \"location\": \"const event = req.body\"\n    },\n    {\n      \"title\": \"Unhandled promise rejection from fire-and-forget async work\",\n      \"description\": \"After `res.send('OK')`, the remaining async code runs as a detached promise. Any rejection becomes an unhandled promise rejection, which in Node 15+ terminates the process by default. Under load, a single bad payload could crash the entire service.\",\n      \"location\": \"Entire async block after res.status(200).send('OK')\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Add structured logging (event ID, tracking number, status, duration) to every webhook processing attempt for observability.\",\n    \"Implement idempotency using the carrier's event ID to safely handle duplicate webhook deliveries.\",\n    \"Add a circuit breaker or rate limiter to protect the database from webhook flood scenarios.\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"Under current peak load (200 webhooks/min), the synchronous XML parsing will degrade the entire Node.js process. Deploying this as-is risks an outage, not just degraded webhook processing.\",\n    \"rollback_capability\": \"Rollback is safe as this is a new endpoint — removing it means webhooks fail at the carrier side and get retried later.\",\n    \"backward_compatibility\": \"No backward compatibility concerns — new endpoint.\",\n    \"monitoring_coverage\": \"Zero monitoring: no logging, no error tracking, no metrics on processing time, failure rate, or queue depth. Failures are completely invisible.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Remove the route or revert the deployment. Carrier webhooks will fail and queue on the carrier side for retry once the endpoint is restored.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Event loop blocking from synchronous XML parsing is a certain production issue at stated load\",\n      \"Silent event loss from early ack + no error handling is a definite data loss vector\",\n      \"Partial update inconsistency from non-transactional sequential writes\"\n    ],\n    \"low_confidence_areas\": [\n      \"Exact payload sizes and parsing durations depend on real carrier data\"\n    ],\n    \"assumptions\": [\n      \"parseXmlSync is truly synchronous as the name implies\",\n      \"No external queue or retry mechanism exists outside this code\",\n      \"The carrier retries on non-2xx responses\"\n    ]\n  }\n}",
+  "agent_output_excerpt": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Synchronous XML parsing blocks the event loop under load, early 200 OK loses events on failure, and no error handling means silent data loss.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Synchronous XML parsing blocks the Node.js event loop\",\n      \"risk\": \"At 200 webhooks/minute with payloads up to 2MB, `parseXmlSync` blocks the single-threaded event loop for potentially hundreds of milliseconds per call. This starves all other",
+  "duration_ms": 50170,
+  "tokens_used": 2115,
+  "input_tokens": 3,
+  "output_tokens": 2112,
+  "cost_usd": 0.06246650000000001,
+  "timestamp": "2026-03-26T18:14:36Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "7500d1c7-4d33-4526-b915-80381dadb1bc",
+      "tools": [
+        "Task",
+        "AskUserQuestion",
+        "Bash",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "Edit",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitPlanMode",
+        "ExitWorktree",
+        "Glob",
+        "Grep",
+        "NotebookEdit",
+        "Read",
+        "RemoteTrigger",
+        "SendMessage",
+        "Skill",
+        "TaskOutput",
+        "TaskStop",
+        "TeamCreate",
+        "TeamDelete",
+        "TodoWrite",
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "Write"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "reload-plugins",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.84",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "frontend-design:frontend-design"
+      ],
+      "plugins": [
+        {
+          "name": "frontend-design",
+          "path": "/Users/lb/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design",
+          "source": "frontend-design@claude-plugins-official"
+        },
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/marketplaces/claude-plugins-official/plugins/code-review",
+          "source": "code-review@claude-plugins-official"
+        }
+      ],
+      "uuid": "5e6099fe-7f76-4ee3-af28-c0375bae2d3f",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_016SXgu2k6sqqEPfaTuYSdG1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me analyze this webhook endpoint for critical issues.\n\nHypotheses:\n1. Response sent before processing - if server crashes, event is lost with no retry\n2. Synchronous XML parsing blocks the event loop - 2MB XML parsed synchronously will block Node.js\n3. No idempotency - duplicate webhooks cause duplicate processing\n4. No error handling - any failure silently drops the event\n5. The deliveryMap is keyed by trackingNumber but all deliveries found by the same trackingNumber will overwrite each other in the map\n\nLet me write findings directly.",
+            "signature": "Et8FClkIDBgCKkBqk1duMWr8SttgksHJ3g0vHz8ButUgngaXOeEkB6BHNgBKgD/LZHLz7MfB6a0B0Z4rICxfF/17fEiTt8ojbxG1Mg9jbGF1ZGUtb3B1cy00LTY4ABIMDhQybfSNZyUk2X3UGgwuP5QSA1psBSSdk50iMCrssXYWEdzhafY7Um+Mox13m1/WGc9TtiMwpFgxjmdEeu1JD9kymcR7d2RqicTGCCqzBKxCTw3rFjhf7oKeTsOnGLRI7f0LIiIHgO0LTX/d50Xe4sp34agNyqyuVcjTUDpj4H7yclL3EvOJXioNSO5QKeAuJMo2TDexZ8Dz8Vtn+OR78HdPr/vjLRPuTlbZ+Q4eXiSEUmovxEPQVQ2T8cFAlhsvHbY7L0tSzINpZSlDkObDbgiVGoPade7RLEEZ/hcT+VVDS/tXQlgGXr7rrLpAhWFpYjBtKCSBbcvTvCEFxhmrbTt9zocZE/p4wae4DSj4KQ8Dhspg6NSfJn95zTTr5N18xUgcgBk2QSX8sV0TXV0XpbJkGqTZf99xthb8eOEIeJOUAEsQT0QXQigniJ6NqihRU2w+RAmTP24ojURUClszrC5pRTnRusdAm6MBhVeqas+plXJap3/gVLrYyd8W5lNuFtS0Q4cAny280OxmMgKPM6HgZUxL1mPxFlQILR9Qw2nyl8xOqkkdwzA4ROa5n0INtj1oTLzJEHB3gMdmPclGVGTqhkyIRulb8VRfCM2smA+Yb11Xu9oW2U4B69ATTsjLP2qlH0H3PWjUdtjuEErESkqQR7bMzvo97nf80wI3y0pfOaKkQg4CmTe7NJWhpMH9JejdXDUkpx4cSRJwqrH1UG6aT7sA6wpwoofRtRF7tKOqcDnxSW6Dw6QnxPMRbCYm8xU49NK2zIU2SOKg3gRtoEUgDP1x0ePmChnKY0xVH3j0hD1vog1pmawH9YoK+W0WKlJgJ2sqoBvRsZtUPL2c8pobGAE="
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 19303,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 22,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "7500d1c7-4d33-4526-b915-80381dadb1bc",
+      "uuid": "c30ea290-6206-4734-a7e2-be298a7615ef"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_016SXgu2k6sqqEPfaTuYSdG1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Synchronous XML parsing blocks the event loop under load, early 200 OK loses events on failure, and no error handling means silent data loss.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Synchronous XML parsing blocks the Node.js event loop\",\n      \"risk\": \"At 200 webhooks/minute with payloads up to 2MB, `parseXmlSync` blocks the single-threaded event loop for potentially hundreds of milliseconds per call. This starves all other requests — including health checks, other webhooks, and the HTTP server's ability to accept connections — causing cascading timeouts and dropped webhooks across the entire service.\",\n      \"severity\": \"Critical\",\n      \"location\": \"app.post('/webhooks/carrier') — `const parsed = parseXmlSync(xmlData)`\",\n      \"reproduction\": \"Send 10 concurrent webhooks each with a 1-2MB XML payload. Measure event loop lag — it will spike to seconds, causing subsequent webhook accepts to timeout and the carrier to begin retrying, amplifying the load.\",\n      \"fix\": \"Replace `parseXmlSync` with an async XML parser (e.g., `xml2js.parseStringPromise`) or offload parsing to a worker thread via `worker_threads`. For sustained load, push the raw event onto a queue (Redis, SQS) and process asynchronously in a worker.\",\n      \"time_to_fix\": \"30 minutes for async parser swap; 2-4 hours for worker thread or queue-based approach\",\n      \"acceptance_criteria_affected\": \"Webhook processing must not degrade service availability under peak load\"\n    },\n    {\n      \"title\": \"Early 200 OK with no error handling guarantees silent event loss\",\n      \"risk\": \"The endpoint sends `200 OK` before any processing begins. If `findByTrackingNumber`, `parseXmlSync`, or `updateStatus` throws, the event is permanently lost — the carrier believes it was delivered and will never retry. There is no try/catch, no dead-letter queue, and no logging. Under the 200 webhooks/minute load, failures will be invisible and unrecoverable.\",\n      \"severity\": \"Critical\",\n      \"location\": \"app.post('/webhooks/carrier') — `res.status(200).send('OK')` on line 1, entire async block unwrapped\",\n      \"reproduction\": \"Send a webhook with a trackingNumber that does not exist in the database or with malformed XML. The 200 is returned, the promise rejects as an unhandled rejection, and the event vanishes. No log, no alert, no retry.\",\n      \"fix\": \"Either (a) move `res.status(200)` after successful processing so the carrier retries on failure, or (b) keep the early ack but persist the raw event to a durable store (database/queue) *before* sending 200, then process from that store with retry logic. Wrap the entire processing block in try/catch with structured error logging and a dead-letter mechanism.\",\n      \"time_to_fix\": \"1-2 hours\",\n      \"acceptance_criteria_affected\": \"No webhook event should be silently dropped\"\n    },\n    {\n      \"title\": \"Sequential DB updates without a transaction cause partial updates and are O(n) round-trips\",\n      \"risk\": \"Each `updateStatus` is an independent await — a single DB query per update, executed sequentially. If the process crashes or a query fails mid-loop, some deliveries are updated and others are not, leaving the system in an inconsistent state. At 200 webhooks/minute with multiple updates per webhook, this creates significant DB connection pressure and latency.\",\n      \"severity\": \"High\",\n      \"location\": \"app.post('/webhooks/carrier') — `for (const update of parsed.updates) { await db.deliveries.updateStatus(...) }`\",\n      \"reproduction\": \"Send a webhook with 50 updates. Kill the process after 25 have been written. Half the deliveries show the new status, half show the old — with no way to detect or recover from the partial state.\",\n      \"fix\": \"Wrap all updates in a database transaction so they commit or rollback atomically. Batch the updates into a single query (`UPDATE ... WHERE id IN (...)`) or use `Promise.all` with a transaction to reduce round-trips. Add idempotency keys so reprocessed webhooks don't double-apply updates.\",\n      \"time_to_fix\": \"1-2 hours\",\n      \"acceptance_criteria_affected\": \"Delivery status updates must be atomically consistent\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"DeliveryMap overwrites duplicate trackingNumbers\",\n      \"description\": \"The lookup map is keyed by `delivery.trackingNumber`, but the query `findByTrackingNumber` could return multiple deliveries with the same tracking number (e.g., split shipments, re-ships). Each subsequent delivery overwrites the previous one in the map, so only the last delivery per tracking number is ever updated. All others are silently skipped.\",\n      \"location\": \"deliveryMap[delivery.trackingNumber] = delivery\"\n    },\n    {\n      \"title\": \"No request body validation or authentication\",\n      \"description\": \"The endpoint blindly trusts `req.body` with no schema validation, signature verification, or authentication. Any party that knows the URL can send fake webhook events to manipulate delivery statuses. Carrier webhooks typically include an HMAC signature header that must be verified.\",\n      \"location\": \"const event = req.body\"\n    },\n    {\n      \"title\": \"Unhandled promise rejection from fire-and-forget async work\",\n      \"description\": \"After `res.send('OK')`, the remaining async code runs as a detached promise. Any rejection becomes an unhandled promise rejection, which in Node 15+ terminates the process by default. Under load, a single bad payload could crash the entire service.\",\n      \"location\": \"Entire async block after res.status(200).send('OK')\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Add structured logging (event ID, tracking number, status, duration) to every webhook processing attempt for observability.\",\n    \"Implement idempotency using the carrier's event ID to safely handle duplicate webhook deliveries.\",\n    \"Add a circuit breaker or rate limiter to protect the database from webhook flood scenarios.\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"Under current peak load (200 webhooks/min), the synchronous XML parsing will degrade the entire Node.js process. Deploying this as-is risks an outage, not just degraded webhook processing.\",\n    \"rollback_capability\": \"Rollback is safe as this is a new endpoint — removing it means webhooks fail at the carrier side and get retried later.\",\n    \"backward_compatibility\": \"No backward compatibility concerns — new endpoint.\",\n    \"monitoring_coverage\": \"Zero monitoring: no logging, no error tracking, no metrics on processing time, failure rate, or queue depth. Failures are completely invisible.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Remove the route or revert the deployment. Carrier webhooks will fail and queue on the carrier side for retry once the endpoint is restored.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Event loop blocking from synchronous XML parsing is a certain production issue at stated load\",\n      \"Silent event loss from early ack + no error handling is a definite data loss vector\",\n      \"Partial update inconsistency from non-transactional sequential writes\"\n    ],\n    \"low_confidence_areas\": [\n      \"Exact payload sizes and parsing durations depend on real carrier data\"\n    ],\n    \"assumptions\": [\n      \"parseXmlSync is truly synchronous as the name implies\",\n      \"No external queue or retry mechanism exists outside this code\",\n      \"The carrier retries on non-2xx responses\"\n    ]\n  }\n}"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 19303,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 22,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "7500d1c7-4d33-4526-b915-80381dadb1bc",
+      "uuid": "10bb9a46-6267-4296-96d6-f07116e9a063"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774566000,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "d4bc498c-81a9-4679-917a-64187aec977a",
+      "session_id": "7500d1c7-4d33-4526-b915-80381dadb1bc"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 49354,
+      "duration_api_ms": 49349,
+      "num_turns": 1,
+      "result": "{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Synchronous XML parsing blocks the event loop under load, early 200 OK loses events on failure, and no error handling means silent data loss.\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Synchronous XML parsing blocks the Node.js event loop\",\n      \"risk\": \"At 200 webhooks/minute with payloads up to 2MB, `parseXmlSync` blocks the single-threaded event loop for potentially hundreds of milliseconds per call. This starves all other requests — including health checks, other webhooks, and the HTTP server's ability to accept connections — causing cascading timeouts and dropped webhooks across the entire service.\",\n      \"severity\": \"Critical\",\n      \"location\": \"app.post('/webhooks/carrier') — `const parsed = parseXmlSync(xmlData)`\",\n      \"reproduction\": \"Send 10 concurrent webhooks each with a 1-2MB XML payload. Measure event loop lag — it will spike to seconds, causing subsequent webhook accepts to timeout and the carrier to begin retrying, amplifying the load.\",\n      \"fix\": \"Replace `parseXmlSync` with an async XML parser (e.g., `xml2js.parseStringPromise`) or offload parsing to a worker thread via `worker_threads`. For sustained load, push the raw event onto a queue (Redis, SQS) and process asynchronously in a worker.\",\n      \"time_to_fix\": \"30 minutes for async parser swap; 2-4 hours for worker thread or queue-based approach\",\n      \"acceptance_criteria_affected\": \"Webhook processing must not degrade service availability under peak load\"\n    },\n    {\n      \"title\": \"Early 200 OK with no error handling guarantees silent event loss\",\n      \"risk\": \"The endpoint sends `200 OK` before any processing begins. If `findByTrackingNumber`, `parseXmlSync`, or `updateStatus` throws, the event is permanently lost — the carrier believes it was delivered and will never retry. There is no try/catch, no dead-letter queue, and no logging. Under the 200 webhooks/minute load, failures will be invisible and unrecoverable.\",\n      \"severity\": \"Critical\",\n      \"location\": \"app.post('/webhooks/carrier') — `res.status(200).send('OK')` on line 1, entire async block unwrapped\",\n      \"reproduction\": \"Send a webhook with a trackingNumber that does not exist in the database or with malformed XML. The 200 is returned, the promise rejects as an unhandled rejection, and the event vanishes. No log, no alert, no retry.\",\n      \"fix\": \"Either (a) move `res.status(200)` after successful processing so the carrier retries on failure, or (b) keep the early ack but persist the raw event to a durable store (database/queue) *before* sending 200, then process from that store with retry logic. Wrap the entire processing block in try/catch with structured error logging and a dead-letter mechanism.\",\n      \"time_to_fix\": \"1-2 hours\",\n      \"acceptance_criteria_affected\": \"No webhook event should be silently dropped\"\n    },\n    {\n      \"title\": \"Sequential DB updates without a transaction cause partial updates and are O(n) round-trips\",\n      \"risk\": \"Each `updateStatus` is an independent await — a single DB query per update, executed sequentially. If the process crashes or a query fails mid-loop, some deliveries are updated and others are not, leaving the system in an inconsistent state. At 200 webhooks/minute with multiple updates per webhook, this creates significant DB connection pressure and latency.\",\n      \"severity\": \"High\",\n      \"location\": \"app.post('/webhooks/carrier') — `for (const update of parsed.updates) { await db.deliveries.updateStatus(...) }`\",\n      \"reproduction\": \"Send a webhook with 50 updates. Kill the process after 25 have been written. Half the deliveries show the new status, half show the old — with no way to detect or recover from the partial state.\",\n      \"fix\": \"Wrap all updates in a database transaction so they commit or rollback atomically. Batch the updates into a single query (`UPDATE ... WHERE id IN (...)`) or use `Promise.all` with a transaction to reduce round-trips. Add idempotency keys so reprocessed webhooks don't double-apply updates.\",\n      \"time_to_fix\": \"1-2 hours\",\n      \"acceptance_criteria_affected\": \"Delivery status updates must be atomically consistent\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"DeliveryMap overwrites duplicate trackingNumbers\",\n      \"description\": \"The lookup map is keyed by `delivery.trackingNumber`, but the query `findByTrackingNumber` could return multiple deliveries with the same tracking number (e.g., split shipments, re-ships). Each subsequent delivery overwrites the previous one in the map, so only the last delivery per tracking number is ever updated. All others are silently skipped.\",\n      \"location\": \"deliveryMap[delivery.trackingNumber] = delivery\"\n    },\n    {\n      \"title\": \"No request body validation or authentication\",\n      \"description\": \"The endpoint blindly trusts `req.body` with no schema validation, signature verification, or authentication. Any party that knows the URL can send fake webhook events to manipulate delivery statuses. Carrier webhooks typically include an HMAC signature header that must be verified.\",\n      \"location\": \"const event = req.body\"\n    },\n    {\n      \"title\": \"Unhandled promise rejection from fire-and-forget async work\",\n      \"description\": \"After `res.send('OK')`, the remaining async code runs as a detached promise. Any rejection becomes an unhandled promise rejection, which in Node 15+ terminates the process by default. Under load, a single bad payload could crash the entire service.\",\n      \"location\": \"Entire async block after res.status(200).send('OK')\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Add structured logging (event ID, tracking number, status, duration) to every webhook processing attempt for observability.\",\n    \"Implement idempotency using the carrier's event ID to safely handle duplicate webhook deliveries.\",\n    \"Add a circuit breaker or rate limiter to protect the database from webhook flood scenarios.\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"Under current peak load (200 webhooks/min), the synchronous XML parsing will degrade the entire Node.js process. Deploying this as-is risks an outage, not just degraded webhook processing.\",\n    \"rollback_capability\": \"Rollback is safe as this is a new endpoint — removing it means webhooks fail at the carrier side and get retried later.\",\n    \"backward_compatibility\": \"No backward compatibility concerns — new endpoint.\",\n    \"monitoring_coverage\": \"Zero monitoring: no logging, no error tracking, no metrics on processing time, failure rate, or queue depth. Failures are completely invisible.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Remove the route or revert the deployment. Carrier webhooks will fail and queue on the carrier side for retry once the endpoint is restored.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Event loop blocking from synchronous XML parsing is a certain production issue at stated load\",\n      \"Silent event loss from early ack + no error handling is a definite data loss vector\",\n      \"Partial update inconsistency from non-transactional sequential writes\"\n    ],\n    \"low_confidence_areas\": [\n      \"Exact payload sizes and parsing durations depend on real carrier data\"\n    ],\n    \"assumptions\": [\n      \"parseXmlSync is truly synchronous as the name implies\",\n      \"No external queue or retry mechanism exists outside this code\",\n      \"The carrier retries on non-2xx responses\"\n    ]\n  }\n}",
+      "stop_reason": "end_turn",
+      "session_id": "7500d1c7-4d33-4526-b915-80381dadb1bc",
+      "total_cost_usd": 0.06246650000000001,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 19303,
+        "output_tokens": 2112,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2112,
+          "cacheReadInputTokens": 19303,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.06246650000000001,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "c2d3439e-3aa2-4219-9b98-90b91c2b15b2"
+    }
+  ]
+}
