@@ -768,6 +768,7 @@ TRACE_CSS = '''
   .trace-step.first-failure { background: var(--fail-bg); border-radius: 8px; margin: 0 -8px; padding: 10px 8px; }
   .trace-step.first-failure + .trace-step { border-top: none; }
   .first-failure-badge { font-size: 9px; font-weight: 700; color: var(--fail); background: var(--fail-bg); border: 1px solid var(--fail-border); border-radius: 4px; padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.5px; margin-left: 8px; }
+  .failure-details { font-family: var(--mono); font-size: 10px; color: var(--fail); background: rgba(248,81,73,0.06); border-left: 2px solid var(--fail-border); margin-top: 6px; padding: 4px 8px; border-radius: 0 4px 4px 0; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
 
   /* ── Result summary grid ────────────────────────────── */
   .result-summary { background: var(--surface-2); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 12px 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px 16px; }
@@ -831,14 +832,20 @@ def render_truncatable(text, cap, css_class):
         f'<button class="show-full-btn" onclick="toggleFull({uid})">show full output ({total_chars:,} chars)</button>'
     )
 
-def render_trace_event(event, step_num, is_last_before_result, is_failing):
+def render_trace_event(event, step_num, is_last_before_result, is_failing, failure_reasons=None):
     """Render a single NDJSON event as HTML step. Returns (html_string, steps_rendered) tuple."""
     etype = event.get('type', '')
     parts_html = []
     local_step = step_num  # tracks actual step number as we emit multiple blocks
 
     failure_cls = ' first-failure' if (is_last_before_result and is_failing) else ''
-    failure_badge = ' <span class="first-failure-badge">first failure</span>' if (is_last_before_result and is_failing) else ''
+    if is_last_before_result and is_failing:
+        failure_badge = ' <span class="first-failure-badge">first failure</span>'
+        if failure_reasons:
+            reasons_html = '\n'.join(h(r) for r in failure_reasons)
+            failure_badge += f'<div class="failure-details">{reasons_html}</div>'
+    else:
+        failure_badge = ''
 
     if etype == 'system':
         # System init
@@ -1081,7 +1088,8 @@ def render_trace_event(event, step_num, is_last_before_result, is_failing):
 
 
 def generate_trace_page(trace, agent, scenario_id, scenario_name, score, duration_ms, cost_usd,
-                        trial_index, report_filename, traces_dir, run_timestamp='', prompt=''):
+                        trial_index, report_filename, traces_dir, run_timestamp='', prompt='',
+                        failure_reasons=None):
     """Generate a standalone trace HTML page. Returns the filename (not full path), or None."""
     if not trace:
         return None
@@ -1125,7 +1133,7 @@ def generate_trace_page(trace, agent, scenario_id, scenario_name, score, duratio
 
     for i, ev in enumerate(trace):
         is_last_before_result = (i == last_assistant_idx)
-        step_html, steps_rendered = render_trace_event(ev, step_num, is_last_before_result, is_failing)
+        step_html, steps_rendered = render_trace_event(ev, step_num, is_last_before_result, is_failing, failure_reasons=failure_reasons)
         if step_html:
             step_htmls.append(step_html)
             step_num += steps_rendered
@@ -1362,6 +1370,33 @@ if current_run:
                     trial_duration = duration_ms_r
                     trial_cost = cost_usd_r
 
+                # Build failure reasons for the first-failure badge on the trace page.
+                # Pull grader_results from the trial dict (preferred) or the top-level result.
+                trial_dict = trials_data[t] if (trials_data and t < len(trials_data) and isinstance(trials_data[t], dict)) else None
+                trial_grader_results = (trial_dict.get('grader_results') if trial_dict else None) or result.get('grader_results', [])
+                failure_reasons = []
+                if trial_score in ('fail', 'partial'):
+                    # Grader hard-gate failures
+                    for g in trial_grader_results:
+                        if not g.get('passed', True):
+                            gtype = g.get('type', 'grader')
+                            gcfg = g.get('config', {})
+                            path = gcfg.get('path', '')
+                            constraint_parts = [f'{k}={v}' for k, v in gcfg.items() if k != 'path']
+                            constraint_str = ' '.join(constraint_parts)
+                            reason = f'GRADER: {gtype}'
+                            if path:
+                                reason += f' {path}'
+                            if constraint_str:
+                                reason += f' {constraint_str}'
+                            failure_reasons.append(reason)
+                    # Rubric failure if no grader failures captured or as supplement
+                    if not failure_reasons:
+                        justification = (trial_dict.get('justification') if trial_dict else None) or result.get('justification', '')
+                        if justification:
+                            trunc_j = justification[:100] + ('...' if len(justification) > 100 else '')
+                            failure_reasons.append(f'RUBRIC: {trunc_j}')
+
                 # Load the prompt from the scenario file so we can inject a synthetic User step.
                 # Scenario files live at: {repo_root}/evals/{agent}/scenario-{scenario_id}.md
                 # We derive repo_root from results_dir (which is {repo_root}/evals/results).
@@ -1404,6 +1439,7 @@ if current_run:
                     traces_dir=traces_dir,
                     run_timestamp=raw_timestamp,
                     prompt=scenario_prompt,
+                    failure_reasons=failure_reasons or None,
                 )
                 if trace_fname:
                     trace_page_map[(agent_name, scenario_id_r, t)] = trace_fname
