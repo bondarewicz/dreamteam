@@ -11,6 +11,10 @@ import {
   evalRunHandler,
   evalResultsFragment,
   traceHandler,
+  newEvalRunHandler,
+  startEvalRunHandler,
+  evalRunsSSEHandler,
+  evalRunLiveHandler,
 } from "./src/routes/evals.ts";
 import { serveStatic } from "./src/routes/static.ts";
 
@@ -32,13 +36,18 @@ if (isDbEmpty()) {
 const router = new Router();
 router.get("/", dashboardHandler);
 router.get("/evals", evalsIndexHandler);
+router.get("/evals/new", newEvalRunHandler);
+router.get("/evals/live", evalRunLiveHandler);
 router.get("/evals/:runId", evalRunHandler);
 router.get("/evals/:runId/results", evalResultsFragment);
 router.get("/evals/:runId/trace/:resultId", traceHandler);
+router.post("/api/eval-runs", startEvalRunHandler);
+router.get("/api/eval-runs/live", evalRunsSSEHandler);
 
 // Static file serving — manual pattern since router doesn't support wildcards directly
 const server = Bun.serve({
   port: PORT,
+  idleTimeout: 255, // max value — needed for SSE connections
   async fetch(req) {
     const url = new URL(req.url);
 
