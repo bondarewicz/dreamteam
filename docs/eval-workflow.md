@@ -119,6 +119,7 @@ The post-change 60% represents higher actual quality than the pre-change 65%, ev
 | JSON invalid | Grader | Agent wrapping JSON in markdown fences | Grader now handles fences automatically (2026-03-24 fix) |
 | Missing field | Grader | Schema mismatch between spec and grader | Align spec and grader config |
 | Plan mode stall | Grader | Agent enters plan mode and waits for approval in headless eval | Fixed: --append-system-prompt disables plan mode in eval runs |
+| Invalid grader path | Grader | Grader references a path that doesn't exist in agent's output schema | Regenerate graders on the scenario edit page |
 | Wrong field value | Grader | Agent not following stop conditions | Tighten stop condition instructions in spec |
 | Semantic content | Rubric | Agent prompt is vague | Rewrite prompt section covering that domain |
 | Flaky (mixed trials) | Multi-trial | Agent is inconsistent on edge cases | Add explicit examples or constraints to spec |
@@ -137,6 +138,53 @@ Trace pages are rendered by the web app. They show the step-by-step flow with:
 - "Show full output" toggle for truncated content
 
 See `docs/follow-up-2026-03-24.md` for full details on trace capture.
+
+---
+
+## Troubleshooting
+
+### Scenario fails but justification says it passed
+
+**Symptom**: A scenario shows `fail` but the rubric justification says "all pass criteria met". The grader results panel shows failed graders with paths like `refund.` or `parcel` that don't match any field in the agent's output.
+
+**Cause**: The auto-generated graders reference paths that don't exist in the agent's JSON output schema. This happens when graders were generated before the schema-aware rewrite (pre-2026-03-27) or when the grader generator has a bug.
+
+**Fix**:
+1. Open the scenario in the editor: `/scenarios/<agent>/<scenario-id>`
+2. Click **Generate Graders** to regenerate with the schema-aware generator
+3. Review the generated graders — every path should reference a real field in the agent's output (e.g., `business_rules`, `acceptance_criteria` for Bird)
+4. Click **Save**
+5. Click **Dry Run** to re-evaluate with the fixed graders
+
+### Cleaning up eval runs with broken graders
+
+If broken grader runs pollute the dashboard, delete them from the database:
+
+```sql
+-- Find runs to delete (check timestamps in the web app)
+SELECT run_id, timestamp FROM eval_runs ORDER BY timestamp DESC LIMIT 10;
+
+-- Delete a specific run and its results
+DELETE FROM eval_results WHERE run_id = 'eval/run-YYYY-MM-DD-HHMM';
+DELETE FROM agent_summaries WHERE run_id = 'eval/run-YYYY-MM-DD-HHMM';
+DELETE FROM eval_runs WHERE run_id = 'eval/run-YYYY-MM-DD-HHMM';
+```
+
+Run these via: `sqlite3 data/dreamteam.db "DELETE FROM ..."`
+
+### New scenario workflow
+
+When creating a new scenario via `/scenarios/new`:
+
+1. Select agent and describe what the scenario should test
+2. Click **Generate Scenario** — Bird generates the prompt and all fields
+3. Review and edit the generated content
+4. Click **Save** — creates the scenario file on disk
+5. Click **Generate Graders** — generates schema-aware graders for the agent
+6. Click **Save** again — persists the graders to the file
+7. Click **Dry Run** — runs a single-trial eval to validate
+
+The Dry Run button only appears after graders are saved. This enforces the correct sequence.
 
 ---
 
