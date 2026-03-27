@@ -27,11 +27,6 @@ export function dashboardHandler(req: Request, _params: Record<string, string>):
   return html(maybeLayout(req, "Dashboard", body, "/"));
 }
 
-/** GET /evals — redirect to / */
-export function evalsIndexHandler(_req: Request, _params: Record<string, string>): Response {
-  return new Response(null, { status: 302, headers: { Location: "/" } });
-}
-
 /** GET /evals/:runId — Eval run detail */
 export function evalRunHandler(req: Request, params: Record<string, string>): Response {
   const runId = params.runId;

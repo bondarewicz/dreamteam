@@ -55,12 +55,24 @@ Report:    <git-root>/reports/retros/YYYY-MM-DD-<topic>.html
 Read the user's request from `$ARGUMENTS`. If arguments are empty or unclear, ask the user what they want to build or fix.
 
 ### Ask About Recording
-Once you understand the task, ask the user using **AskUserQuestion**:
+Once you understand the task, ask the user using **AskUserQuestion** with structured options (NEVER as a plain text question):
 
-> "Want me to record this session?"
+```
+AskUserQuestion({
+  questions: [{
+    question: "Want me to record this session?",
+    header: "Recording",
+    options: [
+      { label: "No", description: "Skip recording, just do the work" },
+      { label: "Yes", description: "Record the session with cast.sh" }
+    ],
+    multiSelect: false
+  }]
+})
+```
 
-- If user says **yes** (or equivalent): set `RECORDING=true`, proceed to initialize the recording below.
-- If user says **no** (or equivalent): set `RECORDING=false`, skip directly to STEP 2.
+- If user selects **Yes**: set `RECORDING=true`, proceed to initialize the recording below.
+- If user selects **No**: set `RECORDING=false`, skip directly to STEP 2.
 
 ### Start Recording (only when RECORDING=true)
 Initialize the recording:
@@ -1095,7 +1107,7 @@ bash scripts/eval-run.sh --trials 3
 
 #### pass@k Interpretation
 
-The HTML report (single source of truth) shows:
+The web app at localhost:3000 (single source of truth) shows:
 
 | Metric | Meaning | What it tells you |
 |--------|---------|-------------------|
@@ -1107,7 +1119,7 @@ The HTML report (single source of truth) shows:
 #### Verdict Criteria
 
 ```
-EVAL GATE RESULTS (from HTML report):
+EVAL GATE RESULTS (from web app at localhost:3000):
   pass@1: [N]%
   pass@3: [N]%
   Flaky scenarios: [N]
@@ -1125,7 +1137,7 @@ Verdict: [PASS / CONDITIONAL / BLOCK]
 
 #### Results Recording
 
-Results are automatically written by `eval-run.sh` to `evals/results/YYYY-MM-DD-HHMM.json` and the HTML report to `reports/evals/`. The HTML report is the single source of truth — do not summarize results in terminal.
+Results are automatically written by `eval-run.sh` to `evals/results/YYYY-MM-DD-HHMM.json` and migrated into the web app DB. The web app at localhost:3000 is the single source of truth — do not summarize results in terminal.
 
 ---
 

@@ -285,3 +285,15 @@ export function migrate(db: Database) {
 
   console.log(`  Migrated ${totalRuns} runs, ${totalResults} results`);
 }
+
+// ── Standalone entry point ────────────────────────────────────────────────────
+// When invoked directly with `bun web/src/migrate.ts`, run migration against
+// the shared DB used by the web app.
+
+if (import.meta.main) {
+  const { getDb } = await import("./db.ts");
+  const db = getDb();
+  console.log("Running migration: evals/results/ → SQLite DB");
+  migrate(db);
+  console.log("Migration complete.");
+}

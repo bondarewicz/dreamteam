@@ -5,7 +5,7 @@
 #   Phase 1: Agent runs  (LLM calls — runs in parallel)
 #   Phase 2: Grader runs (FREE — deterministic code checks)
 #   Phase 3: Rubric scoring (LLM calls — runs in parallel)
-#   Phase 4: Result assembly (writes final JSON + HTML report)
+#   Phase 4: Result assembly (writes final JSON + migrates to web app DB)
 #
 # Usage:
 #   eval-run.sh [options]
@@ -799,7 +799,7 @@ def phase_assemble():
         'meta': {
             'repo_commit': repo_commit,
             'trials':      TRIALS,
-            'notes':       'Preliminary scoring by Coach K. Human review pending via HTML report.',
+            'notes':       'Preliminary scoring by Coach K. Human review pending via web app at localhost:3000.',
         },
     }
 
@@ -811,11 +811,11 @@ def phase_assemble():
     print(f'  Summary: {pass_count}P / {partial_count}p / {fail_count}F  (pass_rate={pass_rate})')
 
     print()
-    print('Generating HTML report...')
+    print('Migrating results to DB and opening web app...')
     report_script = os.path.join(SCRIPT_DIR, 'eval-report.sh')
     proc = subprocess.run(['bash', report_script, 'generate'], capture_output=False)
     if proc.returncode != 0:
-        print('  WARN: report generation failed (non-fatal)')
+        print('  WARN: DB migration failed (non-fatal)')
 
     print()
     print('=== Run Complete ===')
