@@ -1,6 +1,10 @@
 /**
  * Grader auto-generation from expected_behavior and scoring_rubric text.
  * Pure function — no side effects, no I/O.
+ *
+ * Schema-aware: only emits json_field graders for paths that exist in the
+ * target agent's known output schema. Domain terms in scenario prose are
+ * never treated as JSON paths.
  */
 
 import type { Grader } from "./views/Scenarios.ts";
@@ -11,18 +15,124 @@ export type GeneratedGrader = {
   confidence: "high" | "medium" | "low";
 };
 
-// Agents that output JSON (default)
-const JSON_AGENTS = new Set(["bird", "kobe", "mj", "pippen", "shaq"]);
+export type AgentSchemaField = {
+  path: string;
+  type: "array" | "object" | "string" | "number" | "boolean";
+  description?: string;
+};
+
+// Per-agent output schema registry. Only paths listed here are valid for
+// json_field graders. Domain terms that happen to appear in scenario prose
+// are never promoted to JSON paths.
+export const AGENT_SCHEMAS: Record<string, AgentSchemaField[]> = {
+  bird: [
+    { path: "domain_analysis", type: "object" },
+    { path: "domain_analysis.business_context", type: "string" },
+    { path: "domain_analysis.bounded_context", type: "string" },
+    { path: "domain_analysis.ubiquitous_language", type: "array", description: "domain terms" },
+    { path: "business_rules", type: "array", description: "business rules with invariants" },
+    { path: "acceptance_criteria", type: "array", description: "acceptance criteria" },
+    { path: "edge_cases", type: "array", description: "edge cases" },
+    { path: "business_impact", type: "object" },
+    { path: "confidence", type: "object" },
+    { path: "confidence.level", type: "number" },
+    { path: "escalations", type: "array" },
+    { path: "rejection_reasons", type: "array" },
+  ],
+  mj: [
+    { path: "executive_summary", type: "string" },
+    { path: "architecture", type: "object" },
+    { path: "architecture.components", type: "array", description: "system components" },
+    { path: "architecture.interfaces", type: "array", description: "interfaces" },
+    { path: "architecture.patterns_used", type: "array", description: "patterns" },
+    { path: "trade_offs", type: "array", description: "trade-off decisions" },
+    { path: "risks", type: "array", description: "risks" },
+    { path: "implementation_guidance", type: "object" },
+    { path: "implementation_guidance.recommended_approach", type: "string" },
+    { path: "implementation_guidance.files_to_create_or_modify", type: "array", description: "files" },
+    { path: "implementation_guidance.pitfalls_to_avoid", type: "array", description: "pitfalls" },
+    { path: "flexibility_points", type: "array", description: "flexibility points" },
+    { path: "rigidity_points", type: "array", description: "rigidity points" },
+    { path: "confidence", type: "object" },
+    { path: "confidence.level", type: "number" },
+    { path: "escalations", type: "array" },
+  ],
+  shaq: [
+    { path: "implementation_summary", type: "object" },
+    { path: "implementation_summary.what_was_built", type: "string" },
+    { path: "implementation_summary.approach", type: "string" },
+    { path: "implementation_summary.files_changed", type: "array", description: "files changed" },
+    { path: "acceptance_criteria_coverage", type: "array", description: "AC coverage" },
+    { path: "tests", type: "array", description: "tests" },
+    { path: "deviations", type: "array", description: "deviations from spec" },
+    { path: "confidence", type: "object" },
+    { path: "confidence.level", type: "number" },
+    { path: "escalations", type: "array" },
+  ],
+  kobe: [
+    { path: "summary", type: "object" },
+    { path: "summary.verdict", type: "string" },
+    { path: "summary.one_liner", type: "string" },
+    { path: "critical_findings", type: "array", description: "critical findings" },
+    { path: "important_issues", type: "array", description: "important issues" },
+    { path: "suggestions", type: "array", description: "suggestions" },
+    { path: "production_readiness", type: "object" },
+    { path: "production_readiness.safe_to_deploy", type: "boolean" },
+    { path: "production_readiness.rollback_plan", type: "string" },
+    { path: "confidence", type: "object" },
+    { path: "confidence.level", type: "number" },
+    { path: "escalations", type: "array" },
+  ],
+  pippen: [
+    { path: "integration_assessment", type: "object" },
+    { path: "integration_assessment.component_interactions", type: "array", description: "component interactions" },
+    { path: "integration_assessment.contract_compliance", type: "array", description: "contracts" },
+    { path: "observability_review", type: "object" },
+    { path: "resilience_assessment", type: "object" },
+    { path: "resilience_assessment.failure_modes", type: "array", description: "failure modes" },
+    { path: "operational_readiness", type: "object" },
+    { path: "operational_readiness.verdict", type: "string" },
+    { path: "confidence", type: "object" },
+    { path: "confidence.level", type: "number" },
+    { path: "escalations", type: "array" },
+  ],
+  magic: [
+    { path: "handoff_brief", type: "object" },
+    { path: "handoff_brief.recipient", type: "string" },
+    { path: "handoff_brief.task_context", type: "string" },
+    { path: "handoff_brief.domain_rules", type: "array", description: "domain rules" },
+    { path: "handoff_brief.acceptance_criteria", type: "array", description: "acceptance criteria" },
+    { path: "handoff_brief.terminology_alignment", type: "array", description: "terms" },
+    { path: "handoff_brief.contradictions_resolved", type: "array", description: "contradictions" },
+    { path: "handoff_brief.open_questions", type: "array", description: "open questions" },
+    { path: "confidence", type: "object" },
+    { path: "confidence.level", type: "number" },
+    { path: "escalations", type: "array" },
+  ],
+};
+
+// Agents that output JSON — derived from AGENT_SCHEMAS to stay in sync automatically.
+const JSON_AGENTS = new Set(Object.keys(AGENT_SCHEMAS));
 
 /**
- * Extract the lower of two numbers, handling undefined.
- * Used to pick the more conservative min_items value.
+ * Return the schema fields for a given agent, or empty array if unknown.
  */
-function minOf(a: number | undefined, b: number | undefined): number | undefined {
-  if (a === undefined && b === undefined) return undefined;
-  if (a === undefined) return b;
-  if (b === undefined) return a;
-  return Math.min(a, b);
+function getSchema(agent: string): AgentSchemaField[] {
+  return AGENT_SCHEMAS[agent.toLowerCase()] ?? [];
+}
+
+/**
+ * Build a Set of valid paths for fast lookup.
+ */
+function buildPathSet(schema: AgentSchemaField[]): Set<string> {
+  return new Set(schema.map(f => f.path));
+}
+
+/**
+ * Find a schema field by exact path match.
+ */
+function findField(schema: AgentSchemaField[], path: string): AgentSchemaField | undefined {
+  return schema.find(f => f.path === path);
 }
 
 /**
@@ -34,201 +144,124 @@ function parseNum(s: string): number | undefined {
 }
 
 /**
- * Check if a path token looks like a reasonable JSON path (no spaces, reasonable chars).
+ * Scan text for explicit numeric hints about a specific schema field.
+ *
+ * Recognises patterns like:
+ *   "at least 3 business rules"
+ *   "minimum 5 acceptance criteria"
+ *   "business_rules at minimum 2"
+ *   "3 or more edge cases"
+ *   "includes at least 4 acceptance criteria"
+ *
+ * The field is matched by its path leaf (last segment) or its description.
+ * Returns the lowest number found across all matches for the field, or
+ * undefined if no explicit count is present.
  */
-function looksLikePath(s: string): boolean {
-  return /^[a-zA-Z0-9_[\]*./]+$/.test(s.trim());
-}
-
-/**
- * Extract min_items graders from patterns like:
- * - "at least N X" / "minimum N X" / "X lists at minimum N"
- * - "at minimum N" / "N or more X"
- * Returns {path, min_items, sourceText} tuples.
- */
-function extractMinItemsPatterns(text: string): Array<{ path: string; min_items: number; source: string }> {
-  const results: Array<{ path: string; min_items: number; source: string }> = [];
-
-  const lines = text.split("\n");
-  for (const line of lines) {
-    // Pattern: "X lists at minimum N" / "X at minimum N items"
-    const p1 = /(\w[\w_[\]*.]*)\s+(?:list[s]?\s+)?at\s+(?:minimum|least)\s+(\d+)/i.exec(line);
-    if (p1 && looksLikePath(p1[1])) {
-      const n = parseNum(p1[2]);
-      if (n !== undefined) results.push({ path: p1[1], min_items: n, source: line.trim() });
-      continue;
-    }
-
-    // Pattern: "at least N X" / "minimum N X" / "at minimum N X"
-    const p2 = /(?:at\s+)?(?:minimum|least)\s+(\d+)\s+([\w_[\]*./]+)/i.exec(line);
-    if (p2 && looksLikePath(p2[2])) {
-      const n = parseNum(p2[1]);
-      if (n !== undefined) results.push({ path: p2[2], min_items: n, source: line.trim() });
-      continue;
-    }
-
-    // Pattern: "N or more X"
-    const p3 = /(\d+)\s+or\s+more\s+([\w_[\]*./]+)/i.exec(line);
-    if (p3 && looksLikePath(p3[2])) {
-      const n = parseNum(p3[1]);
-      if (n !== undefined) results.push({ path: p3[2], min_items: n, source: line.trim() });
-      continue;
-    }
-
-    // Pattern: "includes at least N items" / "contains at least N"
-    const p4 = /(\w[\w_[\]*.]*)\s+(?:contains?|includes?)\s+at\s+least\s+(\d+)/i.exec(line);
-    if (p4 && looksLikePath(p4[1])) {
-      const n = parseNum(p4[2]);
-      if (n !== undefined) results.push({ path: p4[1], min_items: n, source: line.trim() });
-    }
+function extractExplicitCount(text: string, field: AgentSchemaField): number | undefined {
+  const leaf = field.path.split(".").pop()!;
+  const aliases: string[] = [leaf];
+  if (field.description) {
+    // e.g. "business rules with invariants" — also try "business rules"
+    aliases.push(field.description);
+    // add the first two words of the description as a shorter alias
+    const shortDesc = field.description.split(/\s+/).slice(0, 2).join(" ");
+    if (shortDesc !== field.description) aliases.push(shortDesc);
   }
 
-  return results;
-}
+  let found: number | undefined;
 
-/**
- * Extract numeric bound graders from patterns like:
- * - "X is >= N" / "X >= N"
- * - "X at least N" / "X no more than M"
- * - "X between N and M"
- * - "confidence.level >= 85"
- */
-function extractNumericBoundPatterns(text: string): Array<{ path: string; min?: number; max?: number; source: string }> {
-  const results: Array<{ path: string; min?: number; max?: number; source: string }> = [];
+  for (const alias of aliases) {
+    // Escape the alias for use in a regex
+    const esc = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-  const lines = text.split("\n");
-  for (const line of lines) {
-    // Pattern: "X >= N" or "X is >= N" or "X at least N"
-    const pGte = /([\w.[\]*_]+)\s+(?:is\s+)?>=?\s+(\d+)/i.exec(line);
-    if (pGte && looksLikePath(pGte[1])) {
-      const n = parseNum(pGte[2]);
-      if (n !== undefined) results.push({ path: pGte[1], min: n, source: line.trim() });
-      continue;
-    }
+    const patterns = [
+      // "at least N <alias>" / "minimum N <alias>" / "at minimum N <alias>"
+      new RegExp(`(?:at\\s+)?(?:minimum|least)\\s+(\\d+)\\s+${esc}`, "i"),
+      // "N or more <alias>"
+      new RegExp(`(\\d+)\\s+or\\s+more\\s+${esc}`, "i"),
+      // "<alias> at minimum N" / "<alias> at least N" / "<alias> contains at least N"
+      new RegExp(`${esc}\\s+(?:contains?\\s+)?at\\s+(?:minimum|least)\\s+(\\d+)`, "i"),
+      // "<alias> list at minimum N"
+      new RegExp(`${esc}\\s+lists?\\s+at\\s+(?:minimum|least)\\s+(\\d+)`, "i"),
+    ];
 
-    // Pattern: "X <= N" or "X is <= N" or "X at most N" or "X no more than N"
-    const pLte = /([\w.[\]*_]+)\s+(?:is\s+)?<=?\s+(\d+)/i.exec(line);
-    if (pLte && looksLikePath(pLte[1])) {
-      const n = parseNum(pLte[2]);
-      if (n !== undefined) results.push({ path: pLte[1], max: n, source: line.trim() });
-      continue;
-    }
-
-    // Pattern: "X between N and M" / "X between N-M" / "X between N to M"
-    const pBetween = /([\w.[\]*_]+)\s+between\s+(\d+)\s*(?:and|-|to)\s*(\d+)/i.exec(line);
-    if (pBetween && looksLikePath(pBetween[1])) {
-      const lo = parseNum(pBetween[2]);
-      const hi = parseNum(pBetween[3]);
-      if (lo !== undefined && hi !== undefined) results.push({ path: pBetween[1], min: lo, max: hi, source: line.trim() });
-      continue;
-    }
-
-    // Pattern: "X at least N" where X is a dotted path (e.g. confidence.level at least 85)
-    const pAtLeast = /([\w.]+)\s+at\s+least\s+(\d+)/i.exec(line);
-    if (pAtLeast && looksLikePath(pAtLeast[1]) && pAtLeast[1].includes(".")) {
-      const n = parseNum(pAtLeast[2]);
-      if (n !== undefined) results.push({ path: pAtLeast[1], min: n, source: line.trim() });
-    }
-  }
-
-  return results;
-}
-
-/**
- * Extract type check graders from patterns like:
- * - "X[*].Y is a boolean/string/number"
- * - "each X.Y is a TYPE"
- */
-function extractTypeCheckPatterns(text: string): Array<{ path: string; type_check: string; source: string }> {
-  const results: Array<{ path: string; type_check: string; source: string }> = [];
-  const typeWords = ["boolean", "string", "number", "array", "object"];
-
-  const lines = text.split("\n");
-  for (const line of lines) {
-    for (const t of typeWords) {
-      const re = new RegExp(`(\\w[\\w_[\\]*.]*)\\.?(\\w+)\\s+is\\s+a\\s+${t}`, "i");
-      const m = re.exec(line);
+    for (const pattern of patterns) {
+      const m = pattern.exec(text);
       if (m) {
-        const path = m[1].includes("[") || m[1].includes(".") ? `${m[1]}.${m[2]}` : `${m[1]}[*].${m[2]}`;
-        if (looksLikePath(path)) results.push({ path, type_check: t, source: line.trim() });
-        break;
-      }
-
-      const re2 = new RegExp(`each\\s+(\\w[\\w_[\\]*.]*)\\.?(\\w+)\\s+is\\s+(?:a\\s+)?${t}`, "i");
-      const m2 = re2.exec(line);
-      if (m2) {
-        const path = `${m2[1]}[*].${m2[2]}`;
-        if (looksLikePath(path)) results.push({ path, type_check: t, source: line.trim() });
-        break;
+        const n = parseNum(m[1]);
+        if (n !== undefined) {
+          found = found === undefined ? n : Math.min(found, n);
+        }
       }
     }
   }
 
-  return results;
+  return found;
 }
 
 /**
- * Extract field-presence graders from patterns like:
- * - "X must be present" / "includes X field" / "X field is present"
+ * Scan text for an explicit confidence threshold.
+ *
+ * Recognises patterns like:
+ *   "confidence.level >= 85"
+ *   "confidence >= 80"
+ *   "confidence level at least 75"
+ *   "confidence between 70 and 90"
  */
-function extractFieldPresencePatterns(text: string): Array<{ path: string; source: string }> {
-  const results: Array<{ path: string; source: string }> = [];
+function extractConfidenceThreshold(text: string): number | undefined {
+  const patterns = [
+    // "confidence.level >= N" / "confidence >= N"
+    /confidence(?:\.level)?\s+(?:is\s+)?>=?\s*(\d+)/i,
+    // "confidence.level at least N" / "confidence at least N"
+    /confidence(?:\.level)?\s+at\s+least\s+(\d+)/i,
+    // "confidence between N and M" — take lower bound
+    /confidence(?:\.level)?\s+between\s+(\d+)\s*(?:and|-|to)\s*\d+/i,
+  ];
 
-  const lines = text.split("\n");
-  for (const line of lines) {
-    // Pattern: "X must be present" / "X is present"
-    const p1 = /([\w_[\]*.]+)\s+(?:must\s+be|is)\s+present/i.exec(line);
-    if (p1 && looksLikePath(p1[1])) {
-      results.push({ path: p1[1], source: line.trim() });
-      continue;
-    }
-
-    // Pattern: "includes X field" / "include X field"
-    const p2 = /includes?\s+([\w_[\]*.]+)\s+field/i.exec(line);
-    if (p2 && looksLikePath(p2[1])) {
-      results.push({ path: p2[1], source: line.trim() });
-      continue;
-    }
-
-    // Pattern: "X field is present" / "X field exists"
-    const p3 = /([\w_[\]*.]+)\s+field\s+(?:is\s+present|exists)/i.exec(line);
-    if (p3 && looksLikePath(p3[1])) {
-      results.push({ path: p3[1], source: line.trim() });
+  let found: number | undefined;
+  for (const pattern of patterns) {
+    const m = pattern.exec(text);
+    if (m) {
+      const n = parseNum(m[1]);
+      if (n !== undefined) {
+        found = found === undefined ? n : Math.min(found, n);
+      }
     }
   }
+  return found;
+}
 
-  return results;
+/**
+ * Determine which array fields from the agent schema are mentioned or implied
+ * by the scenario text. A field is "implied" if its path leaf, path, or
+ * description keyword appears in the text (case-insensitive).
+ */
+function impliedArrayFields(text: string, schema: AgentSchemaField[]): AgentSchemaField[] {
+  const lower = text.toLowerCase();
+  return schema.filter(field => {
+    if (field.type !== "array") return false;
+    const leaf = field.path.split(".").pop()!.toLowerCase().replace(/_/g, " ");
+    if (lower.includes(leaf)) return true;
+    if (lower.includes(field.path.toLowerCase())) return true;
+    if (field.description && lower.includes(field.description.toLowerCase())) return true;
+    return false;
+  });
 }
 
 /**
  * Extract contains/not_contains graders from prose text patterns:
- * - "does NOT include X" / "must not contain X"
- * - "X section present" / "includes X section"
+ *   "does NOT include X" / "must not contain X"
+ * These check string content in the output, NOT JSON paths.
  */
-function extractProsePatterns(text: string): Array<{ type: "contains" | "not_contains" | "section_present"; value: string; source: string }> {
-  const results: Array<{ type: "contains" | "not_contains" | "section_present"; value: string; source: string }> = [];
+function extractProsePatterns(text: string): Array<{ type: "contains" | "not_contains"; value: string; source: string }> {
+  const results: Array<{ type: "contains" | "not_contains"; value: string; source: string }> = [];
 
   const lines = text.split("\n");
   for (const line of lines) {
-    // Pattern: "does NOT include X" / "must not contain X" / "must not include X"
     const pNot = /(?:does?\s+not|must\s+not)\s+(?:include|contain)\s+"?([^"]+)"?/i.exec(line);
     if (pNot) {
       results.push({ type: "not_contains", value: pNot[1].trim(), source: line.trim() });
-      continue;
     }
-
-    // Pattern: "X section present" / "includes X section" / "X section is present"
-    const pSection = /(?:([\w ]+)\s+section\s+(?:present|exists|is\s+present)|includes?\s+([\w ]+)\s+section)/i.exec(line);
-    if (pSection) {
-      const section = (pSection[1] || pSection[2]).trim();
-      if (section.length > 0 && section.length < 60) {
-        results.push({ type: "section_present", value: section, source: line.trim() });
-        continue;
-      }
-    }
-
-    // Pattern: "matches pattern X" / "matches regex X"
-    // (regex patterns — skip, too fragile for auto-generation)
   }
 
   return results;
@@ -249,66 +282,12 @@ function dedupGraders(graders: GeneratedGrader[]): GeneratedGrader[] {
 }
 
 /**
- * Merge min_items from expected_behavior and scoring_rubric, taking the lower number
- * (graders are a hard gate — be conservative).
- */
-function mergeMinItems(
-  fromBehavior: Array<{ path: string; min_items: number; source: string }>,
-  fromRubric: Array<{ path: string; min_items: number; source: string }>
-): Array<{ path: string; min_items: number; source: string }> {
-  const map = new Map<string, { path: string; min_items: number; source: string }>();
-
-  for (const item of [...fromBehavior, ...fromRubric]) {
-    const existing = map.get(item.path);
-    if (!existing) {
-      map.set(item.path, { ...item });
-    } else {
-      // Use the lower number (conservative)
-      if (item.min_items < existing.min_items) {
-        map.set(item.path, { ...item });
-      }
-    }
-  }
-
-  return Array.from(map.values());
-}
-
-/**
- * Merge numeric bound entries from expected_behavior and scoring_rubric.
- * When the same JSON path appears in both sources, take the conservative
- * (more lenient) value: lower min, higher max.
- */
-function mergeNumericBounds(
-  fromBehavior: Array<{ path: string; min?: number; max?: number; source: string }>,
-  fromRubric: Array<{ path: string; min?: number; max?: number; source: string }>
-): Array<{ path: string; min?: number; max?: number; source: string }> {
-  const map = new Map<string, { path: string; min?: number; max?: number; source: string }>();
-
-  for (const item of [...fromBehavior, ...fromRubric]) {
-    const existing = map.get(item.path);
-    if (!existing) {
-      map.set(item.path, { ...item });
-    } else {
-      // Conservative merge: lower min (more lenient lower bound), higher max (more lenient upper bound)
-      const newMin = (existing.min !== undefined && item.min !== undefined)
-        ? Math.min(existing.min, item.min)
-        : (existing.min ?? item.min);
-      const newMax = (existing.max !== undefined && item.max !== undefined)
-        ? Math.max(existing.max, item.max)
-        : (existing.max ?? item.max);
-      map.set(item.path, { ...existing, min: newMin, max: newMax });
-    }
-  }
-
-  return Array.from(map.values());
-}
-
-/**
  * Generate graders from expected_behavior and scoring_rubric text.
  * Returns a list of GeneratedGrader objects with confidence levels.
  *
- * Only generates graders from EXPLICIT quantitative/structural assertions.
- * Qualitative criteria are skipped.
+ * For JSON agents, graders are schema-aware: only paths that exist in the
+ * agent's known output schema are emitted. Domain terms in prose are never
+ * treated as JSON paths.
  */
 export function generateGraders(
   expectedBehavior: string,
@@ -320,6 +299,9 @@ export function generateGraders(
   const results: GeneratedGrader[] = [];
 
   if (isJsonAgent) {
+    const schema = getSchema(agent);
+    const validPaths = buildPathSet(schema);
+
     // 1. Always include json_valid first (high confidence)
     results.push({
       grader: { type: "json_valid" },
@@ -327,89 +309,60 @@ export function generateGraders(
       confidence: "high",
     });
 
-    // 2. Extract min_items patterns from both sources, take lower
-    const minItemsBehavior = extractMinItemsPatterns(expectedBehavior);
-    const minItemsRubric = extractMinItemsPatterns(scoringRubric);
-    const mergedMinItems = mergeMinItems(minItemsBehavior, minItemsRubric);
+    // 2. Schema-aware array field graders.
+    // Find array fields that are mentioned/implied by the scenario text,
+    // then determine min_items from explicit numeric hints or a sensible default.
+    const implied = impliedArrayFields(combined, schema);
 
-    for (const item of mergedMinItems) {
+    for (const field of implied) {
+      const explicitCount = extractExplicitCount(combined, field);
+      const min_items = explicitCount ?? 1;  // default: at least 1 item
+      const confidence: "high" | "medium" = explicitCount !== undefined ? "high" : "medium";
+
+      // Build a human-readable source label
+      const source = explicitCount !== undefined
+        ? `Explicit count for ${field.path} derived from scenario text`
+        : `${field.path} array implied by scenario text (default min_items=1)`;
+
       results.push({
-        grader: { type: "json_field", path: item.path, min_items: item.min_items },
-        sourceText: item.source,
-        confidence: "high",
+        grader: { type: "json_field", path: field.path, min_items },
+        sourceText: source,
+        confidence,
       });
     }
 
-    // 3. Extract numeric bound patterns (e.g. confidence.level >= 85, between 65-90)
-    // Extract from each source separately, then merge conservatively (lower min, higher max)
-    const numericBoundsBehavior = extractNumericBoundPatterns(expectedBehavior);
-    const numericBoundsRubric = extractNumericBoundPatterns(scoringRubric);
-    const numericBounds = mergeNumericBounds(numericBoundsBehavior, numericBoundsRubric);
-    for (const item of numericBounds) {
-      // Skip paths that were already handled as min_items
-      const alreadyHandled = mergedMinItems.some(m => m.path === item.path);
-      if (alreadyHandled) continue;
-
-      const grader: Grader = { type: "json_field", path: item.path };
-      if (item.min !== undefined) grader.min = item.min;
-      if (item.max !== undefined) grader.max = item.max;
-
-      results.push({
-        grader,
-        sourceText: item.source,
-        confidence: "medium",
-      });
-    }
-
-    // 4. Extract type check patterns
-    const typeChecks = extractTypeCheckPatterns(combined);
-    for (const item of typeChecks) {
-      results.push({
-        grader: { type: "json_field", path: item.path, type_check: item.type_check },
-        sourceText: item.source,
-        confidence: "medium",
-      });
-    }
-
-    // 5. Extract field presence patterns (low confidence — often qualitative)
-    const fieldPresence = extractFieldPresencePatterns(combined);
-    for (const item of fieldPresence) {
-      // Skip paths already handled above
-      const alreadyHandled =
-        mergedMinItems.some(m => m.path === item.path) ||
-        numericBounds.some(n => n.path === item.path) ||
-        typeChecks.some(t => t.path === item.path);
-      if (alreadyHandled) continue;
-
-      results.push({
-        grader: { type: "json_field", path: item.path },
-        sourceText: item.source,
-        confidence: "low",
-      });
-    }
-  } else {
-    // Prose agent — extract contains/section_present/not_contains
-    const proseMatches = extractProsePatterns(combined);
-    for (const item of proseMatches) {
-      if (item.type === "section_present") {
+    // 3. Confidence level grader — only if rubric or expected_behavior mentions a threshold.
+    if (validPaths.has("confidence.level")) {
+      const threshold = extractConfidenceThreshold(combined);
+      if (threshold !== undefined) {
         results.push({
-          grader: { type: "section_present", section: item.value },
-          sourceText: item.source,
-          confidence: "medium",
-        });
-      } else if (item.type === "not_contains") {
-        results.push({
-          grader: { type: "not_contains", value: item.value },
-          sourceText: item.source,
-          confidence: "medium",
-        });
-      } else {
-        results.push({
-          grader: { type: "contains", value: item.value },
-          sourceText: item.source,
-          confidence: "medium",
+          grader: { type: "json_field", path: "confidence.level", min: threshold },
+          sourceText: `confidence.level threshold extracted from scenario text`,
+          confidence: "high",
         });
       }
+    }
+
+    // 4. Text-based not_contains graders from rubric (string content checks only,
+    //    never used to infer JSON paths).
+    const prose = extractProsePatterns(scoringRubric);
+    for (const item of prose) {
+      results.push({
+        grader: { type: "not_contains", value: item.value },
+        sourceText: item.source,
+        confidence: "medium",
+      });
+    }
+
+  } else {
+    // Prose agent — extract not_contains graders from combined text
+    const prose = extractProsePatterns(combined);
+    for (const item of prose) {
+      results.push({
+        grader: { type: "not_contains", value: item.value },
+        sourceText: item.source,
+        confidence: "medium",
+      });
     }
   }
 
