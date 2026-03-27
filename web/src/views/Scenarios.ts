@@ -68,6 +68,12 @@ export type ScenarioListItem = {
 
 // ── List Page ───────────────────────────────────────────────────────────────
 
+function typeClass(type: string): string {
+  if (!type) return "";
+  const first = type.split("/")[0].trim();
+  return first.toLowerCase().replace(/\s+/g, "-");
+}
+
 export function ScenariosListPage(
   groups: Array<{ agent: string; scenarios: ScenarioListItem[] }>,
   filterAgent: string
@@ -95,7 +101,7 @@ export function ScenariosListPage(
         </td>
         <td>${esc(s.title)}</td>
         <td><span class="sc-category-badge sc-cat-${esc(s.category)}">${esc(s.category || "—")}</span></td>
-        <td><span class="sc-type-tag">${esc(s.type || "—")}</span></td>
+        <td><span class="sc-type-tag sc-type-${esc(typeClass(s.type))}">${esc(s.type || "—")}</span></td>
       </tr>
     `).join("");
 
@@ -148,11 +154,21 @@ export function ScenariosListPage(
       .sc-scenario-link:hover { color: var(--accent); }
       .sc-category-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
       .sc-cat-regression { background: rgba(88,166,255,0.12); color: var(--mj); border: 1px solid rgba(88,166,255,0.25); }
+      .sc-cat-capability { background: rgba(188,140,255,0.12); color: var(--shaq); border: 1px solid rgba(188,140,255,0.25); }
       .sc-cat-happy-path { background: rgba(74,222,128,0.12); color: var(--pass); border: 1px solid rgba(74,222,128,0.25); }
       .sc-cat-edge-case { background: rgba(251,191,36,0.12); color: var(--partial); border: 1px solid rgba(251,191,36,0.25); }
       .sc-cat-adversarial { background: rgba(248,113,113,0.12); color: var(--fail); border: 1px solid rgba(248,113,113,0.25); }
       .sc-cat-draft { background: rgba(125,133,144,0.12); color: var(--text-muted); border: 1px solid rgba(125,133,144,0.25); }
-      .sc-type-tag { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+      .sc-type-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; font-family: var(--mono); background: rgba(125,133,144,0.12); color: var(--text-muted); border: 1px solid rgba(125,133,144,0.25); }
+      .sc-type-happy-path { background: rgba(74,222,128,0.12); color: var(--pass); border: 1px solid rgba(74,222,128,0.25); }
+      .sc-type-medium { background: rgba(251,191,36,0.12); color: var(--partial); border: 1px solid rgba(251,191,36,0.25); }
+      .sc-type-hard { background: rgba(251,146,60,0.12); color: #fb923c; border: 1px solid rgba(251,146,60,0.25); }
+      .sc-type-very-hard { background: rgba(248,113,113,0.12); color: var(--fail); border: 1px solid rgba(248,113,113,0.25); }
+      .sc-type-expert { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.30); }
+      .sc-type-capability { background: rgba(188,140,255,0.12); color: var(--shaq); border: 1px solid rgba(188,140,255,0.25); }
+      .sc-type-edge-case { background: rgba(251,191,36,0.12); color: var(--partial); border: 1px solid rgba(251,191,36,0.25); }
+      .sc-type-escalation-case { background: rgba(56,139,253,0.12); color: var(--accent); border: 1px solid rgba(56,139,253,0.25); }
+      .sc-type-negative-case { background: rgba(248,113,113,0.12); color: var(--fail); border: 1px solid rgba(248,113,113,0.25); }
     </style>
   `;
 }
