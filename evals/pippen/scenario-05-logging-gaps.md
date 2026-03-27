@@ -8,6 +8,12 @@ Tests Pippen's ability to identify specific, actionable logging gaps in a servic
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing an "address validation" microservice before it ships to production. Here is what exists:
 

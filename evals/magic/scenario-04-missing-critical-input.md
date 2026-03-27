@@ -8,6 +8,18 @@ Tests Magic's discipline to refuse synthesis when a critical upstream agent outp
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: handoff_brief
+    exists: false
+  - type: json_field
+    path: confidence.level
+    max: 50
+
 prompt: |
   You are Magic. Produce a handoff brief for Shaq for a new "invoice generation" feature.
 

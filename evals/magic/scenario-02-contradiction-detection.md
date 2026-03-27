@@ -8,6 +8,18 @@ Tests Magic's ability to detect and surface contradictions between agent outputs
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: handoff_brief
+    exists: false
+  - type: json_field
+    path: confidence.level
+    max: 40
+
 prompt: |
   Bird produced this domain rule:
   - "A courier must be assigned to a delivery before the delivery enters IN_TRANSIT state. An unassigned delivery cannot be in transit." (invariant: true)

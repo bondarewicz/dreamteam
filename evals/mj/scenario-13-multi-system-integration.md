@@ -9,12 +9,10 @@ Tests MJ's ability to design an integration layer between multiple external syst
 category: capability
 
 graders:
-  - type: contains
-    values: ["integration", "transformation", "idempoten", "trade_off", "risk"]
-  - type: section_present
-    sections: ["Trade", "Risk", "Implementation"]
-  - type: length_bounds
-    min: 600
+  - type: json_valid
+  - type: json_field
+    path: risks
+    min_items: 1
 
 prompt: |
   A logistics platform needs to integrate with three external systems simultaneously:

@@ -265,14 +265,60 @@ dreamteam/
 │   ├── team-improvement-analysis.md
 │   └── claude-skillz-analysis.md
 ├── evals/                     # Eval scenarios and results
-│   ├── <agent>/scenario-*.md  # 3 scenarios per agent (18 total)
+│   ├── <agent>/scenario-*.md  # 20-25 scenarios per agent (125 total)
 │   └── results/*.json         # Eval run results (append-only)
 ├── recordings/                # Session recordings (.cast, gitignored)
 ├── reports/
 │   ├── retros/                # Session retro HTML reports
 │   └── evals/                 # Eval HTML dashboards
+├── web/                       # Web-based eval report viewer (Bun server)
+│   ├── index.ts               # Entry point — Bun.serve on port 3000
+│   ├── src/                   # Route handlers and router
+│   ├── static/                # Static assets (htmx)
+│   └── package.json           # Scripts: start, dev
 └── README.md
 ```
+
+## Web-Based Evaluation Report Viewer
+
+The `web/` directory contains a lightweight Bun server that serves eval results as a browsable dashboard. It reads directly from the SQLite database (`data/dreamteam.db`) and auto-migrates JSON eval results into the database on first run — no manual database setup required.
+
+**Prerequisites:**
+- [Bun](https://bun.sh) — `curl -fsSL https://bun.sh/install | bash`
+- [SQLite](https://www.sqlite.org/download.html) — included on macOS; on Linux install via `apt install sqlite3` or `brew install sqlite`
+- [Python 3](https://www.python.org/downloads/) — used by eval scripts and session recordings (stdlib only, no external deps)
+
+### Start the server
+
+```bash
+cd web
+bun install
+bun run start
+```
+
+The server starts on port 3000 and opens your browser automatically at `http://localhost:3000`.
+
+### Dev mode (hot reload)
+
+```bash
+cd web
+bun run dev
+```
+
+This runs `bun --hot index.ts`, which reloads the server on file changes — useful when modifying routes or templates.
+
+### Change the port
+
+If port 3000 is in use, set the `PORT` environment variable before starting:
+
+```bash
+cd web
+PORT=8080 bun run start
+```
+
+### First-run auto-migration
+
+On startup, if the SQLite database is empty, the server automatically imports all existing JSON eval results from `evals/results/`. No manual migration step is needed — just start the server and the data will be there.
 
 ## Models & Tuning
 

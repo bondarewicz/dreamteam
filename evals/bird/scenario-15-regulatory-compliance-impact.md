@@ -9,12 +9,22 @@ Tests Bird's ability to identify when a business change has regulatory complianc
 category: capability
 
 graders:
-  - type: contains
-    values: ["regulat", "compliance", "escalat", "risk", "confidence"]
-  - type: section_present
-    sections: ["business_impact", "confidence"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: "escalations"
+    min_items: 1
+  - type: json_field
+    path: "escalations[*].type"
+    contains: "missing_context"
+  - type: json_field
+    path: "confidence.level"
+    max: 55
+  - type: json_field
+    path: "business_impact.risk"
+    type_check: "string"
+  - type: json_field
+    path: "business_impact.financial"
+    type_check: "string"
 
 prompt: |
   The engineering team sends this request: "We want to change our data retention policy for delivery records. Currently we store all delivery data for 7 years. The new proposal is to auto-delete delivery records after 90 days to reduce storage costs. This is an infrastructure optimization — no business logic changes."

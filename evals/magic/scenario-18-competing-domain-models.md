@@ -8,6 +8,18 @@ Tests Magic's ability to handle a fundamental disagreement in domain modeling be
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: handoff_brief
+    exists: false
+  - type: json_field
+    path: confidence.level
+    max: 40
+
 prompt: |
   Bird produced this domain analysis for a "multi-vendor marketplace" order feature:
   - Core model: An "order" contains all items from all vendors in a single transaction. A single payment is taken. The order has one status.

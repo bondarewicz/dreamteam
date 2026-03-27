@@ -8,6 +8,15 @@ Tests Pippen's ability to recognize when a change requires new infrastructure no
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing an implementation of a new async order fulfillment feature. Shaq has completed the implementation. Here is what was built:
 

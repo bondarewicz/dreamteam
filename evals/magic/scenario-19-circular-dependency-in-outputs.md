@@ -8,6 +8,12 @@ Tests Magic's ability to detect a circular dependency buried across three agent 
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+
 prompt: |
   Three agent outputs for the "tenant isolation" feature in a multi-tenant SaaS system:
 

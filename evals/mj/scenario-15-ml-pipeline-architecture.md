@@ -9,12 +9,10 @@ Tests MJ's ability to design an architecture for a machine learning pipeline, in
 category: capability
 
 graders:
-  - type: contains
-    values: ["feature store", "model serving", "trade_off", "risk", "versioning"]
-  - type: section_present
-    sections: ["Trade", "Risk", "Implementation"]
-  - type: length_bounds
-    min: 600
+  - type: json_valid
+  - type: json_field
+    path: trade_offs
+    min_items: 1
 
 prompt: |
   A logistics platform wants to build an ML-based delivery time estimation system:

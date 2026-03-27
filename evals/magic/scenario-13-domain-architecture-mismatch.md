@@ -8,6 +8,12 @@ Tests Magic's ability to detect when MJ's architecture significantly exceeds the
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+
 prompt: |
   Bird produced this domain analysis for the "product search" feature:
   - Domain rule: Search returns products matching all provided keywords (AND logic)

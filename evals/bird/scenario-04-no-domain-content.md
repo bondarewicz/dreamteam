@@ -9,12 +9,16 @@ Tests Bird's ability to recognize when a prompt contains no domain content and a
 category: capability
 
 graders:
-  - type: contains
-    values: ["domain"]
-  - type: not_contains
-    values: ["invariant:", "Given", "acceptance_criteria"]
-  - type: length_bounds
-    min: 50
+  - type: json_valid
+  - type: json_field
+    path: "escalations[*].type"
+    equals: "out_of_scope"
+  - type: json_field
+    path: "business_rules"
+    max_items: 0
+  - type: json_field
+    path: "acceptance_criteria"
+    max_items: 0
 
 prompt: |
   What is the time complexity of a binary search tree insertion operation, and how does a red-black tree maintain balance? Provide a technical explanation with pseudocode.

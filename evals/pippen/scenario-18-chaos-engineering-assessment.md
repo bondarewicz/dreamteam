@@ -8,6 +8,12 @@ Tests Pippen's ability to assess a service's resilience by reasoning through wha
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen performing a pre-production chaos engineering assessment for a "payment processing service". Before running actual chaos tests, you must predict the failure modes and assess whether the service is likely to survive the following failure injections:
 

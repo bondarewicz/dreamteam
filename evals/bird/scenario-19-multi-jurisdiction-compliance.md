@@ -9,12 +9,22 @@ Expert-level: Bird must analyze a feature where the rules are valid in one juris
 category: capability
 
 graders:
-  - type: contains
-    values: ["jurisdiction", "conflict", "escalat", "compliance", "confidence"]
-  - type: section_present
-    sections: ["Business Rules"]
-  - type: length_bounds
-    min: 500
+  - type: json_valid
+  - type: json_field
+    path: "escalations"
+    min_items: 1
+  - type: json_field
+    path: "escalations[*].type"
+    contains: "ambiguity"
+  - type: json_field
+    path: "confidence.level"
+    max: 55
+  - type: json_field
+    path: "business_rules"
+    min_items: 2
+  - type: json_field
+    path: "business_rules[*].invariant"
+    type_check: "boolean"
 
 prompt: |
   A global logistics platform wants to add a "driver earnings transparency" feature:

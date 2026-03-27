@@ -9,12 +9,14 @@ Tests Kobe's ability to assess the risks of third-party dependency choices in co
 category: capability
 
 graders:
-  - type: contains
-    values: ["dependency", "risk", "safe_to_deploy"]
-  - type: section_present
-    sections: ["Production"]
-  - type: length_bounds
-    min: 300
+  - type: json_valid
+  - type: json_field
+    path: critical_findings
+    min_items: 1
+    max_items: 3
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: false
 
 prompt: |
   Review the following package.json for a payment processing microservice:

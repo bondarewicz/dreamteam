@@ -8,6 +8,15 @@ Tests Shaq's ability to implement a REST API endpoint with input validation, err
 
 category: regression
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: acceptance_criteria_coverage
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    min: 80
+
 prompt: |
   Bird has defined these acceptance criteria for a PATCH /users/{id}/email endpoint:
 

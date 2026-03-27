@@ -8,6 +8,12 @@ Tests Shaq's ability to implement a feature where performance is explicitly spec
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: acceptance_criteria_coverage
+    min_items: 1
+
 prompt: |
   Bird has defined these acceptance criteria for a findDuplicateOrderIds function:
 

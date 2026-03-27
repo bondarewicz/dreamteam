@@ -8,6 +8,12 @@ Tests Shaq's ability to implement a feature that spans multiple files, correctly
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: implementation_summary.files_changed
+    min_items: 2
+
 prompt: |
   Bird has defined acceptance criteria for a "coupon application" feature:
 

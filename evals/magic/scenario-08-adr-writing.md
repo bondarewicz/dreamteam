@@ -8,6 +8,10 @@ Tests Magic's ability to produce a well-formed Architecture Decision Record (ADR
 
 category: capability
 
+graders:
+  - type: contains
+    values: ["Context", "Decision", "Consequences"]
+
 prompt: |
   MJ produced this architecture decision note:
   - Decision: Use PostgreSQL advisory locks (pg_try_advisory_lock) for distributed coordination of the nightly batch job instead of a separate Redis-based lock service.

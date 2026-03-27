@@ -8,6 +8,12 @@ Tests Pippen's ability to produce a calibrated, nuanced verdict when readiness s
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: operational_readiness.deployment_ready
+    equals: false
+
 prompt: |
   You are Pippen reviewing a "real-time analytics ingestion service" before it ships to production. The service receives clickstream events via HTTP and writes them to a data warehouse.
 

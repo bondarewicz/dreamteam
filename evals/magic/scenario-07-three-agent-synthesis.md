@@ -8,6 +8,12 @@ Tests Magic's ability to synthesize three complete agent outputs — Bird, MJ, a
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: handoff_brief.domain_rules
+    min_items: 1
+
 prompt: |
   Bird produced this domain analysis for a "price recalculation" feature:
   - Domain rule: The final price is base price minus applicable discounts, floored at $0.01 (price cannot be zero or negative)

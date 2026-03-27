@@ -1,0 +1,258 @@
+{
+  "agent": "magic",
+  "scenario_id": "scenario-22-learning-review-deprioritized-signal",
+  "agent_output": "# Learning Review: Invoicing Service Supplier ID Mismatch Incident\n\n**Date of incident**: 2026-02-28\n**Date of detection**: 2026-03-03 (month-end close)\n**Review produced**: 2026-03-26\n\n---\n\n## 1. Situation Snapshot\n\nThe Invoicing Service accepted supplier_id values from an external webhook and persisted them without normalisation. When a new sub-provider began sending float-formatted IDs (e.g., \"12345.0\" instead of \"12345\"), the records were written successfully but a downstream reconciliation job — which relies on exact-string matching — silently failed to match them for 3 days. The discrepancy totalled £47,000 and was caught by the finance team during month-end close, not by any automated system. The team (Bird, Shaq, Pippen) and Coach K were all involved in the original design and prioritisation decisions.\n\n---\n\n## 2. Timeline\n\n| When | What was known | Decision made | Why it made sense |\n|------|---------------|---------------|-------------------|\n| ~2026-01-16 (spec review) | Bird identified that the external webhook does not guarantee ID format consistency. Variants observed: integer, float, zero-padded. | Bird recommended a normalisation step before persistence; flagged as medium-priority data quality risk. | The domain model treats supplier_id as an opaque string, but Bird recognised that \"opaque\" does not mean \"consistent across producers.\" |\n| ~2026-01-16 (sprint planning) | Webhook integration was already behind schedule. Webhook provider had confirmed their production system sends integer-format IDs. | Coach K deprioritised normalisation (TD-291) to avoid a 3-day slip on go-live. Risk accepted with intent to address next sprint. | The confirmed provider behaviour made the risk appear low. The go-live deadline was a real constraint. Accepting known, bounded risks to hit delivery targets is a legitimate engineering trade-off. |\n| ~2026-01-16 to go-live | TD-291 was in the backlog, marked out-of-scope. | Shaq implemented webhook ingestion per spec — no normalisation. | Shaq followed the agreed scope. Adding out-of-scope work unilaterally would have been its own problem. |\n| Between go-live and 2026-02-28 | System operating normally. Webhook provider onboarded a new sub-provider whose system generates float-formatted IDs. This change was not announced to the team. | No decision point — the team had no signal that anything changed. | The team's risk model assumed the provider's format guarantee covered all traffic. There was no mechanism to detect a format change. |\n| 2026-02-28 | Float-formatted supplier_ids began arriving. Records were persisted successfully. Reconciliation job logged WARNINGs for unmatched IDs but did not alert. | No action taken — warnings were below the manual review threshold. | The monitoring design treated low-volume warnings as noise, not signal. |\n| 2026-03-03 | Finance team discovered a £47,000 discrepancy during month-end close. | Investigation began; root cause identified as supplier_id format mismatch. | The discrepancy was large enough to trigger human review. |\n\n---\n\n## 3. Contributing Factors\n\nEach of the following factors was independently necessary. Removing any single one would likely have prevented or significantly reduced the impact.\n\n**A. No input normalisation on the webhook boundary.** The system accepted and persisted supplier_id values exactly as received, with no canonicalisation. Bird's recommendation (TD-291) would have addressed this.\n\n**B. The risk acceptance assumed a stable upstream format.** Coach K's deprioritisation was reasonable given the provider's confirmation — but that confirmation described their *current* system, not a contractual guarantee. The risk model did not account for the provider silently changing behaviour by onboarding a new sub-provider.\n\n**C. The webhook provider made an unannounced format change.** The onboarding of a new sub-provider introduced float-formatted IDs without any notification to downstream consumers. This was the proximate trigger.\n\n**D. The reconciliation job used exact-string matching with no fuzzy or normalised comparison.** Even without input normalisation, the reconciliation logic could have matched \"12345.0\" to \"12345\" if it had a canonicalisation step of its own.\n\n**E. Warnings without alerts.** The reconciliation job correctly logged unmatched supplier_ids as WARNINGs, but these did not trigger an alert. The warning volume was below the threshold for manual review, so the signal was present but not acted upon.\n\n**F. TD-291 was not re-prioritised after the first sprint.** The original intent was to address it \"next sprint,\" but it remained in the backlog. There was no mechanism to ensure accepted-risk items are revisited on schedule.\n\n---\n\n## 4. Learnings\n\n- **We now know that upstream format guarantees are point-in-time statements, not durable contracts**, which means any input from an external system must be defensively normalised at our boundary regardless of what the provider currently sends.\n\n- **We now know that \"the reconciliation job logs warnings\" is not the same as \"we will detect reconciliation failures\"**, which means warning-level log output that represents data integrity issues needs its own alerting path, distinct from general operational warnings.\n\n- **We now know that deprioritised risk items without a re-review trigger tend to stay deprioritised indefinitely**, which means accepted risks need an explicit expiry date or re-triage mechanism — not just a backlog ticket.\n\n- **We now know that silent failures in financial reconciliation can persist for days without detection**, which means any job that produces a monetary total should have automated variance checks against expected ranges, not just format-level success checks.\n\n- **We now know that the \"opaque string\" domain model for supplier_id is correct in principle but insufficient at the boundary**, which means the domain rule should be: \"supplier_id is an opaque string *after* normalisation at the ingestion boundary.\"\n\n---\n\n## 5. Action Items\n\n- `[PREVENT]` **Implement supplier_id normalisation at webhook ingestion** (TD-291). Strip trailing `.0`, enforce integer-string canonical form. Owner: Shaq. Target: next sprint.\n\n- `[PREVENT]` **Add normalisation to the reconciliation job's matching logic** as a defence-in-depth measure, so future format variants are caught even if ingestion normalisation misses a case. Owner: Shaq. Target: next sprint.\n\n- `[DETECT]` **Add an alert on reconciliation WARNING logs** with a threshold of >0 unmatched supplier_ids per run (not per day). Any unmatched ID in a financial reconciliation is worth investigating. Owner: Pippen. Target: 1 week.\n\n- `[DETECT]` **Add automated variance check to the reconciliation report**. If the discrepancy exceeds a configurable threshold (e.g., £500 or 0.5% of total), fire an alert immediately rather than waiting for month-end review. Owner: Pippen. Target: 2 weeks.\n\n- `[MITIGATE]` **Back-fill affected invoice records**. Normalise the supplier_id values for the ~3 days of affected data and re-run reconciliation. Owner: Shaq. Target: immediate.\n\n- `[PROCESS]` **Add a \"risk re-review date\" field to all accepted-risk tech debt items**. When a risk is accepted and deprioritised, the ticket must include a date (no more than 1 sprint away) by which it is automatically re-triaged. Owner: Coach K. Target: 2 weeks.\n\n- `[PROCESS]` **Request a change-notification SLA from the webhook provider**. Any change to ID format, new sub-provider onboarding, or schema change must be communicated with at least 2 weeks' notice. Owner: Bird (domain/vendor relationship). Target: 1 month.\n\n---\n\n## 6. Preserving the Learning\n\n- **Domain rule update**: Bird to add a domain rule to the Invoicing bounded context spec: *\"All external identifiers must be normalised to canonical form at the ingestion boundary before persistence. 'Opaque string' means opaque after normalisation, not before.\"* This becomes a standing acceptance criterion for any future webhook integration.\n\n- **ADR**: Produce ADR-XXX: \"Defensive normalisation of external identifiers.\" Documents the decision to always normalise external IDs at the boundary, the incident that motivated it, and the canonical forms for each identifier type. Owner: Magic. Target: 1 week.\n\n- **Alerting checklist item**: Add to the team's go-live checklist: *\"For any job that performs data matching or reconciliation: confirm that match failures produce alerts, not just log warnings.\"* Owner: Pippen. Target: 2 weeks.\n\n- **Tech debt review process**: Document the \"risk re-review date\" process in the team's sprint planning runbook so it survives team turnover. Owner: Coach K. Target: 2 weeks.",
+  "agent_output_excerpt": "# Learning Review: Invoicing Service Supplier ID Mismatch Incident\n\n**Date of incident**: 2026-02-28\n**Date of detection**: 2026-03-03 (month-end close)\n**Review produced**: 2026-03-26\n\n---\n\n## 1. Situation Snapshot\n\nThe Invoicing Service accepted supplier_id values from an external webhook and persisted them without normalisation. When a new sub-provider began sending float-formatted IDs (e.g., \"12345.0\" instead of \"12345\"), the records were written successfully but a downstream reconciliation ",
+  "duration_ms": 54031,
+  "tokens_used": 2168,
+  "input_tokens": 3,
+  "output_tokens": 2165,
+  "cost_usd": 0.06377849999999999,
+  "timestamp": "2026-03-26T18:18:18Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "d4c163fb-6490-4ae0-bdd0-bcb2dfeb5ab0",
+      "tools": [
+        "Task",
+        "AskUserQuestion",
+        "Bash",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "Edit",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitPlanMode",
+        "ExitWorktree",
+        "Glob",
+        "Grep",
+        "NotebookEdit",
+        "Read",
+        "RemoteTrigger",
+        "SendMessage",
+        "Skill",
+        "TaskOutput",
+        "TaskStop",
+        "TeamCreate",
+        "TeamDelete",
+        "TodoWrite",
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "Write"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "reload-plugins",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.84",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "frontend-design:frontend-design"
+      ],
+      "plugins": [
+        {
+          "name": "frontend-design",
+          "path": "/Users/lb/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design",
+          "source": "frontend-design@claude-plugins-official"
+        },
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/marketplaces/claude-plugins-official/plugins/code-review",
+          "source": "code-review@claude-plugins-official"
+        }
+      ],
+      "uuid": "71472d12-12ec-4e6c-86b9-a0c07585050c",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01TKVzuLRAxFHDvcpNHKRFtH",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants a learning review for this incident. Per my instructions, when the input describes a production incident, I should use the learning review format (markdown prose, NOT JSON). Let me produce this directly.",
+            "signature": "EpYDClkIDBgCKkAWbtY7kLfe/6L84dYowTnUYatN3/K5D05w9h/FJ9e6Pnm/qLvtUlI9LgmXxQP69gVuceS0Hc/HdYfz9Rl4h+onMg9jbGF1ZGUtb3B1cy00LTY4ABIMCelqNRf6++HLl9xVGgy1Dydfk2ksaZoTH9MiMNPMpCrm7wW/EQzx5+yo630E9vbOHudMyfh0QITBm9CNtw5FoLOX7eOUpQNEILkTyirqAUIjwx19YN0ToG9aMsIxdWGI6ZGYrHTP/2Qp5sSo8+GGdph+zFt7rHgyR/LmntVf8W3zgiASzbz5s14PtMR0qFd4ez8CcUZ1NvgHY8bX6alpynhjsnt3xPQzQaNS90LsTuE9wPt+/uxQ9BG5shVAgijrYlYZN5PzS+foIn05VTjTNqsQmmrtxYabMlP1r7YOJJYb/LuXs2GALfGAah7lXLgm4A8lRC19/znoS3axlXrHsAgS2XqZQWymHhlzlZsEwgYhkpqCwW739V+qACExD8jU2c7j4oBSc/0AVDJf3yK13M5+mwBoPBFAuRgB"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 19277,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 25,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "d4c163fb-6490-4ae0-bdd0-bcb2dfeb5ab0",
+      "uuid": "7fc1a83a-fcc9-4b16-83f1-2d1f092f938c"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01TKVzuLRAxFHDvcpNHKRFtH",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "# Learning Review: Invoicing Service Supplier ID Mismatch Incident\n\n**Date of incident**: 2026-02-28\n**Date of detection**: 2026-03-03 (month-end close)\n**Review produced**: 2026-03-26\n\n---\n\n## 1. Situation Snapshot\n\nThe Invoicing Service accepted supplier_id values from an external webhook and persisted them without normalisation. When a new sub-provider began sending float-formatted IDs (e.g., \"12345.0\" instead of \"12345\"), the records were written successfully but a downstream reconciliation job — which relies on exact-string matching — silently failed to match them for 3 days. The discrepancy totalled £47,000 and was caught by the finance team during month-end close, not by any automated system. The team (Bird, Shaq, Pippen) and Coach K were all involved in the original design and prioritisation decisions.\n\n---\n\n## 2. Timeline\n\n| When | What was known | Decision made | Why it made sense |\n|------|---------------|---------------|-------------------|\n| ~2026-01-16 (spec review) | Bird identified that the external webhook does not guarantee ID format consistency. Variants observed: integer, float, zero-padded. | Bird recommended a normalisation step before persistence; flagged as medium-priority data quality risk. | The domain model treats supplier_id as an opaque string, but Bird recognised that \"opaque\" does not mean \"consistent across producers.\" |\n| ~2026-01-16 (sprint planning) | Webhook integration was already behind schedule. Webhook provider had confirmed their production system sends integer-format IDs. | Coach K deprioritised normalisation (TD-291) to avoid a 3-day slip on go-live. Risk accepted with intent to address next sprint. | The confirmed provider behaviour made the risk appear low. The go-live deadline was a real constraint. Accepting known, bounded risks to hit delivery targets is a legitimate engineering trade-off. |\n| ~2026-01-16 to go-live | TD-291 was in the backlog, marked out-of-scope. | Shaq implemented webhook ingestion per spec — no normalisation. | Shaq followed the agreed scope. Adding out-of-scope work unilaterally would have been its own problem. |\n| Between go-live and 2026-02-28 | System operating normally. Webhook provider onboarded a new sub-provider whose system generates float-formatted IDs. This change was not announced to the team. | No decision point — the team had no signal that anything changed. | The team's risk model assumed the provider's format guarantee covered all traffic. There was no mechanism to detect a format change. |\n| 2026-02-28 | Float-formatted supplier_ids began arriving. Records were persisted successfully. Reconciliation job logged WARNINGs for unmatched IDs but did not alert. | No action taken — warnings were below the manual review threshold. | The monitoring design treated low-volume warnings as noise, not signal. |\n| 2026-03-03 | Finance team discovered a £47,000 discrepancy during month-end close. | Investigation began; root cause identified as supplier_id format mismatch. | The discrepancy was large enough to trigger human review. |\n\n---\n\n## 3. Contributing Factors\n\nEach of the following factors was independently necessary. Removing any single one would likely have prevented or significantly reduced the impact.\n\n**A. No input normalisation on the webhook boundary.** The system accepted and persisted supplier_id values exactly as received, with no canonicalisation. Bird's recommendation (TD-291) would have addressed this.\n\n**B. The risk acceptance assumed a stable upstream format.** Coach K's deprioritisation was reasonable given the provider's confirmation — but that confirmation described their *current* system, not a contractual guarantee. The risk model did not account for the provider silently changing behaviour by onboarding a new sub-provider.\n\n**C. The webhook provider made an unannounced format change.** The onboarding of a new sub-provider introduced float-formatted IDs without any notification to downstream consumers. This was the proximate trigger.\n\n**D. The reconciliation job used exact-string matching with no fuzzy or normalised comparison.** Even without input normalisation, the reconciliation logic could have matched \"12345.0\" to \"12345\" if it had a canonicalisation step of its own.\n\n**E. Warnings without alerts.** The reconciliation job correctly logged unmatched supplier_ids as WARNINGs, but these did not trigger an alert. The warning volume was below the threshold for manual review, so the signal was present but not acted upon.\n\n**F. TD-291 was not re-prioritised after the first sprint.** The original intent was to address it \"next sprint,\" but it remained in the backlog. There was no mechanism to ensure accepted-risk items are revisited on schedule.\n\n---\n\n## 4. Learnings\n\n- **We now know that upstream format guarantees are point-in-time statements, not durable contracts**, which means any input from an external system must be defensively normalised at our boundary regardless of what the provider currently sends.\n\n- **We now know that \"the reconciliation job logs warnings\" is not the same as \"we will detect reconciliation failures\"**, which means warning-level log output that represents data integrity issues needs its own alerting path, distinct from general operational warnings.\n\n- **We now know that deprioritised risk items without a re-review trigger tend to stay deprioritised indefinitely**, which means accepted risks need an explicit expiry date or re-triage mechanism — not just a backlog ticket.\n\n- **We now know that silent failures in financial reconciliation can persist for days without detection**, which means any job that produces a monetary total should have automated variance checks against expected ranges, not just format-level success checks.\n\n- **We now know that the \"opaque string\" domain model for supplier_id is correct in principle but insufficient at the boundary**, which means the domain rule should be: \"supplier_id is an opaque string *after* normalisation at the ingestion boundary.\"\n\n---\n\n## 5. Action Items\n\n- `[PREVENT]` **Implement supplier_id normalisation at webhook ingestion** (TD-291). Strip trailing `.0`, enforce integer-string canonical form. Owner: Shaq. Target: next sprint.\n\n- `[PREVENT]` **Add normalisation to the reconciliation job's matching logic** as a defence-in-depth measure, so future format variants are caught even if ingestion normalisation misses a case. Owner: Shaq. Target: next sprint.\n\n- `[DETECT]` **Add an alert on reconciliation WARNING logs** with a threshold of >0 unmatched supplier_ids per run (not per day). Any unmatched ID in a financial reconciliation is worth investigating. Owner: Pippen. Target: 1 week.\n\n- `[DETECT]` **Add automated variance check to the reconciliation report**. If the discrepancy exceeds a configurable threshold (e.g., £500 or 0.5% of total), fire an alert immediately rather than waiting for month-end review. Owner: Pippen. Target: 2 weeks.\n\n- `[MITIGATE]` **Back-fill affected invoice records**. Normalise the supplier_id values for the ~3 days of affected data and re-run reconciliation. Owner: Shaq. Target: immediate.\n\n- `[PROCESS]` **Add a \"risk re-review date\" field to all accepted-risk tech debt items**. When a risk is accepted and deprioritised, the ticket must include a date (no more than 1 sprint away) by which it is automatically re-triaged. Owner: Coach K. Target: 2 weeks.\n\n- `[PROCESS]` **Request a change-notification SLA from the webhook provider**. Any change to ID format, new sub-provider onboarding, or schema change must be communicated with at least 2 weeks' notice. Owner: Bird (domain/vendor relationship). Target: 1 month.\n\n---\n\n## 6. Preserving the Learning\n\n- **Domain rule update**: Bird to add a domain rule to the Invoicing bounded context spec: *\"All external identifiers must be normalised to canonical form at the ingestion boundary before persistence. 'Opaque string' means opaque after normalisation, not before.\"* This becomes a standing acceptance criterion for any future webhook integration.\n\n- **ADR**: Produce ADR-XXX: \"Defensive normalisation of external identifiers.\" Documents the decision to always normalise external IDs at the boundary, the incident that motivated it, and the canonical forms for each identifier type. Owner: Magic. Target: 1 week.\n\n- **Alerting checklist item**: Add to the team's go-live checklist: *\"For any job that performs data matching or reconciliation: confirm that match failures produce alerts, not just log warnings.\"* Owner: Pippen. Target: 2 weeks.\n\n- **Tech debt review process**: Document the \"risk re-review date\" process in the team's sprint planning runbook so it survives team turnover. Owner: Coach K. Target: 2 weeks."
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 19277,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 25,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "d4c163fb-6490-4ae0-bdd0-bcb2dfeb5ab0",
+      "uuid": "6ca8ad8f-d2f1-4d2a-95c8-96882711c398"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774566000,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "440bfd37-b8b8-410c-9b85-c631a1250fcc",
+      "session_id": "d4c163fb-6490-4ae0-bdd0-bcb2dfeb5ab0"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 53111,
+      "duration_api_ms": 53101,
+      "num_turns": 1,
+      "result": "# Learning Review: Invoicing Service Supplier ID Mismatch Incident\n\n**Date of incident**: 2026-02-28\n**Date of detection**: 2026-03-03 (month-end close)\n**Review produced**: 2026-03-26\n\n---\n\n## 1. Situation Snapshot\n\nThe Invoicing Service accepted supplier_id values from an external webhook and persisted them without normalisation. When a new sub-provider began sending float-formatted IDs (e.g., \"12345.0\" instead of \"12345\"), the records were written successfully but a downstream reconciliation job — which relies on exact-string matching — silently failed to match them for 3 days. The discrepancy totalled £47,000 and was caught by the finance team during month-end close, not by any automated system. The team (Bird, Shaq, Pippen) and Coach K were all involved in the original design and prioritisation decisions.\n\n---\n\n## 2. Timeline\n\n| When | What was known | Decision made | Why it made sense |\n|------|---------------|---------------|-------------------|\n| ~2026-01-16 (spec review) | Bird identified that the external webhook does not guarantee ID format consistency. Variants observed: integer, float, zero-padded. | Bird recommended a normalisation step before persistence; flagged as medium-priority data quality risk. | The domain model treats supplier_id as an opaque string, but Bird recognised that \"opaque\" does not mean \"consistent across producers.\" |\n| ~2026-01-16 (sprint planning) | Webhook integration was already behind schedule. Webhook provider had confirmed their production system sends integer-format IDs. | Coach K deprioritised normalisation (TD-291) to avoid a 3-day slip on go-live. Risk accepted with intent to address next sprint. | The confirmed provider behaviour made the risk appear low. The go-live deadline was a real constraint. Accepting known, bounded risks to hit delivery targets is a legitimate engineering trade-off. |\n| ~2026-01-16 to go-live | TD-291 was in the backlog, marked out-of-scope. | Shaq implemented webhook ingestion per spec — no normalisation. | Shaq followed the agreed scope. Adding out-of-scope work unilaterally would have been its own problem. |\n| Between go-live and 2026-02-28 | System operating normally. Webhook provider onboarded a new sub-provider whose system generates float-formatted IDs. This change was not announced to the team. | No decision point — the team had no signal that anything changed. | The team's risk model assumed the provider's format guarantee covered all traffic. There was no mechanism to detect a format change. |\n| 2026-02-28 | Float-formatted supplier_ids began arriving. Records were persisted successfully. Reconciliation job logged WARNINGs for unmatched IDs but did not alert. | No action taken — warnings were below the manual review threshold. | The monitoring design treated low-volume warnings as noise, not signal. |\n| 2026-03-03 | Finance team discovered a £47,000 discrepancy during month-end close. | Investigation began; root cause identified as supplier_id format mismatch. | The discrepancy was large enough to trigger human review. |\n\n---\n\n## 3. Contributing Factors\n\nEach of the following factors was independently necessary. Removing any single one would likely have prevented or significantly reduced the impact.\n\n**A. No input normalisation on the webhook boundary.** The system accepted and persisted supplier_id values exactly as received, with no canonicalisation. Bird's recommendation (TD-291) would have addressed this.\n\n**B. The risk acceptance assumed a stable upstream format.** Coach K's deprioritisation was reasonable given the provider's confirmation — but that confirmation described their *current* system, not a contractual guarantee. The risk model did not account for the provider silently changing behaviour by onboarding a new sub-provider.\n\n**C. The webhook provider made an unannounced format change.** The onboarding of a new sub-provider introduced float-formatted IDs without any notification to downstream consumers. This was the proximate trigger.\n\n**D. The reconciliation job used exact-string matching with no fuzzy or normalised comparison.** Even without input normalisation, the reconciliation logic could have matched \"12345.0\" to \"12345\" if it had a canonicalisation step of its own.\n\n**E. Warnings without alerts.** The reconciliation job correctly logged unmatched supplier_ids as WARNINGs, but these did not trigger an alert. The warning volume was below the threshold for manual review, so the signal was present but not acted upon.\n\n**F. TD-291 was not re-prioritised after the first sprint.** The original intent was to address it \"next sprint,\" but it remained in the backlog. There was no mechanism to ensure accepted-risk items are revisited on schedule.\n\n---\n\n## 4. Learnings\n\n- **We now know that upstream format guarantees are point-in-time statements, not durable contracts**, which means any input from an external system must be defensively normalised at our boundary regardless of what the provider currently sends.\n\n- **We now know that \"the reconciliation job logs warnings\" is not the same as \"we will detect reconciliation failures\"**, which means warning-level log output that represents data integrity issues needs its own alerting path, distinct from general operational warnings.\n\n- **We now know that deprioritised risk items without a re-review trigger tend to stay deprioritised indefinitely**, which means accepted risks need an explicit expiry date or re-triage mechanism — not just a backlog ticket.\n\n- **We now know that silent failures in financial reconciliation can persist for days without detection**, which means any job that produces a monetary total should have automated variance checks against expected ranges, not just format-level success checks.\n\n- **We now know that the \"opaque string\" domain model for supplier_id is correct in principle but insufficient at the boundary**, which means the domain rule should be: \"supplier_id is an opaque string *after* normalisation at the ingestion boundary.\"\n\n---\n\n## 5. Action Items\n\n- `[PREVENT]` **Implement supplier_id normalisation at webhook ingestion** (TD-291). Strip trailing `.0`, enforce integer-string canonical form. Owner: Shaq. Target: next sprint.\n\n- `[PREVENT]` **Add normalisation to the reconciliation job's matching logic** as a defence-in-depth measure, so future format variants are caught even if ingestion normalisation misses a case. Owner: Shaq. Target: next sprint.\n\n- `[DETECT]` **Add an alert on reconciliation WARNING logs** with a threshold of >0 unmatched supplier_ids per run (not per day). Any unmatched ID in a financial reconciliation is worth investigating. Owner: Pippen. Target: 1 week.\n\n- `[DETECT]` **Add automated variance check to the reconciliation report**. If the discrepancy exceeds a configurable threshold (e.g., £500 or 0.5% of total), fire an alert immediately rather than waiting for month-end review. Owner: Pippen. Target: 2 weeks.\n\n- `[MITIGATE]` **Back-fill affected invoice records**. Normalise the supplier_id values for the ~3 days of affected data and re-run reconciliation. Owner: Shaq. Target: immediate.\n\n- `[PROCESS]` **Add a \"risk re-review date\" field to all accepted-risk tech debt items**. When a risk is accepted and deprioritised, the ticket must include a date (no more than 1 sprint away) by which it is automatically re-triaged. Owner: Coach K. Target: 2 weeks.\n\n- `[PROCESS]` **Request a change-notification SLA from the webhook provider**. Any change to ID format, new sub-provider onboarding, or schema change must be communicated with at least 2 weeks' notice. Owner: Bird (domain/vendor relationship). Target: 1 month.\n\n---\n\n## 6. Preserving the Learning\n\n- **Domain rule update**: Bird to add a domain rule to the Invoicing bounded context spec: *\"All external identifiers must be normalised to canonical form at the ingestion boundary before persistence. 'Opaque string' means opaque after normalisation, not before.\"* This becomes a standing acceptance criterion for any future webhook integration.\n\n- **ADR**: Produce ADR-XXX: \"Defensive normalisation of external identifiers.\" Documents the decision to always normalise external IDs at the boundary, the incident that motivated it, and the canonical forms for each identifier type. Owner: Magic. Target: 1 week.\n\n- **Alerting checklist item**: Add to the team's go-live checklist: *\"For any job that performs data matching or reconciliation: confirm that match failures produce alerts, not just log warnings.\"* Owner: Pippen. Target: 2 weeks.\n\n- **Tech debt review process**: Document the \"risk re-review date\" process in the team's sprint planning runbook so it survives team turnover. Owner: Coach K. Target: 2 weeks.",
+      "stop_reason": "end_turn",
+      "session_id": "d4c163fb-6490-4ae0-bdd0-bcb2dfeb5ab0",
+      "total_cost_usd": 0.06377849999999999,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 19277,
+        "output_tokens": 2165,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 2165,
+          "cacheReadInputTokens": 19277,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.06377849999999999,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "e531f918-fd13-4802-b4d0-89ec2d693288"
+    }
+  ]
+}

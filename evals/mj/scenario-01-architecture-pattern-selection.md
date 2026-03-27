@@ -9,14 +9,13 @@ Tests MJ's ability to evaluate multiple architectural patterns against a concret
 category: regression
 
 graders:
-  - type: contains
-    values: ["trade_off", "flexibility", "rigidity", "risk", "implementation_guidance"]
-  - type: section_present
-    sections: ["Trade", "Risk", "Implementation"]
-  - type: not_contains
-    values: ["event sourcing", "CQRS"]
-  - type: length_bounds
-    min: 400
+  - type: json_valid
+  - type: json_field
+    path: trade_offs
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    min: 60
 
 prompt: |
   A courier company needs to build a notification system. Requirements:

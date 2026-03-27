@@ -8,6 +8,15 @@ Tests Magic's ability to detect and escalate when two agents have specified non-
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    max: 40
+
 prompt: |
   Bird produced this domain analysis for a "real-time leaderboard" feature:
   - Domain rule: Leaderboard rankings must reflect score changes within 100 milliseconds of the score event

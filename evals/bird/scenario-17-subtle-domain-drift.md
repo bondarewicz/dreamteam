@@ -9,12 +9,22 @@ Tests Bird's ability to detect that a feature description uses the same business
 category: capability
 
 graders:
-  - type: contains
-    values: ["domain drift", "terminolog", "invariant", "conflict"]
-  - type: section_present
-    sections: ["domain_analysis", "business_rules"]
-  - type: length_bounds
-    min: 400
+  - type: json_valid
+  - type: json_field
+    path: "business_rules"
+    min_items: 2
+  - type: json_field
+    path: "business_rules[*].invariant"
+    type_check: "boolean"
+  - type: json_field
+    path: "business_rules[*].invariant_justification"
+    type_check: "string"
+  - type: json_field
+    path: "acceptance_criteria"
+    min_items: 2
+  - type: json_field
+    path: "escalations"
+    min_items: 1
 
 prompt: |
   Existing domain definition (established and in use):

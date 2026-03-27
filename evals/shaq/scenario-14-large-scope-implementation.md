@@ -8,6 +8,15 @@ Tests Shaq's ability to implement a larger feature (4+ files, 8+ acceptance crit
 
 category: capability
 
+graders:
+  - type: json_valid
+  - type: json_field
+    path: implementation_summary.files_changed
+    min_items: 3
+  - type: json_field
+    path: acceptance_criteria_coverage
+    min_items: 1
+
 prompt: |
   Magic has delivered this handoff brief for a "subscription management" feature.
 

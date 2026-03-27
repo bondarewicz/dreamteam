@@ -55,12 +55,24 @@ Report:    <git-root>/reports/retros/YYYY-MM-DD-<topic>.html
 Read the user's request from `$ARGUMENTS`. If arguments are empty or unclear, ask the user what they want to build or fix.
 
 ### Ask About Recording
-Once you understand the task, ask the user using **AskUserQuestion**:
+Once you understand the task, ask the user using **AskUserQuestion** with structured options (NEVER as a plain text question):
 
-> "Want me to record this session?"
+```
+AskUserQuestion({
+  questions: [{
+    question: "Want me to record this session?",
+    header: "Recording",
+    options: [
+      { label: "No", description: "Skip recording, just do the work" },
+      { label: "Yes", description: "Record the session with cast.sh" }
+    ],
+    multiSelect: false
+  }]
+})
+```
 
-- If user says **yes** (or equivalent): set `RECORDING=true`, proceed to initialize the recording below.
-- If user says **no** (or equivalent): set `RECORDING=false`, skip directly to STEP 2.
+- If user selects **Yes**: set `RECORDING=true`, proceed to initialize the recording below.
+- If user selects **No**: set `RECORDING=false`, skip directly to STEP 2.
 
 ### Start Recording (only when RECORDING=true)
 Initialize the recording:
@@ -72,6 +84,13 @@ CAST_FILE="${REPO_ROOT}/recordings/$(date +%Y-%m-%d)-${TOPIC}.cast"
 "$CAST_SCRIPT" init "$CAST_FILE" "Dream Team: <one-line task description>"
 ```
 The `TOPIC` variable is reused when generating the HTML report (`reports/retros/$(date +%Y-%m-%d)-${TOPIC}.html`).
+
+### Draft Eval Counter (initialize once per session)
+```bash
+DRAFT_COUNTER=0
+REPO_ROOT="$(git rev-parse --show-toplevel)"  # already set above if recording; set here if not
+```
+`DRAFT_COUNTER` increments each time an agent completes. It is used to name draft eval files `draft-YYYY-MM-DD-HHMM-<TOPIC>-NNN.md`. Initialize it once at session start regardless of whether recording is enabled. The `TOPIC` variable (set when initializing the session) ensures files from different same-day sessions do not collide.
 
 **MANDATORY — Log task context immediately after init (1-5 lines):**
 ```bash
@@ -142,7 +161,23 @@ When Bird completes, log each finding, rule, and acceptance criterion as a SEPAR
 ```
 Each criterion, rule, finding, edge case, decision, and risk MUST be its own separate `cast.sh agent` call with the full text. A viewer reading only the recording must understand what was found without consulting any external document.
 
-### 1b. Human Approval Checkpoint (MANDATORY)
+### 1b. Write Draft Eval for Bird (Quick Fix)
+After logging Bird's findings, write a draft eval file capturing this interaction:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+DRAFT_DIR="${REPO_ROOT}/evals/bird/drafts"
+mkdir -p "$DRAFT_DIR"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders:
+- `<AgentName>` → `Bird`
+- `<Brief Description>` → a 3-5 word summary of the task
+- `<date>` → today's date
+- `<EXACT prompt Coach K sent to the agent — verbatim, no paraphrasing>` → the verbatim prompt you sent to Bird
+- `<The actual output the agent returned during this session>` → Bird's complete output
+
+### 1c. Human Approval Checkpoint (MANDATORY)
 
 Log: `"$CAST_SCRIPT" phase "$CAST_FILE" "Checkpoint — awaiting user approval"`
 
@@ -150,8 +185,26 @@ When Bird completes, YOU (Coach K) present Bird's findings to the user:
 - Summarize Bird's key business rules and domain constraints
 - List the acceptance criteria Bird identified
 - Note Bird's confidence level and any flagged risks
-- **Ask the user: "Ready to proceed with implementation?"**
-- **Wait for user approval before spawning Shaq**
+- **Ask the user using AskUserQuestion (NEVER as free text):**
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Ready to proceed with implementation?",
+    header: "Checkpoint",
+    options: [
+      { label: "Proceed", description: "Bird's analysis looks good — start implementation with Shaq" },
+      { label: "Revise", description: "Re-run Bird with more context or adjusted scope" },
+      { label: "Abort", description: "Stop here — do not implement" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+- If user selects **Proceed**: log approval and spawn Shaq
+- If user selects **Revise**: ask what to change, re-run Bird with updated context
+- If user selects **Abort**: end the session cleanly (finish recording if enabled)
 
 This checkpoint is MANDATORY — never skip it. The user must explicitly approve before implementation begins.
 
@@ -182,6 +235,17 @@ When Shaq completes, log what was built:
 "$CAST_SCRIPT" agent "$CAST_FILE" "Shaq" "CHANGED: [file path] -- [what changed]"
 # ... one line per file changed
 ```
+
+### 2b. Write Draft Eval for Shaq (Quick Fix)
+After logging Shaq's deliverables, write a draft eval file:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+DRAFT_DIR="${REPO_ROOT}/evals/shaq/drafts"
+mkdir -p "$DRAFT_DIR"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Shaq`, set `<EXACT prompt...>` to the verbatim prompt you sent to Shaq, and set `<The actual output...>` to Shaq's complete output.
 
 ### 3. Kobe — Quality Review
 Log: `"$CAST_SCRIPT" phase "$CAST_FILE" "Review: Kobe"`
@@ -215,6 +279,17 @@ When Kobe completes, log verdict and each finding:
 # ... one line per finding
 ```
 
+### 3b. Write Draft Eval for Kobe (Quick Fix)
+After logging Kobe's verdict and findings, write a draft eval file:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+DRAFT_DIR="${REPO_ROOT}/evals/kobe/drafts"
+mkdir -p "$DRAFT_DIR"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Kobe`, set `<EXACT prompt...>` to the verbatim prompt you sent to Kobe, and set `<The actual output...>` to Kobe's complete output.
+
 ### 4. Magic — Synthesis
 Log: `"$CAST_SCRIPT" phase "$CAST_FILE" "Synthesis: Magic"`
 
@@ -239,6 +314,17 @@ Log your retro content as cast events so the HTML exporter can include it:
 Coach K will run export-html after finish to generate the HTML retro.
 ```
 
+### 4b. Write Draft Eval for Magic (Quick Fix)
+After Magic completes, write a draft eval file:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+DRAFT_DIR="${REPO_ROOT}/evals/magic/drafts"
+mkdir -p "$DRAFT_DIR"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Magic`, set `<EXACT prompt...>` to the verbatim prompt you sent to Magic, and set `<The actual output...>` to Magic's complete output.
+
 ### Quick Fix Context Rule
 **Coach K curates context for each agent.** Instead of dumping all prior outputs:
 - **Shaq** gets a focused brief with only the domain rules, acceptance criteria, and terms needed for implementation
@@ -250,6 +336,10 @@ This prevents context bloat while ensuring each agent has what they need.
 **If Kobe reports findings requiring fixes:** Do NOT fix them yourself (Coach K). Re-launch Shaq with the findings, then re-launch Kobe to verify. Only proceed to Magic after Kobe says SHIP.
 
 Log each loop iteration: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
+
+After each Shaq fix-iteration completes, write a draft eval (read `evals/draft-template.md`, use the Write tool, increment counter, use `evals/shaq/drafts/`, include `${TOPIC}` in the filename).
+After each Kobe verification completes, write a draft eval (read `evals/draft-template.md`, use the Write tool, increment counter, use `evals/kobe/drafts/`, include `${TOPIC}` in the filename).
+Each fix-verify loop produces separate draft files — they are distinct interactions capturing different prompt/output pairs.
 
 ---
 
@@ -359,6 +449,31 @@ Log each agent with individual findings:
 # ... one line per finding
 
 "$CAST_SCRIPT" phase "$CAST_FILE" "Synthesis: Coach K"
+```
+
+### 3b. Write Draft Evals for PR Review Agents
+After all three PR Review agents complete, write one draft eval per agent (3 total). For each agent, read the template at `evals/draft-template.md` and use the Write tool to create the file at the computed path, substituting actual values for all `<...>` placeholders.
+```bash
+# Bird draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/bird/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/bird/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Bird, prompt=verbatim prompt sent to Bird, output=Bird's complete output
+
+# MJ draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/mj/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/mj/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=MJ, prompt=verbatim prompt sent to MJ, output=MJ's complete output
+
+# Kobe draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/kobe/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/kobe/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Kobe, prompt=verbatim prompt sent to Kobe, output=Kobe's complete output
 ```
 
 After all three agents complete:
@@ -499,6 +614,24 @@ Log completions with individual findings — one `cast.sh agent` call per item, 
 ```
 Every finding, rule, AC, decision, risk, and edge case MUST be its own separate `cast.sh agent` call with the full text. NEVER log a count or summary. The recording must be self-contained — a viewer must understand what was found without reading any external document.
 
+### Phase 1 Draft Evals: Bird + MJ (Full Team)
+After logging Bird's and MJ's findings, write one draft eval per agent. For each agent, read the template at `evals/draft-template.md` and use the Write tool to create the file at the computed path, substituting actual values for all `<...>` placeholders.
+```bash
+# Bird draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/bird/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/bird/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Bird, prompt=verbatim prompt sent to Bird, output=Bird's complete output
+
+# MJ draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/mj/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/mj/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=MJ, prompt=verbatim prompt sent to MJ, output=MJ's complete output
+```
+
 ### Phase 1b: Context Curation (Magic — inter-phase handoff)
 
 Log: `"$CAST_SCRIPT" phase "$CAST_FILE" "Phase 1b: Context Curation — Magic"`
@@ -529,6 +662,16 @@ When done, message Coach K (the lead) with the Handoff Brief.
 
 **Wait for Magic to complete before proceeding to Phase 2.**
 
+### Phase 1b Draft Eval: Magic Context Curation (Full Team)
+After Magic completes the handoff brief, write a draft eval:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/magic/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/magic/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Magic`, set `<EXACT prompt...>` to the verbatim prompt you sent to Magic, and set `<The actual output...>` to Magic's complete output.
+
 ### Phase 2: Checkpoint — USER APPROVAL REQUIRED
 
 Log: `"$CAST_SCRIPT" phase "$CAST_FILE" "Phase 2: Checkpoint — awaiting user approval"`
@@ -540,8 +683,26 @@ When Magic's handoff brief is ready, YOU (Coach K) do the task breakdown:
 - Break the work into ordered, shippable increments
 - Identify dependencies between tasks
 - Estimate complexity (S/M/L)
-- **Present to the user and ask: "Ready to proceed with implementation?"**
-- **Wait for user approval before spawning Shaq**
+- **Ask the user using AskUserQuestion (NEVER as free text):**
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Ready to proceed with implementation?",
+    header: "Checkpoint",
+    options: [
+      { label: "Approve plan", description: "Analysis and architecture look good — proceed to implementation with Shaq" },
+      { label: "Revise plan", description: "Adjust scope, approach, or re-run analysis agents" },
+      { label: "Abort", description: "Stop here — do not implement" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+- If user selects **Approve plan**: log approval and spawn Shaq
+- If user selects **Revise plan**: ask what to change, re-run affected agents
+- If user selects **Abort**: end the session cleanly (finish recording if enabled)
 
 This checkpoint is MANDATORY — never skip it.
 
@@ -594,6 +755,16 @@ When done, message Coach K (the lead) with your complete output following your O
 **When Shaq submits his plan for approval, review it and forward to the user if needed. Only approve if the approach matches what was requested (correct language, framework, patterns).**
 
 **Wait for Shaq to complete implementation before proceeding to Phase 4.**
+
+### Phase 3 Draft Eval: Shaq (Full Team)
+After Shaq completes, write a draft eval before proceeding to Phase 4:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/shaq/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/shaq/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Shaq`, set `<EXACT prompt...>` to the verbatim prompt you sent to Shaq, and set `<The actual output...>` to Shaq's complete output.
 
 ### Phase 4: Review (Kobe + Pippen in parallel)
 
@@ -685,7 +856,46 @@ Log reviewer verdicts with individual findings:
 # ... one line per finding
 ```
 
+### Phase 4 Draft Evals: Kobe + Pippen (Full Team)
+After logging Kobe's and Pippen's verdicts, write one draft eval per agent. For each agent, read the template at `evals/draft-template.md` and use the Write tool to create the file at the computed path, substituting actual values for all `<...>` placeholders.
+```bash
+# Kobe draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/kobe/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/kobe/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Kobe, prompt=verbatim prompt sent to Kobe, output=Kobe's complete output
+
+# Pippen draft
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/pippen/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/pippen/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+# Use Write tool: AgentName=Pippen, prompt=verbatim prompt sent to Pippen, output=Pippen's complete output
+```
+
 **If Kobe or Pippen report findings that require fixes (verdict is SHIP WITH FIXES or BLOCK):**
+
+Ask the user using **AskUserQuestion** (NEVER as free text):
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Reviewers found issues. How do you want to handle them?",
+    header: "Fix-Verify",
+    options: [
+      { label: "Send all to Shaq", description: "Route all findings to Shaq for fixes, then re-verify" },
+      { label: "Review individually", description: "Let me review each finding before deciding what to fix" },
+      { label: "Override — skip fixes", description: "Proceed to synthesis without fixing (not recommended)" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+- If user selects **Send all to Shaq**: proceed with fix-verify loop as below
+- If user selects **Review individually**: present each finding and let the user decide which to fix
+- If user selects **Override — skip fixes**: log the override and proceed to synthesis
 
 Log each loop: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
 
@@ -702,7 +912,7 @@ Log each loop: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
 
    NEVER commit or push. Run build and tests after all fixes.
    ```
-3. **Wait for Shaq to complete the fixes.**
+3. **Wait for Shaq to complete the fixes.** Write a draft eval for Shaq: read `evals/draft-template.md`, use the Write tool, increment counter, filename `draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md`, use `evals/shaq/drafts/`.
 4. **Re-launch Kobe and Pippen in parallel** to VERIFY their specific findings are resolved:
    ```
    You are [Kobe/Pippen], verifying that your findings have been correctly fixed.
@@ -716,6 +926,7 @@ Log each loop: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
    - State VERIFIED or NOT VERIFIED for each finding
    - Final verdict: SHIP or BLOCK
    ```
+   After each verification completes, write a draft eval per agent: read `evals/draft-template.md`, use the Write tool, increment counter, include `${TOPIC}` in the filename, use `evals/kobe/drafts/` and `evals/pippen/drafts/`. Each fix-verify iteration produces separate drafts.
 5. **If any finding is NOT VERIFIED**, repeat from step 2. Do not proceed to Magic until all reviewers say SHIP.
 6. **Only when both Kobe and Pippen verify SHIP**, proceed to Phase 5.
 
@@ -771,6 +982,16 @@ Coach K will run `export-html` after `finish` to generate the HTML retro.
 When done, message Coach K (the lead) with the final synthesis.
 ```
 
+### Phase 5 Draft Eval: Magic Synthesis (Full Team)
+After Magic completes synthesis, write a draft eval:
+```bash
+DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
+DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
+mkdir -p "${REPO_ROOT}/evals/magic/drafts"
+DRAFT_FILE="${REPO_ROOT}/evals/magic/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
+```
+Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Magic`, set `<EXACT prompt...>` to the verbatim prompt you sent to Magic, and set `<The actual output...>` to Magic's complete output.
+
 ### Mid-Flight Redirects — Kill + Respawn Protocol
 
 If the user changes requirements after an agent has started working:
@@ -789,6 +1010,32 @@ If the user changes requirements after an agent has started working:
 ## GIT SAFETY
 
 **NEVER commit. NEVER push.** No agent commits or pushes. The user controls all git operations. Suggest git commands in the final output.
+
+## AGENT OUTPUT VALIDATION (MANDATORY)
+
+After EVERY agent completes — in ALL workflows (Quick Fix, Full Team, PR Review) — validate the output before proceeding.
+
+### Validation Rules
+
+1. The output MUST start with `{` and end with `}` (raw JSON).
+2. If the output is wrapped in ` ```json ` fences → **NON-COMPLIANT**.
+3. If the output contains any prose or markdown before or after the JSON object → **NON-COMPLIANT**.
+
+### If Output Is Non-Compliant
+
+- **DO NOT** proceed to the next phase.
+- Re-launch the SAME agent with the SAME original prompt, but prepend this preamble verbatim:
+
+> CRITICAL: Your previous response was not valid JSON. You wrapped it in markdown fences or included non-JSON text. Your ENTIRE response must be raw JSON — first character must be { and last must be }. No markdown, no fences, no commentary. Here is your original task again:
+
+- Maximum **2 retries**. If still non-compliant after 2 retries, manually strip the fences/prose and proceed. Log a warning in the recording: `$CAST_SCRIPT marker "$CAST_FILE" "WARNING: [AgentName] output non-compliant after 2 retries — manually stripped"`.
+
+### What Counts as Compliant
+
+- First non-whitespace character is `{`
+- Last non-whitespace character is `}`
+- No ` ``` ` anywhere in the output
+- `json.loads(output)` succeeds with zero pre-processing
 
 ## RETROSPECTIVE (MANDATORY)
 
@@ -826,11 +1073,26 @@ open "${CAST_FILE%.cast}.html"
 ```
 
 ### Human Confirmation Loop (when RECORDING=true — skip entirely if RECORDING=false)
-After every `finish` + `export-html` + `open`, the HTML report is visible in the browser. Ask the user:
+After every `finish` + `export-html` + `open`, the HTML report is visible in the browser. Ask the user using **AskUserQuestion** (NEVER as free text):
 
-> "The HTML report is open in your browser. Any feedback, or shall I upload the recording?"
+```
+AskUserQuestion({
+  questions: [{
+    question: "The HTML report is open in your browser. What would you like to do?",
+    header: "Recording",
+    options: [
+      { label: "Upload recording", description: "I'm done — upload to asciinema and finalize the report" },
+      { label: "I have feedback", description: "Reopen the session — I want changes before uploading" },
+      { label: "Skip upload", description: "Done, but don't upload the recording" }
+    ],
+    multiSelect: false
+  }]
+})
+```
 
-**Wait for explicit confirmation before uploading.** If the user gives feedback, enter the reopen cycle (below). Only upload when the user says they're done.
+- If user selects **Upload recording**: proceed to upload
+- If user selects **I have feedback**: enter the reopen cycle (below)
+- If user selects **Skip upload**: end the session without uploading
 
 This applies after EVERY finish — initial or reopen. Never skip asking.
 
@@ -890,6 +1152,8 @@ The recording is always saved locally regardless of upload success.
 
 Run this gate whenever the session modifies agent definitions, command files, or eval scenarios. Skip entirely if none of those files changed.
 
+**This gate is NON-NEGOTIABLE. Every agent spec change must be validated by evals with 3 trials before shipping.** A single passing trial can be luck — 3 trials reveal whether the change is reliable.
+
 #### When to Run
 
 | Changed files | Scenarios to run |
@@ -901,40 +1165,70 @@ Run this gate whenever the session modifies agent definitions, command files, or
 
 #### Execution
 
-Coach K runs each required scenario via a subagent. Use the subagent type that matches each agent's role (e.g., the Bird subagent for bird scenarios). For each scenario:
+Coach K runs evals using the eval runner with `--trials 3`:
 
-1. Open the scenario file — read `prompt`, `expected_behavior`, `failure_modes`, `scoring_rubric`.
-2. Give the prompt to the agent subagent in a fresh context (no prior session state).
-3. Score the output: **pass / partial / fail** per the `scoring_rubric`.
+```bash
+# Single agent changed
+bash scripts/eval-run.sh --agent <name> --trials 3
 
-#### Scoring and Verdict
-
-```
-EVAL GATE RESULTS:
-  <agent>/<scenario>  — [pass/partial/fail]  <one-line note>
-  ...
-
-Verdict: [PASS / BLOCK]
+# Command files changed (affects all agents)
+bash scripts/eval-run.sh --trials 3
 ```
 
-- **ANY fail** → verdict is **BLOCK** — do not proceed to the Production Safety Gate.
-- **All pass or partial** → verdict is **PASS** — list partials as warnings and continue.
+**Why 3 trials:** LLMs are non-deterministic. A single trial can pass by luck. 3 trials reveals flakiness — if an agent passes 1 out of 3 tries, the spec change is unreliable and needs tightening before shipping.
 
-Explain the blocker concisely so the team knows what to fix before re-running.
+#### pass@k Interpretation
+
+The web app at localhost:3000 (single source of truth) shows:
+
+| Metric | Meaning | What it tells you |
+|--------|---------|-------------------|
+| **pass@1** | % of trials that pass on a single attempt | **Reliability** — does this work consistently? |
+| **pass@3** | % of scenarios where at least 1 of 3 trials passes | **Capability** — can the agent do this at all? |
+| **pass@1 / pass@3** | Consistency ratio | Close to 1.0 = stable. Low = flaky spec. |
+| **Flaky count** | Scenarios with mixed results across trials | Spec needs tightening for these scenarios. |
+
+#### Verdict Criteria
+
+```
+EVAL GATE RESULTS (from web app at localhost:3000):
+  pass@1: [N]%
+  pass@3: [N]%
+  Flaky scenarios: [N]
+
+Verdict: [PASS / CONDITIONAL / BLOCK]
+```
+
+| Verdict | Criteria | Action |
+|---------|----------|--------|
+| **PASS** | pass@1 >= 80% AND flaky count = 0 | Proceed to Production Safety Gate |
+| **CONDITIONAL** | pass@3 >= 80% BUT pass@1 < 80% OR flaky > 0 | List flaky scenarios. Ask user via AskUserQuestion (see below). |
+| **BLOCK** | pass@3 < 80% OR any critical scenario fails all 3 trials | Do not proceed. Identify root cause and fix. |
+
+#### CONDITIONAL Verdict — Structured Decision
+
+When the eval gate returns CONDITIONAL, ask the user using **AskUserQuestion** (NEVER as free text):
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Eval gate returned CONDITIONAL — flaky scenarios detected. How do you want to proceed?",
+    header: "Eval Gate",
+    options: [
+      { label: "Ship with known flakiness", description: "Accept current pass rates and proceed to Production Safety Gate" },
+      { label: "Fix flaky scenarios", description: "Investigate and fix the flaky scenarios before shipping" },
+      { label: "Abort", description: "Do not ship — stop here" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+**Critical scenarios** (escalation, stop conditions, out-of-scope) must pass at least 2 of 3 trials. A critical scenario failing all 3 is an automatic BLOCK regardless of overall pass rate.
 
 #### Results Recording
 
-Append results to `evals/results/YYYY-MM-DD.md` (create the file if it does not exist):
-
-```markdown
-## <ISO date> — <session topic>
-
-| Scenario | Score | Note |
-|----------|-------|------|
-| <agent>/<scenario-file> | pass/partial/fail | <note> |
-
-Verdict: PASS / BLOCK
-```
+Results are automatically written by `eval-run.sh` to `evals/results/YYYY-MM-DD-HHMM.json` and migrated into the web app DB. The web app at localhost:3000 is the single source of truth — do not summarize results in terminal.
 
 ---
 
@@ -1086,12 +1380,29 @@ Example:
 
 When an agent escalates (messages with "ESCALATION:"), Coach K MUST:
 1. **Read the escalation fully** — understand what the agent needs and why
-2. **Route appropriately:**
+2. **Route appropriately — always prefer AskUserQuestion with structured options over free text:**
    - Domain questions → ask the user or re-engage Bird
    - Architecture questions → ask the user or re-engage MJ
-   - Spec ambiguity → ask the user directly (AskUserQuestion)
-   - Missing information → ask the user directly
-   - Agent conflicts → resolve or ask the user to decide
+   - Spec ambiguity → ask the user via AskUserQuestion with the agent's proposed options as labeled choices
+   - Missing information → ask the user via AskUserQuestion if options are enumerable, free text only if genuinely unbounded
+   - Agent conflicts → present each agent's position as an AskUserQuestion option and let the user decide
+
+   **Escalation AskUserQuestion pattern** — when an agent suggests Options A/B/C, map them to structured choices:
+   ```
+   AskUserQuestion({
+     questions: [{
+       question: "[Agent] needs a decision: [escalation topic]",
+       header: "Escalation",
+       options: [
+         { label: "[Option A name]", description: "[Agent's description of option A]" },
+         { label: "[Option B name]", description: "[Agent's description of option B]" }
+         // ... map each agent-proposed option to a labeled choice
+       ],
+       multiSelect: false
+     }]
+   })
+   ```
+   This eliminates ambiguity from replies like "the first one" or "yeah that one."
 3. **Respond promptly** — the escalating agent is BLOCKED until you respond
 4. **Track escalations** — note them for Magic's metrics in the retro. Log: `"$CAST_SCRIPT" marker "$CAST_FILE" "ESCALATION: [agent] — [topic]"`
 5. **NEVER ignore an escalation** — an agent that escalated instead of guessing is doing the right thing. Reward this behavior by responding quickly.

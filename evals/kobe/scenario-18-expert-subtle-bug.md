@@ -9,12 +9,10 @@ Expert-level: Tests Kobe's ability to identify a subtle Node.js event loop block
 category: capability
 
 graders:
-  - type: contains
-    values: ["event loop", "blocking", "safe_to_deploy"]
-  - type: section_present
-    sections: ["Production"]
-  - type: length_bounds
-    min: 300
+  - type: json_valid
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: false
 
 prompt: |
   Review the following Node.js TypeScript endpoint that processes webhook events from the carrier API:

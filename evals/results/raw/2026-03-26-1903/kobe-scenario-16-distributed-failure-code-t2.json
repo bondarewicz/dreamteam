@@ -1,0 +1,258 @@
+{
+  "agent": "kobe",
+  "scenario_id": "scenario-16-distributed-failure-code",
+  "agent_output": "```json\n{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Sequential multi-service calls with zero error handling guarantees orphaned state on any partial failure\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Orphaned courier reservation on downstream failure\",\n      \"risk\": \"If orderService.updateStatus (step 2) or any later step throws, the courier remains reserved but never dispatched. No compensation logic releases the reservation. Under sustained partial failures, the courier pool drains to zero and all new orders fail — a cascading outage.\",\n      \"severity\": \"Critical\",\n      \"location\": \"assignAndDispatch, between step 1 and steps 2-4\",\n      \"reproduction\": \"1. Call assignAndDispatch('order-1'). 2. courierService.reserve succeeds, returns 'courier-A'. 3. orderService.updateStatus throws (DB timeout, constraint violation). 4. courier-A is permanently locked — no retry or release path exists.\",\n      \"fix\": \"Wrap steps 2-4 in a try/catch. On failure, call courierService.release(courierId) in the catch block (itself wrapped in a try/catch to avoid masking the original error). Alternatively, implement a saga pattern: each step registers a compensating action, and on failure all compensations execute in reverse order.\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Courier must be available for other orders if assignment fails\"\n    },\n    {\n      \"title\": \"Non-idempotent reservation allows duplicate courier assignment on retry\",\n      \"risk\": \"If a caller retries assignAndDispatch for the same orderId (network timeout interpreted as failure, queue redelivery, user double-tap), courierService.reserve is called again — potentially reserving a second courier for the same order. One courier is dispatched and the other is orphaned, or both arrive.\",\n      \"severity\": \"Critical\",\n      \"location\": \"assignAndDispatch, step 1 — courierService.reserve(orderId)\",\n      \"reproduction\": \"1. Call assignAndDispatch('order-1'). 2. All steps succeed but the response is lost (network timeout). 3. Caller retries assignAndDispatch('order-1'). 4. A second courier is reserved and dispatched for the same order.\",\n      \"fix\": \"Add an idempotency guard at entry: check if the order already has a courier assigned (e.g., orderService.getCourier(orderId)). If so, skip reservation and resume from the appropriate step. Alternatively, make courierService.reserve idempotent by keying on orderId and returning the existing reservation.\",\n      \"time_to_fix\": \"45 minutes\",\n      \"acceptance_criteria_affected\": \"Exactly one courier must be assigned per order\"\n    },\n    {\n      \"title\": \"Partial notification leaves courier dispatched but customer uninformed (or vice versa)\",\n      \"risk\": \"If sendDispatchAlert (step 3) succeeds but sendCustomerAlert (step 4) fails, the courier is en route but the customer has no visibility. The order is in ASSIGNED state with a dispatched courier but the customer sees nothing — they may cancel or place a duplicate order. The reverse (step 3 fails, courier never notified) means the order is marked ASSIGNED but nobody is actually coming.\",\n      \"severity\": \"High\",\n      \"location\": \"assignAndDispatch, steps 3-4\",\n      \"reproduction\": \"1. Steps 1-3 succeed. 2. notificationService.sendCustomerAlert throws. 3. Order is ASSIGNED, courier is heading out, customer has no idea.\",\n      \"fix\": \"Notifications should be fire-and-forget with retries (push to a durable queue) rather than inline awaits that fail the entire operation. At minimum, catch notification failures independently: log them, push to a retry queue, but do not roll back the successful assignment. Separate the 'must succeed' steps (reserve + update status) from the 'should succeed' steps (notifications).\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Customer and courier must both receive timely notifications\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"No timeout or circuit breaker on service calls\",\n      \"description\": \"Each await can hang indefinitely if a downstream service is slow. A stalled orderService.updateStatus call holds the courier reservation without progressing. Add per-call timeouts (e.g., AbortSignal.timeout) and consider circuit breakers for repeated downstream failures.\",\n      \"location\": \"assignAndDispatch, all four awaits\"\n    },\n    {\n      \"title\": \"No observability — failures are invisible\",\n      \"description\": \"There is no logging, no metrics emission, and no tracing. A failure in this flow will be silent unless the caller logs the thrown error. Add structured logging at each step boundary and emit a metric on failure (e.g., 'courier_assignment_failed') so ops can alert on it.\",\n      \"location\": \"assignAndDispatch, entire function\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Consider extracting this into a saga or workflow engine (e.g., Temporal) if the number of steps grows — manual compensation becomes brittle past 4-5 steps.\",\n    \"Return a result object (e.g., { courierId, orderId, status }) instead of void so callers can act on the outcome without re-querying.\",\n    \"Add a finally block that logs the terminal state of the operation (success or which step failed) for incident triage.\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"Deploying this as-is will create orphaned courier reservations under any transient infrastructure failure — database blip, network partition, or downstream service restart.\",\n    \"rollback_capability\": \"No rollback concern for the code itself (stateless function), but orphaned state in courier and order services may require manual cleanup after rollback.\",\n    \"backward_compatibility\": \"Adding error handling is backward-compatible; no API contract changes.\",\n    \"monitoring_coverage\": \"Zero — no logging, metrics, or tracing. Failures will be invisible to ops.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert the deployment; manually audit courier_reservations table for orphaned records created during the window.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Orphaned reservation on partial failure — directly visible in code\",\n      \"Non-idempotent retry risk — no guard exists\",\n      \"Notification partial failure — sequential with no independent error handling\"\n    ],\n    \"low_confidence_areas\": [\n      \"Whether courierService.reserve has its own internal idempotency (unknown without reading the implementation)\"\n    ],\n    \"assumptions\": [\n      \"courierService.reserve is not internally idempotent on orderId\",\n      \"No external retry/saga orchestrator wraps this function\",\n      \"These are remote service calls, not in-process method calls within a single transaction\"\n    ]\n  }\n}\n```",
+  "agent_output_excerpt": "```json\n{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Sequential multi-service calls with zero error handling guarantees orphaned state on any partial failure\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Orphaned courier reservation on downstream failure\",\n      \"risk\": \"If orderService.updateStatus (step 2) or any later step throws, the courier remains reserved but never dispatched. No compensation logic releases the reservation. Under sustained partial failures, the couri",
+  "duration_ms": 47994,
+  "tokens_used": 1970,
+  "input_tokens": 3,
+  "output_tokens": 1967,
+  "cost_usd": 0.058775499999999994,
+  "timestamp": "2026-03-26T18:14:18Z",
+  "trace": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/lb/Github/Bondarewicz/dreamteam",
+      "session_id": "31adbb26-c2ce-4c62-b94d-fff4daa6586c",
+      "tools": [
+        "Task",
+        "AskUserQuestion",
+        "Bash",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "Edit",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitPlanMode",
+        "ExitWorktree",
+        "Glob",
+        "Grep",
+        "NotebookEdit",
+        "Read",
+        "RemoteTrigger",
+        "SendMessage",
+        "Skill",
+        "TaskOutput",
+        "TaskStop",
+        "TeamCreate",
+        "TeamDelete",
+        "TodoWrite",
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "Write"
+      ],
+      "mcp_servers": [
+        {
+          "name": "claude.ai Google Calendar",
+          "status": "needs-auth"
+        },
+        {
+          "name": "claude.ai Gmail",
+          "status": "needs-auth"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "permissionMode": "default",
+      "slash_commands": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "kobe",
+        "eval",
+        "shaq",
+        "magic",
+        "pippen",
+        "code-review",
+        "team",
+        "mj",
+        "bird",
+        "code-review:code-review",
+        "frontend-design:frontend-design",
+        "compact",
+        "context",
+        "cost",
+        "heapdump",
+        "init",
+        "pr-comments",
+        "release-notes",
+        "reload-plugins",
+        "review",
+        "security-review",
+        "extra-usage",
+        "insights"
+      ],
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.84",
+      "output_style": "default",
+      "agents": [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "claude-code-guide",
+        "kobe",
+        "shaq",
+        "magic",
+        "pippen",
+        "mj",
+        "bird"
+      ],
+      "skills": [
+        "update-config",
+        "debug",
+        "simplify",
+        "batch",
+        "loop",
+        "schedule",
+        "claude-api",
+        "frontend-design:frontend-design"
+      ],
+      "plugins": [
+        {
+          "name": "frontend-design",
+          "path": "/Users/lb/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design",
+          "source": "frontend-design@claude-plugins-official"
+        },
+        {
+          "name": "code-review",
+          "path": "/Users/lb/.claude/plugins/marketplaces/claude-plugins-official/plugins/code-review",
+          "source": "code-review@claude-plugins-official"
+        }
+      ],
+      "uuid": "170cfbf6-939d-40ba-a6ec-66d3d4132c5c",
+      "fast_mode_state": "off"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_017AtMCeU7tbEX7g7dnGbMok",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me analyze this code carefully and produce my review.\n\nClassification: `none` — the fixes needed are error handling, compensation/rollback logic, and possibly idempotency. These are well-known code-level patterns, not architectural concerns.\n\nLet me form hypotheses and verify them against the code:\n\n1. **No compensation/rollback on partial failure**: If step 2, 3, or 4 fails, previous steps are not rolled back. A reserved courier stays reserved with no order assignment.\n2. **No idempotency**: If this function is retried, it could reserve a second courier for the same order.\n\n\n3. **Silent partial success**: The customer might never get notified while a courier is dispatched, or a courier gets reserved but never informed of the assignment.\n\nAll of these issues are evident in the code, so I'm ready to write up my findings.",
+            "signature": "EtIHClkIDBgCKkCAv0sCqE6ps5fO1WL5m9lLs9Ld2Ag6Q3zgwaZ1JfasQ+S8AwBBaE8/grupy+Zdf/GtnB9Hgs8visMOl6McoZ+oMg9jbGF1ZGUtb3B1cy00LTY4ABIMZ4oXQrjgKOFZ+6PCGgwoV+IJb8zpVpHhPw0iMDvbbbvDaJAM0Y243kyJjecSwBuHnB8Hjrpha1YkAmsJXkt1BSCVkzwf7eYrRF9cwCqmBqxPkrwSuNrq6D5vZl/B1zIk/Wlahxlzpz7sz6ECcuKIJTTPUySWZyG31ClHiNED+GYVfOSijnn5WVwcLS+zZ5penzDfUyGyM8HXCAwDTzzqYggw91xCZNvCI38OK/eYb9dtLQmYBZ1Rb6KxOfa8L4aiDnKmcuVY6M/wwShfDVr/UAAhzAJSiZvzWWTHDeUzozRIj5tAuooju0Pz+msks0g0MDcMU4o3QYlaKjm1iHbrfbDgVllbXj7rOmisRWgFNQTRbNXP5h/wFg1qK0VDakrT7yra6/O6SGljU3cu2PcLKZPV8tKznMac250pQvhzH8VVpvaXtSio2OlTdjNmgLzzMYIT22rHLkhUQwxTzyfJcykdS1Ud5FKK9vhGy4X63EGToP6xdsw9QhzbM8HiUUXMnFPz1PQGMOIaHVE8xsNEcoHPhrVxCBDtD0FAnC0k/vyu4x/29Rq6LeIvn4RK9dmj1N04m8BwfsDGHMAYdQI8GTCw+d+GZtTrDaFCD0HLClA8XVF5cfxDgbTjtoW3/0+lyRE5xtvCzbscLzfhIwivGcokGF+9jqtvoCuX2MUK4TLmRdYi4L3i/aRL5ZaSAibRzBT0VteqAVGnrwpW4HDHuAlRtSGwm5r9mP6bzGq7PMiYgPRkNahRL/fSPGAHVNnu7p11KPfy+20EwcVdgidPUYsnfl2gkQtUdbxqy0lW0/3ilCxnEgoehMAejIChY/txbM00PhCzIjL0zUXKolonrTXfjc1y7wpDT/IS0XJ6DuKmjNJzCT4fzJaT+aCu/YMFCuUthbC1A8XR+HqX9VqIx7Y4C80NwG7SacEdLkrAwVNHSM0kOFHlOoMErlcKsQ4NUcdz+ljq1IGRwY59oraXC74qjW2CMGl2qddjLxsNVYHwal/CLDE89ry71oqXn/Go58yIddGbbH6kcvxi9Ns/ILPsJjLB0WDrLAGvolZXXm/srgquulO6wTDewobXpsjJGPEMhWE2FoTVXOdgtXNCfJrKTEBM06w97FtubumCJRnnFbC5YFhEqAuEMgtSpbsgltTu9DCWXCqW6PO9DsKPRpveAMJTGAE="
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 19171,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 21,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "31adbb26-c2ce-4c62-b94d-fff4daa6586c",
+      "uuid": "672b81fc-83f4-43b9-915e-1964d0e98ec6"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_017AtMCeU7tbEX7g7dnGbMok",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "```json\n{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Sequential multi-service calls with zero error handling guarantees orphaned state on any partial failure\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Orphaned courier reservation on downstream failure\",\n      \"risk\": \"If orderService.updateStatus (step 2) or any later step throws, the courier remains reserved but never dispatched. No compensation logic releases the reservation. Under sustained partial failures, the courier pool drains to zero and all new orders fail — a cascading outage.\",\n      \"severity\": \"Critical\",\n      \"location\": \"assignAndDispatch, between step 1 and steps 2-4\",\n      \"reproduction\": \"1. Call assignAndDispatch('order-1'). 2. courierService.reserve succeeds, returns 'courier-A'. 3. orderService.updateStatus throws (DB timeout, constraint violation). 4. courier-A is permanently locked — no retry or release path exists.\",\n      \"fix\": \"Wrap steps 2-4 in a try/catch. On failure, call courierService.release(courierId) in the catch block (itself wrapped in a try/catch to avoid masking the original error). Alternatively, implement a saga pattern: each step registers a compensating action, and on failure all compensations execute in reverse order.\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Courier must be available for other orders if assignment fails\"\n    },\n    {\n      \"title\": \"Non-idempotent reservation allows duplicate courier assignment on retry\",\n      \"risk\": \"If a caller retries assignAndDispatch for the same orderId (network timeout interpreted as failure, queue redelivery, user double-tap), courierService.reserve is called again — potentially reserving a second courier for the same order. One courier is dispatched and the other is orphaned, or both arrive.\",\n      \"severity\": \"Critical\",\n      \"location\": \"assignAndDispatch, step 1 — courierService.reserve(orderId)\",\n      \"reproduction\": \"1. Call assignAndDispatch('order-1'). 2. All steps succeed but the response is lost (network timeout). 3. Caller retries assignAndDispatch('order-1'). 4. A second courier is reserved and dispatched for the same order.\",\n      \"fix\": \"Add an idempotency guard at entry: check if the order already has a courier assigned (e.g., orderService.getCourier(orderId)). If so, skip reservation and resume from the appropriate step. Alternatively, make courierService.reserve idempotent by keying on orderId and returning the existing reservation.\",\n      \"time_to_fix\": \"45 minutes\",\n      \"acceptance_criteria_affected\": \"Exactly one courier must be assigned per order\"\n    },\n    {\n      \"title\": \"Partial notification leaves courier dispatched but customer uninformed (or vice versa)\",\n      \"risk\": \"If sendDispatchAlert (step 3) succeeds but sendCustomerAlert (step 4) fails, the courier is en route but the customer has no visibility. The order is in ASSIGNED state with a dispatched courier but the customer sees nothing — they may cancel or place a duplicate order. The reverse (step 3 fails, courier never notified) means the order is marked ASSIGNED but nobody is actually coming.\",\n      \"severity\": \"High\",\n      \"location\": \"assignAndDispatch, steps 3-4\",\n      \"reproduction\": \"1. Steps 1-3 succeed. 2. notificationService.sendCustomerAlert throws. 3. Order is ASSIGNED, courier is heading out, customer has no idea.\",\n      \"fix\": \"Notifications should be fire-and-forget with retries (push to a durable queue) rather than inline awaits that fail the entire operation. At minimum, catch notification failures independently: log them, push to a retry queue, but do not roll back the successful assignment. Separate the 'must succeed' steps (reserve + update status) from the 'should succeed' steps (notifications).\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Customer and courier must both receive timely notifications\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"No timeout or circuit breaker on service calls\",\n      \"description\": \"Each await can hang indefinitely if a downstream service is slow. A stalled orderService.updateStatus call holds the courier reservation without progressing. Add per-call timeouts (e.g., AbortSignal.timeout) and consider circuit breakers for repeated downstream failures.\",\n      \"location\": \"assignAndDispatch, all four awaits\"\n    },\n    {\n      \"title\": \"No observability — failures are invisible\",\n      \"description\": \"There is no logging, no metrics emission, and no tracing. A failure in this flow will be silent unless the caller logs the thrown error. Add structured logging at each step boundary and emit a metric on failure (e.g., 'courier_assignment_failed') so ops can alert on it.\",\n      \"location\": \"assignAndDispatch, entire function\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Consider extracting this into a saga or workflow engine (e.g., Temporal) if the number of steps grows — manual compensation becomes brittle past 4-5 steps.\",\n    \"Return a result object (e.g., { courierId, orderId, status }) instead of void so callers can act on the outcome without re-querying.\",\n    \"Add a finally block that logs the terminal state of the operation (success or which step failed) for incident triage.\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"Deploying this as-is will create orphaned courier reservations under any transient infrastructure failure — database blip, network partition, or downstream service restart.\",\n    \"rollback_capability\": \"No rollback concern for the code itself (stateless function), but orphaned state in courier and order services may require manual cleanup after rollback.\",\n    \"backward_compatibility\": \"Adding error handling is backward-compatible; no API contract changes.\",\n    \"monitoring_coverage\": \"Zero — no logging, metrics, or tracing. Failures will be invisible to ops.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert the deployment; manually audit courier_reservations table for orphaned records created during the window.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Orphaned reservation on partial failure — directly visible in code\",\n      \"Non-idempotent retry risk — no guard exists\",\n      \"Notification partial failure — sequential with no independent error handling\"\n    ],\n    \"low_confidence_areas\": [\n      \"Whether courierService.reserve has its own internal idempotency (unknown without reading the implementation)\"\n    ],\n    \"assumptions\": [\n      \"courierService.reserve is not internally idempotent on orderId\",\n      \"No external retry/saga orchestrator wraps this function\",\n      \"These are remote service calls, not in-process method calls within a single transaction\"\n    ]\n  }\n}\n```"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 19171,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 21,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "31adbb26-c2ce-4c62-b94d-fff4daa6586c",
+      "uuid": "dc599c94-f550-4206-911d-c5d14a947753"
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed",
+        "resetsAt": 1774566000,
+        "rateLimitType": "five_hour",
+        "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled",
+        "isUsingOverage": false
+      },
+      "uuid": "b3b62ad7-5552-4d83-bc17-46250281fb43",
+      "session_id": "31adbb26-c2ce-4c62-b94d-fff4daa6586c"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 47136,
+      "duration_api_ms": 47127,
+      "num_turns": 1,
+      "result": "```json\n{\n  \"summary\": {\n    \"verdict\": \"BLOCK\",\n    \"one_liner\": \"Sequential multi-service calls with zero error handling guarantees orphaned state on any partial failure\"\n  },\n\n  \"critical_findings\": [\n    {\n      \"title\": \"Orphaned courier reservation on downstream failure\",\n      \"risk\": \"If orderService.updateStatus (step 2) or any later step throws, the courier remains reserved but never dispatched. No compensation logic releases the reservation. Under sustained partial failures, the courier pool drains to zero and all new orders fail — a cascading outage.\",\n      \"severity\": \"Critical\",\n      \"location\": \"assignAndDispatch, between step 1 and steps 2-4\",\n      \"reproduction\": \"1. Call assignAndDispatch('order-1'). 2. courierService.reserve succeeds, returns 'courier-A'. 3. orderService.updateStatus throws (DB timeout, constraint violation). 4. courier-A is permanently locked — no retry or release path exists.\",\n      \"fix\": \"Wrap steps 2-4 in a try/catch. On failure, call courierService.release(courierId) in the catch block (itself wrapped in a try/catch to avoid masking the original error). Alternatively, implement a saga pattern: each step registers a compensating action, and on failure all compensations execute in reverse order.\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Courier must be available for other orders if assignment fails\"\n    },\n    {\n      \"title\": \"Non-idempotent reservation allows duplicate courier assignment on retry\",\n      \"risk\": \"If a caller retries assignAndDispatch for the same orderId (network timeout interpreted as failure, queue redelivery, user double-tap), courierService.reserve is called again — potentially reserving a second courier for the same order. One courier is dispatched and the other is orphaned, or both arrive.\",\n      \"severity\": \"Critical\",\n      \"location\": \"assignAndDispatch, step 1 — courierService.reserve(orderId)\",\n      \"reproduction\": \"1. Call assignAndDispatch('order-1'). 2. All steps succeed but the response is lost (network timeout). 3. Caller retries assignAndDispatch('order-1'). 4. A second courier is reserved and dispatched for the same order.\",\n      \"fix\": \"Add an idempotency guard at entry: check if the order already has a courier assigned (e.g., orderService.getCourier(orderId)). If so, skip reservation and resume from the appropriate step. Alternatively, make courierService.reserve idempotent by keying on orderId and returning the existing reservation.\",\n      \"time_to_fix\": \"45 minutes\",\n      \"acceptance_criteria_affected\": \"Exactly one courier must be assigned per order\"\n    },\n    {\n      \"title\": \"Partial notification leaves courier dispatched but customer uninformed (or vice versa)\",\n      \"risk\": \"If sendDispatchAlert (step 3) succeeds but sendCustomerAlert (step 4) fails, the courier is en route but the customer has no visibility. The order is in ASSIGNED state with a dispatched courier but the customer sees nothing — they may cancel or place a duplicate order. The reverse (step 3 fails, courier never notified) means the order is marked ASSIGNED but nobody is actually coming.\",\n      \"severity\": \"High\",\n      \"location\": \"assignAndDispatch, steps 3-4\",\n      \"reproduction\": \"1. Steps 1-3 succeed. 2. notificationService.sendCustomerAlert throws. 3. Order is ASSIGNED, courier is heading out, customer has no idea.\",\n      \"fix\": \"Notifications should be fire-and-forget with retries (push to a durable queue) rather than inline awaits that fail the entire operation. At minimum, catch notification failures independently: log them, push to a retry queue, but do not roll back the successful assignment. Separate the 'must succeed' steps (reserve + update status) from the 'should succeed' steps (notifications).\",\n      \"time_to_fix\": \"30 minutes\",\n      \"acceptance_criteria_affected\": \"Customer and courier must both receive timely notifications\"\n    }\n  ],\n\n  \"important_issues\": [\n    {\n      \"title\": \"No timeout or circuit breaker on service calls\",\n      \"description\": \"Each await can hang indefinitely if a downstream service is slow. A stalled orderService.updateStatus call holds the courier reservation without progressing. Add per-call timeouts (e.g., AbortSignal.timeout) and consider circuit breakers for repeated downstream failures.\",\n      \"location\": \"assignAndDispatch, all four awaits\"\n    },\n    {\n      \"title\": \"No observability — failures are invisible\",\n      \"description\": \"There is no logging, no metrics emission, and no tracing. A failure in this flow will be silent unless the caller logs the thrown error. Add structured logging at each step boundary and emit a metric on failure (e.g., 'courier_assignment_failed') so ops can alert on it.\",\n      \"location\": \"assignAndDispatch, entire function\"\n    }\n  ],\n\n  \"suggestions\": [\n    \"Consider extracting this into a saga or workflow engine (e.g., Temporal) if the number of steps grows — manual compensation becomes brittle past 4-5 steps.\",\n    \"Return a result object (e.g., { courierId, orderId, status }) instead of void so callers can act on the outcome without re-querying.\",\n    \"Add a finally block that logs the terminal state of the operation (success or which step failed) for incident triage.\"\n  ],\n\n  \"production_readiness\": {\n    \"deployment_risks\": \"Deploying this as-is will create orphaned courier reservations under any transient infrastructure failure — database blip, network partition, or downstream service restart.\",\n    \"rollback_capability\": \"No rollback concern for the code itself (stateless function), but orphaned state in courier and order services may require manual cleanup after rollback.\",\n    \"backward_compatibility\": \"Adding error handling is backward-compatible; no API contract changes.\",\n    \"monitoring_coverage\": \"Zero — no logging, metrics, or tracing. Failures will be invisible to ops.\",\n    \"breaking_changes\": {\n      \"api_breaking\": false,\n      \"db_destructive\": false,\n      \"shared_library\": false,\n      \"auth_security\": false,\n      \"data_pipeline\": false,\n      \"config_changes\": false,\n      \"details\": []\n    },\n    \"safe_to_deploy\": false,\n    \"rollback_plan\": \"Revert the deployment; manually audit courier_reservations table for orphaned records created during the window.\"\n  },\n\n  \"escalations\": [],\n\n  \"confidence\": {\n    \"level\": 95,\n    \"high_confidence_areas\": [\n      \"Orphaned reservation on partial failure — directly visible in code\",\n      \"Non-idempotent retry risk — no guard exists\",\n      \"Notification partial failure — sequential with no independent error handling\"\n    ],\n    \"low_confidence_areas\": [\n      \"Whether courierService.reserve has its own internal idempotency (unknown without reading the implementation)\"\n    ],\n    \"assumptions\": [\n      \"courierService.reserve is not internally idempotent on orderId\",\n      \"No external retry/saga orchestrator wraps this function\",\n      \"These are remote service calls, not in-process method calls within a single transaction\"\n    ]\n  }\n}\n```",
+      "stop_reason": "end_turn",
+      "session_id": "31adbb26-c2ce-4c62-b94d-fff4daa6586c",
+      "total_cost_usd": 0.058775499999999994,
+      "usage": {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 19171,
+        "output_tokens": 1967,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-opus-4-6": {
+          "inputTokens": 3,
+          "outputTokens": 1967,
+          "cacheReadInputTokens": 19171,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.058775499999999994,
+          "contextWindow": 200000,
+          "maxOutputTokens": 64000
+        }
+      },
+      "permission_denials": [],
+      "fast_mode_state": "off",
+      "uuid": "2c9ef708-8c0f-4fb7-ab2c-722ef532a42b"
+    }
+  ]
+}

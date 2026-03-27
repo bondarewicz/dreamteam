@@ -9,12 +9,13 @@ Expert-level: MJ is given architecture requirements that contain genuine technic
 category: capability
 
 graders:
-  - type: contains
-    values: ["contradict", "conflict", "escalat", "cannot satisfy", "trade_off"]
-  - type: section_present
-    sections: ["risks"]
-  - type: length_bounds
-    min: 400
+  - type: json_valid
+  - type: json_field
+    path: escalations
+    min_items: 1
+  - type: json_field
+    path: confidence.level
+    max: 60
 
 prompt: |
   The architecture requirements for a new payment processing service:

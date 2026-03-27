@@ -9,17 +9,25 @@ Tests Bird's ability to produce complete, non-vague acceptance criteria when the
 category: regression
 
 graders:
-  - type: contains
-    values: ["Given", "When", "Then", "confidence", "ambigui"]
-  - type: regex
-    pattern: "(?i)given\\b.+when\\b.+then\\b"
-  - type: section_present
-    sections: ["acceptance_criteria", "confidence"]
-  - type: field_count
-    pattern: "Given"
-    min: 3
-  - type: length_bounds
-    min: 300
+  - type: json_valid
+  - type: json_field
+    path: "acceptance_criteria"
+    min_items: 3
+  - type: json_field
+    path: "acceptance_criteria[*].given"
+    type_check: "string"
+  - type: json_field
+    path: "acceptance_criteria[*].when"
+    type_check: "string"
+  - type: json_field
+    path: "acceptance_criteria[*].then"
+    type_check: "string"
+  - type: json_field
+    path: "confidence.level"
+    max: 65
+  - type: json_field
+    path: "confidence.low_confidence_areas"
+    min_items: 2
 
 prompt: |
   A product manager says: "Users should be able to cancel their order."

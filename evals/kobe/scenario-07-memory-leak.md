@@ -9,15 +9,14 @@ Tests Kobe's ability to identify a memory leak caused by event listeners that ar
 category: capability
 
 graders:
-  - type: contains
-    values: ["memory leak", "event listener", "Critical", "safe_to_deploy"]
-  - type: section_present
-    sections: ["Critical", "Production"]
-  - type: field_count
-    pattern: "(?i)(severity|critical).{0,20}(critical|severity)"
-    min: 1
-  - type: length_bounds
-    min: 200
+  - type: json_valid
+  - type: json_field
+    path: critical_findings
+    min_items: 1
+    max_items: 3
+  - type: json_field
+    path: production_readiness.safe_to_deploy
+    equals: false
 
 prompt: |
   Review the following Node.js TypeScript code for a courier location update handler:
