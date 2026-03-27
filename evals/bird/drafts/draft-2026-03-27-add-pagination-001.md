@@ -1,0 +1,54 @@
+# Eval: Bird — Draft — Dashboard Pagination Domain Analysis (Auto-captured)
+
+## Overview
+
+Auto-captured from Dream Team session on 2026-03-27. Needs human review before promotion to eval suite.
+
+---
+
+category: draft
+
+graders: []
+
+prompt: |
+  Analyze this task and provide:
+  - Key business rules and domain constraints
+  - Acceptance criteria (what "correct" looks like)
+  - What must never break
+
+  TASK: Add pagination to the dashboard page. The dashboard displays eval runs and as the number of eval runs grows, the page needs pagination to remain usable.
+
+  Look at the current dashboard implementation in the web/ directory to understand the existing code, data model, and patterns. Focus on:
+  1. How eval runs are currently loaded and displayed
+  2. The database schema and queries involved
+  3. The existing route structure and URL patterns
+  4. Any existing patterns for list rendering that pagination should follow
+
+reference_output: |
+  {"domain_analysis":{"business_context":"The DreamTeam Eval Dashboard displays a growing list of eval runs ordered by timestamp descending. Currently, getAllRuns() fetches every row from eval_runs with no LIMIT/OFFSET, and the DashboardPage view renders all rows in a single HTML list. As the number of eval runs grows (currently 37, trending upward), the page becomes slower and harder to navigate. Pagination is needed to keep the dashboard usable.","bounded_context":"DreamTeam Web UI -- Dashboard (eval run listing). The dashboard is a server-rendered HTML page using HTMX for partial updates. Routes are handled by a custom Router with :param support. The database is SQLite via bun:sqlite.","ubiquitous_language":[{"term":"EvalRun","definition":"A single evaluation execution identified by run_id, containing aggregate pass/partial/fail counts and a pass_rate. Ordered by timestamp DESC on the dashboard."},{"term":"Baseline","definition":"An eval run where is_complete_baseline=1, meaning all scenarios were executed. Used for trend comparison."},{"term":"Dashboard","definition":"The root page (/) that shows summary stat cards and a chronologically-ordered list of all eval runs."},{"term":"run_id","definition":"Primary key of eval_runs table, a text identifier (timestamp-based, e.g. 2026-03-27-1920)."},{"term":"maybeLayout","definition":"Pattern that returns full HTML page for normal requests, or bare HTML fragment for HTMX partial requests (detected via HX-Request header)."},{"term":"agentsPerRun","definition":"A Map<run_id, string[]> resolving which agents participated in each run, used for badge rendering on dashboard rows."}]},"business_rules":[{"id":"BR-1","rule":"The dashboard must display eval runs in reverse chronological order (newest first), and pagination must preserve this ordering.","invariant":true,"invariant_justification":"Reversing or scrambling run order would make the dashboard unusable and misrepresent temporal relationships between runs.","testable_assertion":"For any page N, every run on page N has a timestamp >= every run on page N+1."},{"id":"BR-2","rule":"The summary stat cards (Total Runs, Baselines, Latest Pass Rate, Latest Pass/Partial/Fail) must reflect global totals across ALL runs, not just the current page.","invariant":true,"invariant_justification":"Stat cards represent the overall health of the eval system. Scoping them to the current page would give misleading metrics -- e.g., Total Runs showing 20 when there are 100.","testable_assertion":"The 'Total Runs' stat card always equals the total count of rows in eval_runs, regardless of which page is displayed."},{"id":"BR-3","rule":"Page size should be a fixed, reasonable default (e.g., 20 runs per page). It does not need to be user-configurable.","invariant":false,"invariant_justification":"Page size is a UX preference, not a data integrity constraint. It could be changed by a product decision.","testable_assertion":"Each page (except possibly the last) contains exactly PAGE_SIZE runs."},{"id":"BR-4","rule":"Pagination must use query parameters (e.g., ?page=2) on the root URL (/), not new route paths.","invariant":false,"invariant_justification":"This is a URL design convention consistent with the existing pattern where eval run detail uses query params (?agent=X&score=Y) for filtering.","testable_assertion":"GET /?page=2 returns the second page of results. GET / with no page param defaults to page 1."},{"id":"BR-5","rule":"The page parameter must be validated: non-numeric, zero, or negative values must default to page 1. Page numbers beyond the last page should show the last page or an empty state, not an error.","invariant":true,"invariant_justification":"Invalid page parameters must never cause a server error or expose raw SQL errors to the user.","testable_assertion":"GET /?page=-1 and GET /?page=abc both return page 1 content. GET /?page=9999 returns either the last page or an empty run list (not a 500 error)."},{"id":"BR-6","rule":"Agent badges per run must still be resolved correctly for the paginated subset of runs, not for all runs.","invariant":true,"invariant_justification":"Loading agent data for all runs when only displaying 20 is wasteful and could cause performance issues at scale -- which is the very problem pagination solves.","testable_assertion":"The getAgentsForAllRuns query (or a replacement) only fetches agent data for the run_ids on the current page."},{"id":"BR-7","rule":"Pagination controls must indicate the current page, total pages, and provide navigation to at least previous/next pages.","invariant":false,"invariant_justification":"This is a UX requirement, not a data integrity constraint. The exact UI pattern is flexible.","testable_assertion":"The rendered HTML contains pagination controls showing current page number and total page count, with working prev/next links."},{"id":"BR-8","rule":"The empty state (no eval runs) must still render correctly when there are zero runs, without showing broken pagination controls.","invariant":true,"invariant_justification":"Zero runs is a valid initial state. Showing 'Page 1 of 0' with disabled controls would be confusing.","testable_assertion":"When eval_runs table is empty, the dashboard shows the existing empty state message with no pagination controls."}],"acceptance_criteria":[{"id":"AC-1","given":"The database contains more runs than the page size","when":"A user visits / (no page param)","then":"Only the first PAGE_SIZE runs are displayed, ordered newest-first, with pagination controls showing page 1 of N"},{"id":"AC-2","given":"The database contains more runs than the page size","when":"A user visits /?page=2","then":"The second page of runs is displayed, with correct prev/next navigation links"},{"id":"AC-3","given":"The database contains 0 eval runs","when":"A user visits /","then":"The existing empty state message is shown with no pagination controls"},{"id":"AC-4","given":"The database contains fewer runs than the page size","when":"A user visits /","then":"All runs are displayed on a single page with no pagination controls (or disabled ones)"},{"id":"AC-5","given":"Any page of the dashboard is displayed","when":"The user views the stat cards","then":"Total Runs, Baselines, Latest Pass Rate, and Latest counts reflect ALL runs globally, not just the current page"},{"id":"AC-6","given":"A user provides an invalid page parameter (e.g., ?page=abc, ?page=-1, ?page=0)","when":"The dashboard is requested","then":"Page 1 is displayed without errors"},{"id":"AC-7","given":"A user requests a page number beyond the last page","when":"The dashboard is requested","then":"The response is graceful -- either redirects to last page, shows last page, or shows an empty list with navigation back"},{"id":"AC-8","given":"The dashboard is requested via HTMX (HX-Request header present)","when":"Pagination links are clicked","then":"Only the body fragment is returned (maybeLayout pattern preserved), enabling smooth partial page updates"},{"id":"AC-9","given":"The database query for paginated runs","when":"The SQL is executed","then":"It uses LIMIT/OFFSET at the database level, not fetching all rows and slicing in application code"},{"id":"AC-10","given":"Agent badges are rendered for runs on the current page","when":"The page is loaded","then":"Agent data is fetched only for the displayed run_ids, not all runs in the database"}],"edge_cases":[{"scenario":"Exactly PAGE_SIZE runs exist","expected_behavior":"All runs shown on page 1, no next-page link or a disabled one. No second page."},{"scenario":"A new eval run is inserted between page loads (user is on page 2, a new run is added)","expected_behavior":"The user may see a run duplicated across pages or miss one. This is acceptable for server-rendered pagination -- no special handling needed. The stat cards will be correct on next load."},{"scenario":"Page parameter is a very large number (e.g., ?page=999999)","expected_behavior":"The OFFSET calculation should not cause SQL errors or excessive query time. Returns empty list or last page."},{"scenario":"Page parameter contains SQL injection attempt","expected_behavior":"The page parameter is parsed as an integer before use, never interpolated into SQL strings. Parameterized queries prevent injection."},{"scenario":"Only 1 run exists in the database","expected_behavior":"Single run shown on page 1 with stat cards reflecting that one run. No pagination controls needed."},{"scenario":"Concurrent page requests during an active eval run (runs being inserted)","expected_behavior":"Each request gets a consistent snapshot via SQLite read. Total count and page content may differ slightly between concurrent requests -- acceptable."}],"confidence":{"level":90,"reasoning":"The task is straightforward -- adding pagination to a server-rendered list page with a well-understood codebase. The schema, queries, routes, and view patterns are all visible and simple. No ambiguity in business rules. The only nuance is ensuring stat cards remain global and agent queries are scoped to the page."}}
+
+expected_behavior: |
+  DRAFT - Needs human review.
+  The agent produced the following output during a live session. A human reviewer should:
+  1. Determine if this output represents correct behavior worth encoding as expected
+  2. Extract the key behaviors that should be tested
+  3. Write concrete expected_behavior criteria
+
+failure_modes: |
+  DRAFT - Needs human review.
+  A human reviewer should identify:
+  1. What would constitute incorrect behavior for this prompt
+  2. Common failure patterns for this agent type
+  3. Edge cases the agent might miss
+
+scoring_rubric: |
+  DRAFT - Needs human review.
+
+  pass:
+    - [criteria to be defined by human reviewer]
+
+  partial:
+    - [criteria to be defined by human reviewer]
+
+  fail:
+    - [criteria to be defined by human reviewer]
