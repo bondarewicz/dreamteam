@@ -142,6 +142,27 @@ export function getAllRuns(): EvalRun[] {
   return db.query("SELECT * FROM eval_runs ORDER BY timestamp DESC").all() as EvalRun[];
 }
 
+export type RunsPage = {
+  runs: EvalRun[];
+  total: number;
+  page: number;
+  totalPages: number;
+};
+
+/** Returns a paginated slice of eval runs (newest first) using LIMIT/OFFSET at the DB level. */
+export function getRunsPage(page: number, pageSize: number): RunsPage {
+  const db = getDb();
+  const countRow = db.query("SELECT COUNT(*) as count FROM eval_runs").get() as { count: number };
+  const total = countRow.count;
+  const totalPages = total === 0 ? 1 : Math.ceil(total / pageSize);
+  const safePage = Math.max(1, Math.min(page, totalPages));
+  const offset = (safePage - 1) * pageSize;
+  const runs = db.query(
+    "SELECT * FROM eval_runs ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+  ).all(pageSize, offset) as EvalRun[];
+  return { runs, total, page: safePage, totalPages };
+}
+
 export function getRun(runId: string): EvalRun | null {
   const db = getDb();
   return db.query("SELECT * FROM eval_runs WHERE run_id = ?").get(runId) as EvalRun | null;
@@ -173,10 +194,101 @@ export function getDistinctAgents(runId: string): string[] {
   return rows.map(r => r.agent);
 }
 
+/**
+ * Bulk query: returns a Map<run_id, string[]> of agents for a specific set of run IDs.
+ * Agents are deduplicated and sorted alphabetically per run.
+ * Uses agent_summaries with fallback to eval_results (same logic as getAgentsForAllRuns).
+ */
+export function getAgentsForRuns(runIds: string[]): Map<string, string[]> {
+  if (runIds.length === 0) return new Map();
+  const db = getDb();
+  const map = new Map<string, string[]>();
+  const placeholders = runIds.map(() => "?").join(",");
+
+  const summaryRows = db.query(
+    `SELECT run_id, agent FROM agent_summaries WHERE run_id IN (${placeholders}) ORDER BY run_id, agent ASC`
+  ).all(...runIds) as { run_id: string; agent: string }[];
+  for (const row of summaryRows) {
+    if (!map.has(row.run_id)) map.set(row.run_id, []);
+    map.get(row.run_id)!.push(row.agent);
+  }
+
+  const coveredIds = [...map.keys()];
+  const uncoveredIds = runIds.filter(id => !coveredIds.includes(id));
+  if (uncoveredIds.length > 0) {
+    const fallbackPlaceholders = uncoveredIds.map(() => "?").join(",");
+    const fallbackRows = db.query(
+      `SELECT DISTINCT run_id, agent FROM eval_results WHERE run_id IN (${fallbackPlaceholders}) ORDER BY run_id, agent ASC`
+    ).all(...uncoveredIds) as { run_id: string; agent: string }[];
+    for (const row of fallbackRows) {
+      if (!map.has(row.run_id)) map.set(row.run_id, []);
+      map.get(row.run_id)!.push(row.agent);
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Bulk query: returns a Map<run_id, string[]> of agents for all runs.
+ * Agents are deduplicated and sorted alphabetically per run.
+ * Uses agent_summaries (more reliable for completed runs) with fallback to eval_results.
+ */
+export function getAgentsForAllRuns(): Map<string, string[]> {
+  const db = getDb();
+  const map = new Map<string, string[]>();
+
+  // Primary: agent_summaries (populated for completed runs)
+  const summaryRows = db.query(
+    "SELECT run_id, agent FROM agent_summaries ORDER BY run_id, agent ASC"
+  ).all() as { run_id: string; agent: string }[];
+  for (const row of summaryRows) {
+    if (!map.has(row.run_id)) map.set(row.run_id, []);
+    map.get(row.run_id)!.push(row.agent);
+  }
+
+  // Fallback: eval_results only for run_ids NOT already covered by agent_summaries
+  // This handles in-progress or crashed runs that never wrote agent_summaries rows.
+  const fallbackRows = db.query(
+    "SELECT DISTINCT run_id, agent FROM eval_results WHERE run_id NOT IN (SELECT DISTINCT run_id FROM agent_summaries) ORDER BY run_id, agent ASC"
+  ).all() as { run_id: string; agent: string }[];
+  for (const row of fallbackRows) {
+    if (!map.has(row.run_id)) map.set(row.run_id, []);
+    map.get(row.run_id)!.push(row.agent);
+  }
+
+  return map;
+}
+
 export function isDbEmpty(): boolean {
   const db = getDb();
   const row = db.query("SELECT COUNT(*) as count FROM eval_runs").get() as { count: number };
   return row.count === 0;
+}
+
+export type GlobalStats = {
+  total: number;
+  baselines: number;
+  latestRun: EvalRun | null;
+};
+
+/**
+ * Returns aggregate stats for ALL eval runs using SQL-level aggregation.
+ * Avoids loading all rows into JS memory just to compute stat card values.
+ */
+export function getGlobalStats(): GlobalStats {
+  const db = getDb();
+  const aggRow = db.query(
+    "SELECT COUNT(*) as total, SUM(is_complete_baseline) as baselines FROM eval_runs"
+  ).get() as { total: number; baselines: number | null };
+  const latestRun = db.query(
+    "SELECT * FROM eval_runs ORDER BY timestamp DESC LIMIT 1"
+  ).get() as EvalRun | null;
+  return {
+    total: aggRow.total,
+    baselines: aggRow.baselines ?? 0,
+    latestRun,
+  };
 }
 
 /**
