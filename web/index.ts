@@ -20,6 +20,8 @@ import {
   scenarioEditHandler,
   scenarioValidateHandler,
   scenarioSaveHandler,
+  scenarioGenerateGradersHandler,
+  scenarioDryRunHandler,
 } from "./src/routes/scenarios.ts";
 import { serveStatic } from "./src/routes/static.ts";
 
@@ -52,6 +54,8 @@ router.get("/api/eval-runs/live", evalRunsSSEHandler);
 router.get("/scenarios", scenariosListHandler);
 router.get("/scenarios/:agent/:scenarioId", scenarioEditHandler);
 router.post("/api/scenarios/:agent/:scenarioId/validate", scenarioValidateHandler);
+router.post("/api/scenarios/:agent/:scenarioId/generate-graders", scenarioGenerateGradersHandler);
+router.post("/api/scenarios/:agent/:scenarioId/dry-run", scenarioDryRunHandler);
 router.post("/api/scenarios/:agent/:scenarioId", scenarioSaveHandler);
 
 // Static file serving — manual pattern since router doesn't support wildcards directly

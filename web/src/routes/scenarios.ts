@@ -17,6 +17,7 @@ import {
   ScenarioEditPage,
   ValidationResultFragment,
   SaveSuccessPage,
+  GraderPreviewFragment,
   KNOWN_GRADER_TYPES,
   KNOWN_CATEGORIES,
   type ParsedScenario,
@@ -24,6 +25,8 @@ import {
   type ValidationIssue,
   type ScenarioListItem,
 } from "../views/Scenarios.ts";
+import { generateGraders } from "../grader-generator.ts";
+import { getActiveRun, startEvalRun } from "../sse.ts";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -359,18 +362,28 @@ export function validateScenario(p: ParsedScenario): ValidationIssue[] {
 
 /**
  * Parse graders from form data (grader_type_N, grader_prop_N_propname, grader_count).
+ * Scans all param keys matching grader_type_* to handle sparse indices (e.g. when
+ * a user rejects a grader that is not the last one, accepted graders at higher indices
+ * would be silently dropped if we only iterated 0..count-1).
  */
 function parseGradersFromForm(params: URLSearchParams): Grader[] {
-  const count = parseInt(params.get("grader_count") ?? "0", 10);
   const graders: Grader[] = [];
 
-  for (let i = 0; i < count; i++) {
-    const type = params.get(`grader_type_${i}`);
+  // Find all grader type entries (handles sparse indices from accept/reject)
+  const indices: number[] = [];
+  for (const key of params.keys()) {
+    const m = key.match(/^grader_type_(\d+)$/);
+    if (m) indices.push(parseInt(m[1], 10));
+  }
+  indices.sort((a, b) => a - b);
+
+  for (const idx of indices) {
+    const type = params.get(`grader_type_${idx}`);
     if (!type) continue;
     const g: Grader = { type };
 
     // Collect all props for this index
-    const prefix = `grader_prop_${i}_`;
+    const prefix = `grader_prop_${idx}_`;
     for (const [key, val] of params.entries()) {
       if (key.startsWith(prefix)) {
         const prop = key.slice(prefix.length);
@@ -550,5 +563,87 @@ export async function scenarioSaveHandler(req: Request, params: Record<string, s
   return new Response(null, {
     status: 302,
     headers: { Location: `/scenarios/${encodeURIComponent(agent)}/${encodeURIComponent(scenarioId)}?saved=1` },
+  });
+}
+
+/** POST /api/scenarios/:agent/:scenarioId/generate-graders — htmx fragment */
+export async function scenarioGenerateGradersHandler(req: Request, params: Record<string, string>): Promise<Response> {
+  const { agent, scenarioId } = params;
+  if (!agent || !scenarioId) return html("Bad Request", 400);
+
+  if (agent.includes("..") || scenarioId.includes("..") || agent.includes("/") || scenarioId.includes("/")) {
+    return html("Bad Request", 400);
+  }
+
+  const formParams = await parseFormBody(req);
+  const expectedBehavior = formParams.get("expected_behavior") ?? "";
+  const scoringRubric = formParams.get("scoring_rubric") ?? "";
+
+  const generated = generateGraders(expectedBehavior, scoringRubric, agent);
+  return html(GraderPreviewFragment(generated));
+}
+
+/** POST /api/scenarios/:agent/:scenarioId/dry-run — save + start single-scenario eval */
+export async function scenarioDryRunHandler(req: Request, params: Record<string, string>): Promise<Response> {
+  const { agent, scenarioId } = params;
+  if (!agent || !scenarioId) return html("Bad Request", 400);
+
+  if (agent.includes("..") || scenarioId.includes("..") || agent.includes("/") || scenarioId.includes("/")) {
+    return html("Bad Request", 400);
+  }
+
+  // Check if a run is already in progress
+  const active = getActiveRun();
+  if (active && !active.done) {
+    return html(`<span class="sc-dry-run-error">A run is already in progress — wait for it to finish before starting a dry run.</span>`);
+  }
+
+  // Parse and validate form data
+  const formParams = await parseFormBody(req);
+  const parsed = parsedFromForm(formParams);
+  const issues = validateScenario(parsed);
+
+  const hasErrors = issues.some(i => i.level === "error");
+  if (hasErrors) {
+    const errorMessages = issues
+      .filter(i => i.level === "error")
+      .map(i => i.message)
+      .join("; ");
+    return html(`<span class="sc-dry-run-error">Cannot dry run — validation errors: ${esc(errorMessages)}</span>`);
+  }
+
+  // Save the file first
+  const serialized = serializeScenario(parsed);
+  try {
+    writeFileSync(scenarioPath(agent, scenarioId), serialized, "utf-8");
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return html(`<span class="sc-dry-run-error">Failed to save file before dry run: ${esc(errMsg)}</span>`);
+  }
+
+  // Start single-scenario eval run
+  try {
+    await startEvalRun({
+      agents: [agent],
+      scenarios: [`${agent}/${scenarioId}`],
+      trials: 1,
+      parallel: 1,
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return html(`<span class="sc-dry-run-error">Failed to start dry run: ${esc(errMsg)}</span>`);
+  }
+
+  // Redirect to live view — use HX-Redirect for htmx requests, 302 for plain form submits
+  const isHtmx = req.headers.get("HX-Request") === "true";
+  if (isHtmx) {
+    return new Response(null, {
+      status: 200,
+      headers: { "HX-Redirect": "/evals/live" },
+    });
+  }
+  return new Response(null, {
+    status: 302,
+    headers: { Location: "/evals/live" },
   });
 }
