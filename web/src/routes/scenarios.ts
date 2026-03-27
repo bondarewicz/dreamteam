@@ -15,11 +15,14 @@ import { esc } from "../views/html.ts";
 import {
   ScenariosListPage,
   ScenarioEditPage,
+  ScenarioNewPage,
+  ScenarioGenerateFragment,
   ValidationResultFragment,
   SaveSuccessPage,
   GraderPreviewFragment,
   KNOWN_GRADER_TYPES,
   KNOWN_CATEGORIES,
+  KNOWN_AGENTS,
   type ParsedScenario,
   type Grader,
   type ValidationIssue,
@@ -645,5 +648,262 @@ export async function scenarioDryRunHandler(req: Request, params: Record<string,
   return new Response(null, {
     status: 302,
     headers: { Location: "/evals/live" },
+  });
+}
+
+// ── New Scenario helpers ──────────────────────────────────────────────────────
+
+/**
+ * Find the next available scenario number for an agent.
+ * Reads evals/<agent>/ directory, finds all scenario-NN-*.md files,
+ * returns the next available number (max existing + 1, or 1 if none).
+ */
+function nextScenarioNumber(agent: string): number {
+  const agentDir = path.join(EVALS_DIR, agent);
+  try {
+    const files = readdirSync(agentDir);
+    const nums: number[] = [];
+    for (const f of files) {
+      const m = /^scenario-(\d+)-.*\.md$/.exec(f);
+      if (m) nums.push(parseInt(m[1], 10));
+    }
+    if (nums.length === 0) return 1;
+    return Math.max(...nums) + 1;
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * Derive a URL-safe slug from a title string.
+ * Lowercase, keep alphanumerics and hyphens, replace spaces with hyphens.
+ * Collapse multiple hyphens, trim trailing hyphens, max 50 chars.
+ */
+function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/-+$/, "")
+    .slice(0, 50)
+    .replace(/-+$/, "") // trim again after truncation
+    || "scenario";
+}
+
+/**
+ * Call Claude via the `claude` CLI to generate scenario fields from agent + description.
+ * Returns a complete ParsedScenario with all fields including the actual eval prompt.
+ * On error, throws with a descriptive message.
+ */
+async function generateScenarioFields(agent: string, description: string, nextNum: number): Promise<ParsedScenario> {
+  const systemPrompt = `You are Bird, the Dream Team's domain analysis expert. Given a description of what an eval scenario should test for a specific agent, generate a complete eval scenario.
+You MUST respond with ONLY valid JSON and nothing else.
+Do not include markdown fences, explanations, or any text outside the JSON object.
+
+The JSON must have exactly these fields:
+{
+  "title": "Eval: {Agent} — Scenario N — {Name} ({Type})",
+  "overview": "Brief description of what this scenario tests",
+  "prompt": "The actual eval prompt that will be fed to the agent — a realistic user request or task description that tests what the description asks for",
+  "expected_behavior": "Multi-line description of what the agent should do to pass",
+  "failure_modes": "Multi-line description of how the agent could fail this scenario",
+  "scoring_rubric": "pass:\\n  <pass criteria>\\npartial:\\n  <partial credit criteria>\\nfail:\\n  <fail criteria>",
+  "category": "one of: capability, regression, happy-path, edge-case, adversarial, draft",
+  "type": "one of: Happy Path, Edge Case, Escalation Case, Negative Case, Capability, Hard, Very Hard, Expert"
+}
+
+Use em dashes (—) in the title, not regular dashes.
+The scenario number N in the title MUST be ${String(nextNum).padStart(2, "0")} — this is the next available number for this agent.
+Make the prompt a realistic, detailed user request that naturally tests the described scenario.
+Make the expected_behavior, failure_modes, and scoring_rubric detailed and specific to the scenario.
+
+CRITICAL: Output ONLY the raw JSON object. No markdown fences, no \`\`\`json blocks, no commentary. First character must be { and last must be }.`;
+
+  const userMessage = `Agent: ${agent}
+Description: ${description}
+
+Generate a complete eval scenario including the actual eval prompt.`;
+
+  const proc = Bun.spawn(
+    ["claude", "-p", userMessage, "--system-prompt", systemPrompt, "--output-format", "text", "--max-turns", "1"],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    }
+  );
+
+  // Read stdout/stderr concurrently with process execution to avoid pipe deadlock
+  const stdoutPromise = new Response(proc.stdout).text();
+  const stderrPromise = new Response(proc.stderr).text();
+
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => { proc.kill(); reject(new Error("Claude CLI timed out after 60s")); }, 60000)
+  );
+  const exitCode = await Promise.race([proc.exited, timeout]);
+
+  const stdout = await stdoutPromise;
+  const stderr = await stderrPromise;
+
+  if (exitCode !== 0) {
+    throw new Error(`Claude CLI failed (exit ${exitCode}): ${stderr.slice(0, 400)}`);
+  }
+
+  // Extract JSON — try multiple strategies
+  let jsonText = stdout.trim();
+  // Strategy 1: strip markdown fences (complete fences)
+  const fenceMatch = /```(?:json)?\s*([\s\S]*?)```/.exec(jsonText);
+  if (fenceMatch) {
+    jsonText = fenceMatch[1].trim();
+  } else {
+    // Strategy 2: find first { to last } (handles truncated fences or prose wrapping)
+    const firstBrace = jsonText.indexOf("{");
+    const lastBrace = jsonText.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      jsonText = jsonText.slice(firstBrace, lastBrace + 1);
+    }
+  }
+
+  let parsed: Record<string, string>;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    throw new Error(`Failed to parse Claude response as JSON. Raw output: ${stdout.slice(0, 600)}`);
+  }
+
+  return {
+    title: String(parsed.title ?? ""),
+    overview: String(parsed.overview ?? ""),
+    expected_behavior: String(parsed.expected_behavior ?? ""),
+    failure_modes: String(parsed.failure_modes ?? ""),
+    scoring_rubric: String(parsed.scoring_rubric ?? ""),
+    category: String(parsed.category ?? "draft"),
+    graders: [],
+    prompt: String(parsed.prompt ?? ""),
+    reference_output: "",
+  };
+}
+
+// ── New Scenario route handlers ───────────────────────────────────────────────
+
+/** GET /scenarios/new */
+export function scenarioNewHandler(req: Request, _params: Record<string, string>): Response {
+  const url = new URL(req.url);
+  const agent = url.searchParams.get("agent") ?? "";
+  const body = ScenarioNewPage(agent);
+  return html(maybeLayout(req, "New Scenario", body, "/scenarios"));
+}
+
+/** POST /api/scenarios/generate — htmx fragment */
+export async function scenarioGenerateHandler(req: Request, _params: Record<string, string>): Promise<Response> {
+  const formParams = await parseFormBody(req);
+  const agent = formParams.get("agent") ?? "";
+  const description = (formParams.get("description") ?? "").trim();
+
+  // Validate inputs
+  if (!agent || !KNOWN_AGENTS.includes(agent as typeof KNOWN_AGENTS[number])) {
+    return html(ScenarioGenerateFragment(agent, emptyScenario(), "Please select a valid agent."));
+  }
+  if (!description) {
+    return html(ScenarioGenerateFragment(agent, emptyScenario(), "Scenario description is required."));
+  }
+
+  let generated: ParsedScenario;
+  try {
+    const nextNum = nextScenarioNumber(agent);
+    generated = await generateScenarioFields(agent, description, nextNum);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return html(ScenarioGenerateFragment(agent, emptyScenario(), `Generation failed: ${errMsg}`));
+  }
+
+  return html(ScenarioGenerateFragment(agent, generated));
+}
+
+function emptyScenario(): ParsedScenario {
+  return {
+    title: "",
+    overview: "",
+    category: "draft",
+    graders: [],
+    prompt: "",
+    reference_output: "",
+    expected_behavior: "",
+    failure_modes: "",
+    scoring_rubric: "",
+  };
+}
+
+/** POST /api/scenarios/new — save new scenario */
+export async function scenarioNewSaveHandler(req: Request, _params: Record<string, string>): Promise<Response> {
+  const formParams = await parseFormBody(req);
+  const agent = formParams.get("agent") ?? "";
+
+  // Validate agent
+  if (!agent || !KNOWN_AGENTS.includes(agent as typeof KNOWN_AGENTS[number])) {
+    return html("Bad Request: invalid agent", 400);
+  }
+
+  // Path traversal guard on agent
+  if (agent.includes("..") || agent.includes("/")) {
+    return html("Bad Request", 400);
+  }
+
+  const parsed = parsedFromForm(formParams);
+  const issues = validateScenario(parsed);
+  const hasErrors = issues.some(i => i.level === "error");
+
+  if (hasErrors) {
+    // Re-render the generate fragment with errors shown
+    const body = ScenarioGenerateFragment(agent, parsed);
+    return html(maybeLayout(req, "New Scenario", ScenarioNewPage(agent) + body, "/scenarios"));
+  }
+
+  // Auto-generate scenarioId: next number + slug from title.
+  // Use atomic 'wx' flag to prevent TOCTOU race: if two concurrent saves compute the same
+  // number and both pass an existsSync check, the second would silently overwrite the first.
+  // With 'wx', writeFileSync throws EEXIST if the file already exists, so we retry with an
+  // incremented number (up to 5 attempts) instead of doing a separate existsSync check.
+  const slug = slugify(parsed.title.replace(/^Eval:\s+[^—]+—\s+Scenario\s+\d+\s+—\s+/i, "").replace(/\s*\(.*\)\s*$/, ""));
+  const serialized = serializeScenario(parsed);
+
+  let scenarioId: string | undefined;
+  let filePath: string | undefined;
+  let startNum = nextScenarioNumber(agent);
+  const MAX_ATTEMPTS = 5;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const num = startNum + attempt;
+    const paddedNum = String(num).padStart(2, "0");
+    const candidateId = `scenario-${paddedNum}-${slug}`;
+    const candidatePath = scenarioPath(agent, candidateId);
+    try {
+      writeFileSync(candidatePath, serialized, { flag: "wx" });
+      scenarioId = candidateId;
+      filePath = candidatePath;
+      break;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
+        // File already exists — try next number
+        continue;
+      }
+      // Any other error (permissions, missing dir, etc.)
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const body = ScenarioGenerateFragment(agent, parsed, `Failed to write file: ${errMsg}`);
+      return html(maybeLayout(req, "New Scenario", body, "/scenarios"), 500);
+    }
+  }
+
+  if (!scenarioId || !filePath) {
+    const body = ScenarioGenerateFragment(agent, parsed, `Could not find a free scenario slot after ${MAX_ATTEMPTS} attempts — please try again.`);
+    return html(maybeLayout(req, "New Scenario", body, "/scenarios"), 409);
+  }
+
+  // Redirect to the edit page with saved flash
+  return new Response(null, {
+    status: 302,
+    headers: { Location: `/scenarios/${encodeURIComponent(agent)}/${encodeURIComponent(scenarioId)}?saved=1` },
   });
 }

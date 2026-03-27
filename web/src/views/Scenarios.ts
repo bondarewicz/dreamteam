@@ -74,16 +74,23 @@ function typeClass(type: string): string {
   return first.toLowerCase().replace(/\s+/g, "-");
 }
 
+export const KNOWN_AGENTS = ["bird", "kobe", "magic", "mj", "pippen", "shaq"] as const;
+export type KnownAgent = typeof KNOWN_AGENTS[number];
+
 export function ScenariosListPage(
   groups: Array<{ agent: string; scenarios: ScenarioListItem[] }>,
   filterAgent: string
 ): string {
   const agents = groups.map(g => g.agent);
+  const newUrl = filterAgent ? `/scenarios/new?agent=${esc(filterAgent)}` : "/scenarios/new";
 
   const agentFilterHtml = `
-    <div class="sc-agent-filter">
-      <a href="/scenarios" class="sc-filter-btn${filterAgent === "" ? " active" : ""}">All</a>
-      ${agents.map(a => `<a href="/scenarios?agent=${esc(a)}" class="sc-filter-btn${filterAgent === a ? " active" : ""}">${esc(a)}</a>`).join("")}
+    <div class="sc-agent-filter" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:24px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1">
+        <a href="/scenarios" class="sc-filter-btn${filterAgent === "" ? " active" : ""}">All</a>
+        ${agents.map(a => `<a href="/scenarios?agent=${esc(a)}" class="sc-filter-btn${filterAgent === a ? " active" : ""}">${esc(a)}</a>`).join("")}
+      </div>
+      <a href="${newUrl}" class="sc-btn-new-scenario">+ New Scenario</a>
     </div>
   `;
 
@@ -139,9 +146,10 @@ export function ScenariosListPage(
     ${emptyHtml}
 
     <style>
-      .sc-agent-filter { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
       .sc-filter-btn { display: inline-block; padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; text-decoration: none; background: var(--surface-3); border: 1px solid var(--border); color: var(--text-dim); transition: all 0.15s; }
       .sc-filter-btn:hover, .sc-filter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .sc-btn-new-scenario { display: inline-block; padding: 6px 16px; border-radius: 6px; font-size: 12px; font-weight: 700; text-decoration: none; background: var(--accent); border: none; color: #fff; transition: opacity 0.15s; white-space: nowrap; }
+      .sc-btn-new-scenario:hover { opacity: 0.85; }
       .sc-agent-group { margin-bottom: 28px; }
       .sc-agent-group-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
       .sc-count { font-size: 12px; color: var(--text-muted); }
@@ -293,8 +301,6 @@ export function ScenarioEditPage(
       <p>Edit scenario fields. Click "Generate Graders" to auto-generate graders from expected behavior and scoring rubric.</p>
     </div>
 
-    ${issuesHtml}
-
     <form
       id="scenario-form"
       method="POST"
@@ -382,6 +388,8 @@ export function ScenarioEditPage(
             ${graderSectionHtml}
           </div>
         </div>
+
+        ${issuesHtml}
 
         <!-- Actions -->
         <div class="sc-actions">
@@ -476,8 +484,7 @@ export function ScenarioEditPage(
       .sc-btn-run:hover { background: rgba(74,222,128,0.22); border-color: var(--pass); }
       .sc-btn-ghost { background: none; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; text-decoration: none; padding: 8px 4px; transition: color 0.15s; }
       .sc-btn-ghost:hover { color: var(--text); }
-      .sc-spinner { font-size: 12px; color: var(--text-muted); display: none; }
-      .htmx-request .sc-spinner { display: inline; }
+      .sc-spinner { font-size: 12px; color: var(--text-muted); }
       .sc-dry-run-error { font-size: 12px; color: var(--fail); }
 
       /* Validation box */
@@ -628,6 +635,240 @@ export function SaveSuccessPage(agent: string, scenarioId: string): string {
   return `
     <div class="sc-validation-box sc-validation-ok" id="validation-result">
       <div class="sc-issue ok"><span class="sc-issue-icon">&#10003;</span><span>Saved successfully.</span></div>
+    </div>
+  `;
+}
+
+// ── New Scenario Page ────────────────────────────────────────────────────────
+
+/**
+ * ScenarioNewPage — form to create a new scenario.
+ * Step 1: agent + description only. Step 2 (post-generate): full edit form swapped in via htmx.
+ */
+export function ScenarioNewPage(preselectedAgent = ""): string {
+  const agentOptions = KNOWN_AGENTS.map(a =>
+    `<option value="${esc(a)}"${preselectedAgent === a ? " selected" : ""}>${esc(a)}</option>`
+  ).join("");
+
+  return `
+    <div class="page-title">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <a href="/scenarios" style="color:var(--text-muted);text-decoration:none;font-size:13px;font-weight:600">&#8592; Scenarios</a>
+        <span style="color:var(--border)">/</span>
+        <h1 style="margin:0;font-size:18px">New Scenario</h1>
+      </div>
+      <p>Select an agent and describe what the scenario should test. Click "Generate Scenario" to have Bird generate all fields including the eval prompt.</p>
+    </div>
+
+    <div class="sc-edit-layout" style="max-width:820px">
+
+      <!-- Step 1: Agent + Description -->
+      <form id="new-scenario-form">
+
+        <div style="display:flex;flex-direction:column;gap:20px">
+
+          <!-- Agent -->
+          <div class="sc-field-group sc-field-narrow">
+            <label class="sc-field-label" for="ns-agent">Agent <span class="sc-required">Required</span></label>
+            <select id="ns-agent" name="agent" class="sc-select" required>
+              <option value="">-- select agent --</option>
+              ${agentOptions}
+            </select>
+          </div>
+
+          <!-- Description -->
+          <div class="sc-field-group">
+            <label class="sc-field-label" for="ns-description">
+              Scenario Description
+              <span class="sc-field-hint sc-required">Required — describe what this scenario should test (not the eval prompt itself)</span>
+            </label>
+            <textarea
+              id="ns-description"
+              name="description"
+              class="sc-textarea sc-textarea-tall"
+              rows="8"
+              placeholder="e.g., Test Bird's ability to identify domain rules when the input contains contradictory business requirements"
+              required
+            ></textarea>
+          </div>
+
+          <!-- Generate button -->
+          <div class="sc-actions">
+            <button
+              type="button"
+              class="sc-btn-primary"
+              id="generate-btn"
+              hx-post="/api/scenarios/generate"
+              hx-include="#new-scenario-form"
+              hx-target="#generated-fields"
+              hx-swap="innerHTML"
+              hx-indicator="#generate-spinner"
+              hx-disabled-elt="this"
+              hx-on:htmx:confirm="if(!document.querySelector('[name=agent]').value || !document.querySelector('[name=description]').value.trim()) { evt.preventDefault(); alert('Please select an agent and enter a scenario description.'); }"
+            >
+              Generate Scenario
+            </button>
+            <span id="generate-spinner" class="htmx-indicator sc-spinner">generating...</span>
+            <a href="/scenarios" class="sc-btn-ghost">Cancel</a>
+          </div>
+        </div>
+
+      </form>
+
+      <!-- Step 2: Generated fields appear here (htmx swap target) -->
+      <div id="generated-fields"></div>
+
+    </div>
+
+    <style>
+      .sc-edit-layout { display: flex; flex-direction: column; gap: 20px; max-width: 820px; }
+      .sc-field-group { display: flex; flex-direction: column; gap: 6px; }
+      .sc-field-narrow { max-width: 280px; }
+      .sc-field-label { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+      .sc-field-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-muted); font-size: 11px; }
+      .sc-required { color: var(--fail) !important; font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; }
+      .sc-text-input { width: 100%; background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; box-sizing: border-box; }
+      .sc-text-input:focus { border-color: var(--accent); }
+      .sc-textarea { width: 100%; background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; resize: vertical; line-height: 1.6; box-sizing: border-box; }
+      .sc-textarea:focus { border-color: var(--accent); }
+      .sc-textarea-mono { font-family: var(--mono); font-size: 12px; }
+      .sc-textarea-tall { min-height: 160px; }
+      .sc-select { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; cursor: pointer; }
+      .sc-select:focus { border-color: var(--accent); }
+      .sc-actions { display: flex; gap: 10px; align-items: center; padding-top: 8px; flex-wrap: wrap; }
+      .sc-btn-primary { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 9px 20px; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; text-decoration: none; }
+      .sc-btn-primary:hover { opacity: 0.85; }
+      .sc-btn-ghost { background: none; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; text-decoration: none; padding: 8px 4px; transition: color 0.15s; }
+      .sc-btn-ghost:hover { color: var(--text); }
+      .sc-spinner { font-size: 12px; color: var(--text-muted); }
+      .sc-generate-error { color: var(--fail); font-size: 13px; padding: 12px 16px; background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.25); border-radius: 8px; }
+    </style>
+
+  `;
+}
+
+/**
+ * ScenarioGenerateFragment — htmx fragment returned by POST /api/scenarios/generate.
+ * Renders the full edit form pre-filled with AI-generated content.
+ * This replaces the inner HTML of #generated-fields.
+ */
+export function ScenarioGenerateFragment(
+  agent: string,
+  generated: ParsedScenario,
+  errorMessage?: string
+): string {
+  if (errorMessage) {
+    return `<div class="sc-generate-error">${esc(errorMessage)}</div>`;
+  }
+
+  const categoryIsKnown = generated.category !== "" && KNOWN_CATEGORIES.includes(generated.category as KnownCategory);
+  const categoryIsUnknown = generated.category !== "" && !KNOWN_CATEGORIES.includes(generated.category as KnownCategory);
+  const categoryOptions = KNOWN_CATEGORIES.map(cat =>
+    `<option value="${esc(cat)}"${generated.category === cat ? " selected" : ""}>${esc(cat)}</option>`
+  ).join("");
+  const emptyOption = !categoryIsKnown
+    ? `<option value="" selected>-- select --</option>`
+    : `<option value="">-- select --</option>`;
+  const unknownOption = categoryIsUnknown
+    ? `<option value="${esc(generated.category)}">${esc(generated.category)} (unknown)</option>`
+    : "";
+
+  return `
+    <div style="margin-top:24px;padding-top:24px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+        <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--pass)">&#10003; Generated</span>
+        <span style="font-size:12px;color:var(--text-muted)">Review and edit the fields below, then click Save to create the scenario file.</span>
+      </div>
+
+      <div id="new-validation-result"></div>
+
+      <form
+        id="new-scenario-save-form"
+        method="POST"
+        action="/api/scenarios/new"
+        style="display:flex;flex-direction:column;gap:20px"
+      >
+        <input type="hidden" name="agent" value="${esc(agent)}">
+
+        <!-- Title -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="ns-title">
+            Title
+            <span class="sc-field-hint">Format: Eval: {Agent} — Scenario {N} — {Name} ({Type})</span>
+          </label>
+          <input
+            id="ns-title"
+            name="title"
+            type="text"
+            class="sc-text-input"
+            value="${esc(generated.title)}"
+          >
+        </div>
+
+        <!-- Overview -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="ns-overview">Overview</label>
+          <textarea id="ns-overview" name="overview" class="sc-textarea" rows="3">${esc(generated.overview)}</textarea>
+        </div>
+
+        <!-- Category -->
+        <div class="sc-field-group sc-field-narrow">
+          <label class="sc-field-label" for="ns-category">Category</label>
+          <select id="ns-category" name="category" class="sc-select">
+            ${emptyOption}
+            ${unknownOption}
+            ${categoryOptions}
+          </select>
+        </div>
+
+        <!-- Prompt (read-only display, value carried from the generation step) -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="ns-prompt-save">
+            Prompt
+            <span class="sc-field-hint sc-required">Required</span>
+          </label>
+          <textarea id="ns-prompt-save" name="prompt" class="sc-textarea sc-textarea-mono sc-textarea-tall" rows="10">${esc(generated.prompt)}</textarea>
+        </div>
+
+        <!-- Expected Behavior -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="ns-expected-behavior">Expected Behavior</label>
+          <textarea id="ns-expected-behavior" name="expected_behavior" class="sc-textarea" rows="6">${esc(generated.expected_behavior)}</textarea>
+        </div>
+
+        <!-- Failure Modes -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="ns-failure-modes">Failure Modes</label>
+          <textarea id="ns-failure-modes" name="failure_modes" class="sc-textarea" rows="5">${esc(generated.failure_modes)}</textarea>
+        </div>
+
+        <!-- Scoring Rubric -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="ns-scoring-rubric">
+            Scoring Rubric
+            <span class="sc-field-hint">Should include pass:, partial:, fail: sub-sections</span>
+          </label>
+          <textarea id="ns-scoring-rubric" name="scoring_rubric" class="sc-textarea sc-textarea-mono" rows="8">${esc(generated.scoring_rubric)}</textarea>
+        </div>
+
+        <!-- Reference Output (optional, left empty by default) -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="ns-reference-output">
+            Reference Output
+            <span class="sc-field-hint">Optional — expected verbatim output</span>
+          </label>
+          <textarea id="ns-reference-output" name="reference_output" class="sc-textarea sc-textarea-mono" rows="4">${esc(generated.reference_output)}</textarea>
+        </div>
+
+        <!-- Actions -->
+        <div class="sc-actions">
+          <button type="submit" class="sc-btn-primary">
+            Save Scenario
+          </button>
+          <a href="/scenarios" class="sc-btn-ghost">Cancel</a>
+        </div>
+
+      </form>
     </div>
   `;
 }
