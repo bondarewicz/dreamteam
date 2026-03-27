@@ -1,7 +1,7 @@
 /**
  * Scenario browser and editor views — /scenarios
  */
-import { esc } from "./html.ts";
+import { esc, agentColor } from "./html.ts";
 
 export const KNOWN_GRADER_TYPES = [
   "json_valid",
@@ -286,7 +286,7 @@ export function ScenarioEditPage(
   return `
     <div class="page-title">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <a href="/scenarios?agent=${esc(agent)}" style="color:var(--text-dim);text-decoration:none;font-size:13px">&#8592; ${esc(agent)}</a>
+        <a href="/scenarios?agent=${esc(agent)}" style="color:${agentColor(agent)};text-decoration:none;font-size:13px;font-weight:600">&#8592; ${esc(agent)}</a>
         <span style="color:var(--border)">/</span>
         <h1 style="margin:0;font-family:var(--mono);font-size:16px">${esc(scenarioId)}</h1>
       </div>
