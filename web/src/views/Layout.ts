@@ -4,7 +4,6 @@ import { esc } from "./html.ts";
 export function Layout(title: string, body: string, activeNav = ""): string {
   const navItems = [
     { href: "/", label: "Dashboard" },
-    { href: "/evals", label: "Eval Runs" },
   ];
   const navLinks = navItems.map(item => {
     const active = activeNav === item.href ? ' style="color:var(--text)"' : "";
@@ -17,12 +16,11 @@ export function Layout(title: string, body: string, activeNav = ""): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${esc(title)} — DreamTeam</title>
-  <link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/theme.css">
   <script src="/static/htmx.min.js"></script>
 </head>
 <body>
   <nav>
-    <a href="/" class="nav-brand">Dream<span>Team</span></a>
     ${navLinks}
   </nav>
   <div class="container">

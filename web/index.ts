@@ -7,7 +7,6 @@ import { getDb, isDbEmpty } from "./src/db.ts";
 import { migrate } from "./src/migrate.ts";
 import {
   dashboardHandler,
-  evalsIndexHandler,
   evalRunHandler,
   evalResultsFragment,
   traceHandler,
@@ -35,7 +34,6 @@ if (isDbEmpty()) {
 // Set up router
 const router = new Router();
 router.get("/", dashboardHandler);
-router.get("/evals", evalsIndexHandler);
 router.get("/evals/new", newEvalRunHandler);
 router.get("/evals/live", evalRunLiveHandler);
 router.get("/evals/:runId", evalRunHandler);

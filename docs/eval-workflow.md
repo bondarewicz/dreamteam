@@ -12,7 +12,7 @@ Each agent (Bird, Kobe, MJ, Shaq, Pippen, Magic) has 20 eval scenarios. Each sce
 2. **Deterministic graders** — structural/format checks (field presence, JSON validity, value constraints)
 3. **Rubric scoring** — LLM-based quality scoring by Coach K
 
-Results are written to `evals/results/raw/<timestamp>/` and compiled into an HTML report. The HTML report is the single source of truth. Never read scores from the terminal; never guess scores from memory.
+Results are written to `evals/results/raw/<timestamp>/` and compiled into the web app DB. The web app at localhost:3000 is the single source of truth. Never read scores from the terminal; never guess scores from memory.
 
 The eval script handles the full pipeline. Never orchestrate agent calls manually.
 
@@ -26,13 +26,13 @@ Run the full suite to get a current picture across all agents.
 /eval
 ```
 
-Open the HTML report. Look at pass rates per agent. Identify which agent has the lowest score or the largest regression. That is your target.
+Open the web app at localhost:3000. Look at pass rates per agent. Identify which agent has the lowest score or the largest regression. That is your target.
 
 ---
 
 ## Step 2: Pick your target
 
-The HTML report shows per-agent pass rates. Pick the agent with the lowest pass^N rate or the most recent regression. In the Bird session, Bird dropped from ~65% to ~15-20% after a structured output schema change — that made it the obvious target.
+The web app at localhost:3000 shows per-agent pass rates. Pick the agent with the lowest pass^N rate or the most recent regression. In the Bird session, Bird dropped from ~65% to ~15-20% after a structured output schema change — that made it the obvious target.
 
 ---
 
@@ -49,7 +49,7 @@ Analyze grader vs rubric results separately in the report:
 - **Grader failures** = structural or format issues. The agent is not producing output that matches the expected schema. Fix the output schema in the scenario grader config, or fix how the agent formats its response.
 - **Rubric failures** = content quality issues. The agent is producing valid structure but the content is wrong or incomplete. Fix the agent prompt or spec.
 
-Make your change, re-run `/eval bird`, and compare the report. Repeat until single-trial scores stabilize — meaning additional runs no longer reveal new failure modes.
+Make your change, re-run `/eval bird`, and compare results in the web app. Repeat until single-trial scores stabilize — meaning additional runs no longer reveal new failure modes.
 
 ---
 
@@ -102,7 +102,7 @@ The post-change 60% represents higher actual quality than the pre-change 65%, ev
 
 **Never fabricate or guess scores.** Every score in your analysis must come from a fresh eval run. Do not re-score from memory. Do not estimate.
 
-**HTML report is the single source of truth.** Do not read scores from terminal output. Do not summarize results in the terminal.
+**Web app at localhost:3000 is the single source of truth.** Do not read scores from terminal output. Do not summarize results in the terminal.
 
 **Append-only results.** Never modify existing result files. Each run creates a new timestamped directory.
 
@@ -128,15 +128,15 @@ The post-change 60% represents higher actual quality than the pre-change 65%, ev
 
 ## Traces
 
-Every eval run captures a full conversation trace per scenario — every tool call, thinking step, and assistant response. When a scenario fails, click the "trace" link on its card in the HTML report to see exactly where the reasoning went wrong.
+Every eval run captures a full conversation trace per scenario — every tool call, thinking step, and assistant response. When a scenario fails, click the "trace" link on its card in the web app to see exactly where the reasoning went wrong.
 
-Trace pages are standalone HTML files in `reports/evals/traces/`. They show the step-by-step flow with:
+Trace pages are rendered by the web app. They show the step-by-step flow with:
 - User prompt, thinking blocks, assistant responses, tool calls + results
 - Per-step metadata (tokens, cache hit ratio, service tier)
 - First-failure highlighting on fail/partial scenarios
 - "Show full output" toggle for truncated content
 
-See `docs/follow-up-2026-03-24.md` for full details on trace capture and rendering.
+See `docs/follow-up-2026-03-24.md` for full details on trace capture.
 
 ---
 
@@ -146,9 +146,10 @@ See `docs/follow-up-2026-03-24.md` for full details on trace capture and renderi
 - Scenario files: `evals/<agent>/scenario-NN-<name>.md`
 - Grader configs: embedded in scenario files under `graders:` block
 - Raw results: `evals/results/raw/<timestamp>/`
-- Trace data: embedded in raw results as `trace` array
-- Trace pages: `reports/evals/traces/*.html`
-- HTML report: generated from raw results, opened by `/eval`
+- Compiled results: `evals/results/*.json`
+- Trace data: embedded in raw results as `trace` array, viewable via web app
+- Web app (single source of truth): `http://localhost:3000` (run with `bun web/index.ts`)
+- Web app DB: `data/dreamteam.db` (populated by migration)
 - Eval script: `scripts/eval-run.sh`
-- Report generator: `scripts/eval-report.sh`
+- DB migration trigger: `scripts/eval-report.sh generate`
 - Grader implementations: `scripts/eval-graders.sh`
