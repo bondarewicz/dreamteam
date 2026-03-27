@@ -43,6 +43,12 @@ function scoreColor(rate: number): string {
   return "var(--fail)";
 }
 
+function typeClass(type: string): string {
+  if (!type) return "";
+  const first = type.split("/")[0].trim();
+  return first.toLowerCase().replace(/\s+/g, "-");
+}
+
 export function EvalRunPage(
   run: EvalRun,
   results: EvalResult[],
@@ -895,7 +901,7 @@ function buildAgentSections(
 
       // Type tag
       const typeTag = scenarioType
-        ? `<span class="b-type-tag">${esc(scenarioType.slice(0, 10))}</span>`
+        ? `<span class="b-type-tag ${esc(typeClass(scenarioType))}">${esc(scenarioType)}</span>`
         : "";
 
       // Failure reason
