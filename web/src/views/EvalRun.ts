@@ -1,14 +1,9 @@
 import type { EvalRun, EvalResult, AgentSummary, ScenarioHistoryEntry } from "../db.ts";
 // EvalRun is also the previous baseline type
-import { esc, pct, passBar, ms, cost, formatDate, agentChip, scoreBadge, truncate } from "./html.ts";
+import { esc, pct, passBar, ms, cost, formatDate, agentChip, scoreBadge, truncate, AGENT_COLORS, agentColor } from "./html.ts";
 
 // Alphabetical order for agents
 const AGENT_ORDER = ["bird", "kobe", "magic", "mj", "pippen", "shaq"];
-
-const AGENT_COLORS: Record<string, string> = {
-  bird: "#3fb950", mj: "#58a6ff", shaq: "#bc8cff",
-  kobe: "#f85149", pippen: "#39d2c0", magic: "#d29922"
-};
 
 const AGENT_ROLES: Record<string, string> = {
   bird: "Domain Authority",
@@ -18,10 +13,6 @@ const AGENT_ROLES: Record<string, string> = {
   pippen: "DevOps",
   magic: "Orchestrator"
 };
-
-function agentColor(agent: string): string {
-  return AGENT_COLORS[agent.toLowerCase()] ?? "#7d8590";
-}
 
 function confClass(n: number | null): string {
   if (n == null) return "";
