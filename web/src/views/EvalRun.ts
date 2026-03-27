@@ -640,28 +640,32 @@ function buildFocusSection(
     const color = agentColor(s.agent);
     const chipName = s.agent.charAt(0).toUpperCase() + s.agent.slice(1);
     const passC = s.pass_count ?? 0;
+    const partialC = s.partial_count ?? 0;
+    const failC = s.fail_count ?? 0;
+    const currTotal = passC + partialC + failC;
+    const currPct = currTotal > 0 ? Math.round((passC / currTotal) * 100) : 0;
 
-    // Compute delta vs previous baseline per agent
+    // Compute delta vs previous baseline per agent (rate-based, not count-based)
     const prevSummary = previousBaselineSummaries.find(p => p.agent.toLowerCase() === s.agent.toLowerCase());
     let deltaHtml = "";
     let noteHtml = "";
     if (prevSummary != null) {
       const prevPass = prevSummary.pass_count ?? 0;
-      const delta = passC - prevPass;
+      const prevTotal = prevPass + (prevSummary.partial_count ?? 0) + (prevSummary.fail_count ?? 0);
+      const prevPct = prevTotal > 0 ? Math.round((prevPass / prevTotal) * 100) : 0;
+      const deltaPct = currPct - prevPct;
       let deltaClass = "same";
       let deltaText = "=";
-      if (delta > 0) { deltaClass = "up"; deltaText = `+${delta} pass`; }
-      else if (delta < 0) { deltaClass = "down"; deltaText = `${delta} pass`; }
+      if (deltaPct > 0) { deltaClass = "up"; deltaText = `+${deltaPct}%`; }
+      else if (deltaPct < 0) { deltaClass = "down"; deltaText = `${deltaPct}%`; }
       deltaHtml = `<span class="change-delta ${deltaClass}">${deltaText}</span>`;
-      if (delta < 0) {
+      if (deltaPct < 0) {
         noteHtml = `<span class="change-note">regression</span>`;
       }
     } else {
-      // No previous baseline — show absolute
-      const total = passC + (s.partial_count ?? 0) + (s.fail_count ?? 0);
-      const pctVal = total > 0 ? Math.round((passC / total) * 100) : 0;
-      const deltaClass = pctVal >= 80 ? "up" : pctVal >= 50 ? "same" : "down";
-      deltaHtml = `<span class="change-delta ${deltaClass}">${passC} pass</span>`;
+      // No previous baseline — show absolute pass rate
+      const deltaClass = currPct >= 80 ? "up" : currPct >= 50 ? "same" : "down";
+      deltaHtml = `<span class="change-delta ${deltaClass}">${currPct}%</span>`;
     }
 
     return `
@@ -906,18 +910,18 @@ function buildAgentSections(
         justHtml = `<div style="font-size:11px;color:var(--text-dim);line-height:1.4">${esc(truncate(displayResult.justification, 200))}</div>`;
       }
 
+      const tagsRow = (typeTag || categoryTag)
+        ? `<div class="b-tags">${typeTag}${categoryTag}</div>`
+        : "";
+
       return `
       <div class="b-card ${esc(cardScore)}">
-        <div class="b-header">
-          <div>
-            <div class="b-agent" style="color:${color}">${esc(scenarioId)}</div>
-            <div class="b-name">${esc(scenarioName)} ${typeTag}${categoryTag}</div>
-          </div>
-          <div class="b-score-group">
-            ${confNum != null ? `<span class="b-conf-num ${confClass2}">${confNum}</span>` : ""}
-            <div class="b-score ${esc(cardScore)}">${esc(cardScore.charAt(0).toUpperCase() + cardScore.slice(1))}</div>
-          </div>
+        <div class="b-score-group">
+          ${confNum != null ? `<span class="b-conf-num ${confClass2}">${confNum}</span>` : ""}
+          <div class="b-score ${esc(cardScore)}">${esc(cardScore.charAt(0).toUpperCase() + cardScore.slice(1))}</div>
         </div>
+        <div class="b-name" title="${esc(scenarioId)}">${esc(scenarioName)}</div>
+        ${tagsRow}
         ${graderRowHtml}
         ${trialRowHtml}
         ${criteriaHtml}
