@@ -39,7 +39,23 @@ bash "${REPO_ROOT}/scripts/eval-run.sh" <translated-flags>
 
 Run this with `timeout: 600000` (10 minutes) since 120 agent calls take time. Show the user the script output as it streams.
 
-If the script exits non-zero, show the error and ask the user how to proceed.
+If the script exits non-zero, show the error and ask the user using **AskUserQuestion** (NEVER as free text):
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Eval script failed. How do you want to proceed?",
+    header: "Eval Error",
+    options: [
+      { label: "Retry", description: "Re-run the eval script from scratch" },
+      { label: "Resume", description: "Resume from last checkpoint (re-score without re-running agents)" },
+      { label: "Show details", description: "Display the full error output before deciding" },
+      { label: "Abort", description: "Stop — do not retry" }
+    ],
+    multiSelect: false
+  }]
+})
+```
 
 ### Step 2: Open the web app
 
