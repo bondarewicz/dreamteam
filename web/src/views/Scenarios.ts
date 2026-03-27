@@ -15,6 +15,7 @@ export const KNOWN_GRADER_TYPES = [
 ] as const;
 
 export const KNOWN_CATEGORIES = [
+  "capability",
   "regression",
   "happy-path",
   "edge-case",
@@ -158,15 +159,79 @@ export function ScenariosListPage(
 
 // ── Edit Page ────────────────────────────────────────────────────────────────
 
+import type { GeneratedGrader } from "../grader-generator.ts";
+
+/**
+ * Render a single grader preview card (used in both ScenarioEditPage and GraderPreviewFragment).
+ */
+function graderPreviewCard(gen: GeneratedGrader, idx: number, accepted: boolean): string {
+  const g = gen.grader;
+  const confClass = gen.confidence === "high" ? "sc-conf-high" : gen.confidence === "medium" ? "sc-conf-med" : "sc-conf-low";
+  const confLabel = gen.confidence === "high" ? "high" : gen.confidence === "medium" ? "medium" : "low";
+
+  // Build human-readable summary of grader properties
+  const props = Object.entries(g)
+    .filter(([k]) => k !== "type")
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `<span class="sc-grader-prop-chip"><span class="sc-grader-prop-key">${esc(k)}</span> ${esc(String(v))}</span>`)
+    .join("");
+
+  // Hidden inputs that get submitted with the form when accepted
+  const hiddenInputs = accepted
+    ? buildGraderHiddenInputs(g, idx)
+    : "";
+
+  const cardId = `gen-grader-card-${idx}`;
+  const checkboxId = `gen-grader-accept-${idx}`;
+
+  // Always build the full hidden inputs — stored in data attr for JS toggle restore
+  const allHiddenInputs = buildGraderHiddenInputs(g, idx);
+
+  return `
+    <div class="sc-gen-grader-card ${accepted ? "sc-gen-grader-accepted" : "sc-gen-grader-rejected"}" id="${cardId}" data-idx="${idx}" data-hidden-inputs="${esc(allHiddenInputs)}">
+      <div class="sc-gen-grader-header">
+        <span class="sc-gen-grader-type">${esc(g.type)}</span>
+        ${props ? `<span class="sc-gen-grader-props">${props}</span>` : ""}
+        <span class="sc-conf-badge ${confClass}">${confLabel}</span>
+        <label class="sc-gen-grader-toggle" title="${accepted ? "Click to reject this grader" : "Click to accept this grader"}">
+          <input
+            type="checkbox"
+            id="${checkboxId}"
+            class="sc-gen-grader-checkbox"
+            data-idx="${idx}"
+            ${accepted ? "checked" : ""}
+            onchange="toggleGraderCard(this)"
+          >
+          <span class="sc-gen-grader-toggle-label">${accepted ? "Accepted" : "Rejected"}</span>
+        </label>
+      </div>
+      <div class="sc-gen-grader-source">${esc(gen.sourceText)}</div>
+      <div class="sc-gen-grader-hidden" id="gen-grader-hidden-${idx}">
+        ${hiddenInputs}
+      </div>
+    </div>
+  `;
+}
+
+function buildGraderHiddenInputs(g: Grader, idx: number): string {
+  const parts: string[] = [];
+  parts.push(`<input type="hidden" name="grader_type_${idx}" value="${esc(g.type)}">`);
+  const skip = new Set(["type"]);
+  for (const [k, v] of Object.entries(g)) {
+    if (skip.has(k) || v === undefined || v === null || v === "") continue;
+    parts.push(`<input type="hidden" name="grader_prop_${idx}_${esc(k)}" value="${esc(String(v))}">`);
+  }
+  return parts.join("\n");
+}
+
 export function ScenarioEditPage(
   agent: string,
   scenarioId: string,
   parsed: ParsedScenario,
   issues: ValidationIssue[],
-  savedFlash = false
+  savedFlash = false,
+  generatedGraders?: GeneratedGrader[]
 ): string {
-  const graderEditorRows = parsed.graders.map((g, i) => graderRow(g, i)).join("");
-
   const issuesHtml = savedFlash
     ? `<div class="sc-validation-box sc-validation-ok" id="validation-result"><div class="sc-issue ok"><span class="sc-issue-icon">&#10003;</span><span>Saved successfully.</span></div></div>`
     : issues.length > 0
@@ -185,6 +250,23 @@ export function ScenarioEditPage(
     ? `<option value="${esc(parsed.category)}">${esc(parsed.category)} (unknown)</option>`
     : "";
 
+  // Grader preview section
+  // If generatedGraders provided: show the freshly generated preview
+  // If existing graders: show current graders as read-only with a note
+  let graderSectionHtml: string;
+  if (generatedGraders !== undefined) {
+    graderSectionHtml = renderGeneratedGraderSection(generatedGraders, agent, scenarioId);
+  } else if (parsed.graders.length > 0) {
+    graderSectionHtml = renderCurrentGraderSection(parsed.graders, agent, scenarioId);
+  } else {
+    graderSectionHtml = renderEmptyGraderSection(agent, scenarioId);
+  }
+
+  // Compute grader_count for hidden inputs — used if no generated graders (0 graders from form)
+  const graderCount = generatedGraders
+    ? generatedGraders.filter((_, i) => true).length  // actual count managed by JS
+    : 0;
+
   return `
     <div class="page-title">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -192,7 +274,7 @@ export function ScenarioEditPage(
         <span style="color:var(--border)">/</span>
         <h1 style="margin:0;font-family:var(--mono);font-size:16px">${esc(scenarioId)}</h1>
       </div>
-      <p>Edit scenario fields. Validation runs before save — invalid grader types will block saving.</p>
+      <p>Edit scenario fields. Click "Generate Graders" to auto-generate graders from expected behavior and scoring rubric.</p>
     </div>
 
     ${issuesHtml}
@@ -235,20 +317,6 @@ export function ScenarioEditPage(
           </select>
         </div>
 
-        <!-- Graders -->
-        <div class="sc-field-group">
-          <label class="sc-field-label">
-            Graders
-            <span class="sc-field-hint">Known types: ${KNOWN_GRADER_TYPES.join(", ")}</span>
-          </label>
-          <div id="grader-list" class="sc-grader-list">
-            ${graderEditorRows}
-          </div>
-          <button type="button" class="sc-btn-secondary" onclick="addGrader()" style="margin-top:8px">
-            + Add Grader
-          </button>
-        </div>
-
         <!-- Prompt -->
         <div class="sc-field-group">
           <label class="sc-field-label" for="f-prompt">
@@ -256,15 +324,6 @@ export function ScenarioEditPage(
             <span class="sc-field-hint sc-required">Required — verbatim input to the agent</span>
           </label>
           <textarea id="f-prompt" name="prompt" class="sc-textarea sc-textarea-mono sc-textarea-tall" rows="10">${esc(parsed.prompt)}</textarea>
-        </div>
-
-        <!-- Reference Output -->
-        <div class="sc-field-group">
-          <label class="sc-field-label" for="f-reference-output">
-            Reference Output
-            <span class="sc-field-hint">Optional — expected verbatim output</span>
-          </label>
-          <textarea id="f-reference-output" name="reference_output" class="sc-textarea sc-textarea-mono" rows="5">${esc(parsed.reference_output)}</textarea>
         </div>
 
         <!-- Expected Behavior -->
@@ -288,8 +347,40 @@ export function ScenarioEditPage(
           <textarea id="f-scoring-rubric" name="scoring_rubric" class="sc-textarea sc-textarea-mono" rows="8">${esc(parsed.scoring_rubric)}</textarea>
         </div>
 
+        <!-- Reference Output -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-reference-output">
+            Reference Output
+            <span class="sc-field-hint">Optional — expected verbatim output</span>
+          </label>
+          <textarea id="f-reference-output" name="reference_output" class="sc-textarea sc-textarea-mono" rows="5">${esc(parsed.reference_output)}</textarea>
+        </div>
+
+        <!-- Generated Graders Panel -->
+        <div class="sc-field-group" id="graders-section">
+          <label class="sc-field-label">
+            Generated Graders
+            <span class="sc-field-hint">Auto-generated from expected behavior and scoring rubric</span>
+          </label>
+          <div id="grader-preview-panel">
+            ${graderSectionHtml}
+          </div>
+        </div>
+
         <!-- Actions -->
         <div class="sc-actions">
+          <button
+            type="button"
+            class="sc-btn-secondary"
+            hx-post="/api/scenarios/${esc(agent)}/${esc(scenarioId)}/generate-graders"
+            hx-include="#scenario-form"
+            hx-target="#grader-preview-panel"
+            hx-swap="innerHTML"
+            hx-indicator="#gen-graders-spinner"
+          >
+            Generate Graders
+          </button>
+          <span id="gen-graders-spinner" class="htmx-indicator sc-spinner">generating...</span>
           <button
             type="button"
             class="sc-btn-secondary"
@@ -303,16 +394,22 @@ export function ScenarioEditPage(
           <button type="submit" class="sc-btn-primary" id="save-btn">
             Save
           </button>
+          <button
+            type="button"
+            class="sc-btn-run"
+            hx-post="/api/scenarios/${esc(agent)}/${esc(scenarioId)}/dry-run"
+            hx-include="#scenario-form"
+            hx-target="#dry-run-error"
+            hx-swap="innerHTML"
+          >
+            Dry Run
+          </button>
+          <span id="dry-run-error" class="sc-dry-run-error"></span>
           <a href="/scenarios?agent=${esc(agent)}" class="sc-btn-ghost">Cancel</a>
         </div>
 
       </div>
     </form>
-
-    <!-- Hidden inputs for grader data (populated by JS before submit) -->
-    <div id="grader-hidden-inputs"></div>
-
-    ${graderTypeDefsScript()}
 
     <style>
       .sc-edit-layout { display: flex; flex-direction: column; gap: 20px; max-width: 820px; }
@@ -330,19 +427,28 @@ export function ScenarioEditPage(
       .sc-select { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; cursor: pointer; }
       .sc-select:focus { border-color: var(--accent); }
 
-      /* Grader editor */
-      .sc-grader-list { display: flex; flex-direction: column; gap: 8px; }
-      .sc-grader-row { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-      .sc-grader-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-      .sc-grader-type-select { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; font-family: var(--mono); padding: 5px 8px; outline: none; }
-      .sc-grader-type-select:focus { border-color: var(--accent); }
-      .sc-grader-props { display: flex; flex-wrap: wrap; gap: 8px; }
-      .sc-grader-prop { display: flex; flex-direction: column; gap: 3px; }
-      .sc-grader-prop label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
-      .sc-grader-prop input { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; font-family: var(--mono); padding: 5px 8px; outline: none; width: 160px; }
-      .sc-grader-prop input:focus { border-color: var(--accent); }
-      .sc-grader-remove { margin-left: auto; background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--text-muted); font-size: 12px; cursor: pointer; padding: 4px 10px; transition: all 0.15s; flex-shrink: 0; }
-      .sc-grader-remove:hover { border-color: var(--fail); color: var(--fail); }
+      /* Generated grader cards */
+      .sc-gen-grader-list { display: flex; flex-direction: column; gap: 8px; }
+      .sc-gen-grader-card { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 6px; transition: border-color 0.15s, opacity 0.15s; }
+      .sc-gen-grader-accepted { border-color: rgba(74,222,128,0.4); }
+      .sc-gen-grader-rejected { opacity: 0.5; }
+      .sc-gen-grader-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .sc-gen-grader-type { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.2); border-radius: 4px; padding: 2px 8px; }
+      .sc-gen-grader-props { display: flex; flex-wrap: wrap; gap: 6px; }
+      .sc-grader-prop-chip { font-family: var(--mono); font-size: 11px; color: var(--text-dim); background: var(--surface-2); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 2px 7px; }
+      .sc-grader-prop-key { color: var(--text-muted); }
+      .sc-conf-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border-radius: 10px; padding: 2px 7px; margin-left: auto; }
+      .sc-conf-high { background: rgba(74,222,128,0.15); color: var(--pass); border: 1px solid rgba(74,222,128,0.3); }
+      .sc-conf-med { background: rgba(251,191,36,0.15); color: var(--partial); border: 1px solid rgba(251,191,36,0.3); }
+      .sc-conf-low { background: rgba(248,113,113,0.15); color: var(--fail); border: 1px solid rgba(248,113,113,0.3); }
+      .sc-gen-grader-source { font-size: 11px; color: var(--text-muted); font-style: italic; padding-left: 2px; line-height: 1.5; }
+      .sc-gen-grader-toggle { display: flex; align-items: center; gap: 5px; cursor: pointer; margin-left: auto; flex-shrink: 0; }
+      .sc-gen-grader-toggle input[type="checkbox"] { cursor: pointer; width: 14px; height: 14px; accent-color: var(--pass); }
+      .sc-gen-grader-toggle-label { font-size: 11px; font-weight: 600; color: var(--text-muted); user-select: none; }
+      .sc-gen-grader-accepted .sc-gen-grader-toggle-label { color: var(--pass); }
+      .sc-gen-grader-empty { font-size: 13px; color: var(--text-muted); padding: 16px; background: var(--surface-3); border: 1px dashed var(--border); border-radius: 6px; line-height: 1.6; }
+      .sc-current-graders-note { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; padding: 8px 12px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; }
+      .sc-current-grader-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; font-size: 12px; font-family: var(--mono); color: var(--text-dim); margin: 0 4px 4px 0; }
 
       /* Actions */
       .sc-actions { display: flex; gap: 10px; align-items: center; padding-top: 8px; flex-wrap: wrap; }
@@ -350,8 +456,13 @@ export function ScenarioEditPage(
       .sc-btn-primary:hover { opacity: 0.85; }
       .sc-btn-secondary { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--text-dim); transition: border-color 0.15s; }
       .sc-btn-secondary:hover { border-color: var(--text-muted); color: var(--text); }
+      .sc-btn-run { background: rgba(74,222,128,0.12); border: 1px solid rgba(74,222,128,0.35); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--pass); transition: all 0.15s; }
+      .sc-btn-run:hover { background: rgba(74,222,128,0.22); border-color: var(--pass); }
       .sc-btn-ghost { background: none; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; text-decoration: none; padding: 8px 4px; transition: color 0.15s; }
       .sc-btn-ghost:hover { color: var(--text); }
+      .sc-spinner { font-size: 12px; color: var(--text-muted); display: none; }
+      .htmx-request .sc-spinner { display: inline; }
+      .sc-dry-run-error { font-size: 12px; color: var(--fail); }
 
       /* Validation box */
       .sc-validation-box { border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
@@ -366,184 +477,122 @@ export function ScenarioEditPage(
     </style>
 
     <script>
-      // Grader type → property definitions
-      const GRADER_PROPS = ${JSON.stringify(graderPropDefs())};
-      const KNOWN_TYPES = ${JSON.stringify([...KNOWN_GRADER_TYPES])};
+      // Toggle accept/reject on grader card
+      function toggleGraderCard(checkbox) {
+        const idx = checkbox.dataset.idx;
+        const card = document.getElementById('gen-grader-card-' + idx);
+        const label = checkbox.closest('.sc-gen-grader-toggle').querySelector('.sc-gen-grader-toggle-label');
+        const hiddenDiv = document.getElementById('gen-grader-hidden-' + idx);
+        const graderType = card.querySelector('.sc-gen-grader-type').textContent.trim();
+        const propChips = card.querySelectorAll('.sc-grader-prop-chip');
 
-      let graderCount = ${parsed.graders.length};
-
-      function graderTypeOptions(selected) {
-        return KNOWN_TYPES.map(t =>
-          '<option value="' + t + '"' + (t === selected ? ' selected' : '') + '>' + t + '</option>'
-        ).join('');
-      }
-
-      function renderGraderProps(idx, type, current) {
-        const props = GRADER_PROPS[type] || [];
-        if (props.length === 0) return '';
-        const inputs = props.map(p => {
-          const val = current[p.name] !== undefined ? current[p.name] : '';
-          return '<div class="sc-grader-prop">'
-            + '<label>' + p.name + '</label>'
-            + '<input type="text" data-idx="' + idx + '" data-prop="' + p.name + '" placeholder="' + (p.placeholder || '') + '" value="' + escHtml(String(val)) + '">'
-            + '</div>';
-        }).join('');
-        return '<div class="sc-grader-props">' + inputs + '</div>';
-      }
-
-      function escHtml(s) {
-        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-      }
-
-      function addGrader() {
-        const idx = graderCount++;
-        const row = document.createElement('div');
-        row.className = 'sc-grader-row';
-        row.dataset.idx = idx;
-        row.innerHTML =
-          '<div class="sc-grader-top">'
-            + '<select class="sc-grader-type-select" data-idx="' + idx + '" onchange="onTypeChange(this, ' + idx + ')">'
-            + graderTypeOptions('json_valid')
-            + '</select>'
-            + '<button type="button" class="sc-grader-remove" onclick="removeGrader(this)">Remove</button>'
-          + '</div>'
-          + renderGraderProps(idx, 'json_valid', {});
-        document.getElementById('grader-list').appendChild(row);
-      }
-
-      function onTypeChange(select, idx) {
-        const row = select.closest('.sc-grader-row');
-        const existing = row.querySelector('.sc-grader-props');
-        if (existing) existing.remove();
-        const newProps = renderGraderProps(idx, select.value, {});
-        if (newProps) {
-          row.insertAdjacentHTML('beforeend', newProps);
+        if (checkbox.checked) {
+          card.classList.add('sc-gen-grader-accepted');
+          card.classList.remove('sc-gen-grader-rejected');
+          label.textContent = 'Accepted';
+          // Re-build hidden inputs from card data attributes
+          if (hiddenDiv) {
+            hiddenDiv.innerHTML = card.dataset.hiddenInputs || '';
+          }
+        } else {
+          card.classList.remove('sc-gen-grader-accepted');
+          card.classList.add('sc-gen-grader-rejected');
+          label.textContent = 'Rejected';
+          if (hiddenDiv) {
+            hiddenDiv.innerHTML = '';
+          }
         }
+        // Re-sync grader_count hidden input
+        syncGraderCount();
       }
 
-      function removeGrader(btn) {
-        btn.closest('.sc-grader-row').remove();
+      function syncGraderCount() {
+        // Count accepted graders
+        const acceptedCheckboxes = document.querySelectorAll('.sc-gen-grader-checkbox:checked');
+        // Update or create grader_count hidden in form
+        let countEl = document.getElementById('gen-grader-count-hidden');
+        if (!countEl) {
+          countEl = document.createElement('input');
+          countEl.type = 'hidden';
+          countEl.name = 'grader_count';
+          countEl.id = 'gen-grader-count-hidden';
+          document.getElementById('scenario-form').appendChild(countEl);
+        }
+        countEl.value = String(acceptedCheckboxes.length);
       }
 
-      // Before form submit, collect grader data into hidden inputs
-      document.getElementById('scenario-form').addEventListener('submit', function(e) {
-        serializeGraders();
+      // On page load, set initial grader_count
+      document.addEventListener('DOMContentLoaded', function() {
+        syncGraderCount();
       });
-
-      // Also serialize before htmx validate request
-      document.addEventListener('htmx:configRequest', function(evt) {
-        if (evt.detail.path && evt.detail.path.includes('/validate')) {
-          serializeGraders();
-          // Include grader data in the request
-          const hidden = document.getElementById('grader-hidden-inputs');
-          const inputs = hidden.querySelectorAll('input');
-          inputs.forEach(inp => {
-            evt.detail.parameters[inp.name] = inp.value;
-          });
+      // Also run after htmx swaps (grader panel may be replaced)
+      document.addEventListener('htmx:afterSwap', function(evt) {
+        if (evt.detail.target && evt.detail.target.id === 'grader-preview-panel') {
+          syncGraderCount();
         }
       });
-
-      function serializeGraders() {
-        // Remove any previously cloned inputs from the form to prevent duplicates
-        document.querySelectorAll('#scenario-form input[name^="grader_"]').forEach(el => el.remove());
-        const hidden = document.getElementById('grader-hidden-inputs');
-        hidden.innerHTML = '';
-        const rows = document.querySelectorAll('#grader-list .sc-grader-row');
-        rows.forEach((row, i) => {
-          const typeSelect = row.querySelector('.sc-grader-type-select');
-          if (!typeSelect) return;
-          addHidden(hidden, 'grader_type_' + i, typeSelect.value);
-          const propInputs = row.querySelectorAll('.sc-grader-props input');
-          propInputs.forEach(inp => {
-            const prop = inp.dataset.prop;
-            if (prop && inp.value.trim() !== '') {
-              addHidden(hidden, 'grader_prop_' + i + '_' + prop, inp.value.trim());
-            }
-          });
-        });
-        addHidden(hidden, 'grader_count', String(rows.length));
-      }
-
-      function addHidden(container, name, value) {
-        const inp = document.createElement('input');
-        inp.type = 'hidden';
-        inp.name = name;
-        inp.value = value;
-        container.appendChild(inp);
-        // Also append to form so it gets submitted
-        document.getElementById('scenario-form').appendChild(inp.cloneNode(true));
-      }
     </script>
   `;
 }
 
-function graderPropDefs(): Record<string, Array<{ name: string; placeholder?: string }>> {
-  return {
-    json_valid: [],
-    json_field: [
-      { name: "path", placeholder: "e.g. business_rules" },
-      { name: "min_items", placeholder: "number" },
-      { name: "max_items", placeholder: "number" },
-      { name: "min", placeholder: "number" },
-      { name: "max", placeholder: "number" },
-      { name: "type_check", placeholder: "string | boolean | number | array" },
-    ],
-    contains: [{ name: "value", placeholder: "text to search for" }],
-    not_contains: [{ name: "value", placeholder: "text that must be absent" }],
-    regex: [{ name: "pattern", placeholder: "regex pattern" }],
-    section_present: [{ name: "section", placeholder: "section name" }],
-    field_count: [
-      { name: "expected_count", placeholder: "number" },
-    ],
-    length_bounds: [
-      { name: "min", placeholder: "min chars" },
-      { name: "max", placeholder: "max chars" },
-    ],
-  };
+function renderGeneratedGraderSection(graders: GeneratedGrader[], agent: string, scenarioId: string): string {
+  if (graders.length === 0) {
+    return `<div class="sc-gen-grader-empty">No machine-checkable assertions found — scoring will rely entirely on LLM rubric evaluation.</div>`;
+  }
+  // Default: accept high and medium confidence, reject low
+  const cards = graders.map((g, i) => {
+    const accepted = g.confidence !== "low";
+    return graderPreviewCard(g, i, accepted);
+  }).join("");
+  return `<div class="sc-gen-grader-list">${cards}</div>`;
 }
 
-function graderTypeDefsScript(): string {
-  return ""; // logic inlined in ScenarioEditPage
-}
-
-function graderRow(g: Grader, i: number): string {
-  const typeOptions = KNOWN_GRADER_TYPES.map(t =>
-    `<option value="${esc(t)}"${g.type === t ? " selected" : ""}>${esc(t)}</option>`
-  ).join("");
-
-  const unknownType = g.type && !KNOWN_GRADER_TYPES.includes(g.type as KnownGraderType);
-  const unknownOption = unknownType
-    ? `<option value="${esc(g.type)}" selected>${esc(g.type)} (unknown)</option>`
-    : "";
-
-  const defs = graderPropDefs()[g.type] ?? [];
-  const propFields = defs.map(p => {
-    const val = g[p.name] !== undefined ? String(g[p.name]) : "";
-    return `
-      <div class="sc-grader-prop">
-        <label>${esc(p.name)}</label>
-        <input type="text" data-idx="${i}" data-prop="${esc(p.name)}" placeholder="${esc(p.placeholder ?? "")}" value="${esc(val)}">
-      </div>
-    `;
+function renderCurrentGraderSection(graders: Grader[], _agent: string, _scenarioId: string): string {
+  const chips = graders.map(g => {
+    const props = Object.entries(g)
+      .filter(([k]) => k !== "type")
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .map(([k, v]) => `<span style="color:var(--text-muted)">${esc(k)}:</span> ${esc(String(v))}`)
+      .join(", ");
+    return `<span class="sc-current-grader-chip">${esc(g.type)}${props ? ` <span style="color:var(--text-muted);font-size:10px">(${props})</span>` : ""}</span>`;
   }).join("");
 
-  const propsHtml = defs.length > 0
-    ? `<div class="sc-grader-props">${propFields}</div>`
-    : "";
-
   return `
-    <div class="sc-grader-row" data-idx="${i}">
-      <div class="sc-grader-top">
-        <select class="sc-grader-type-select" data-idx="${i}" onchange="onTypeChange(this, ${i})">
-          ${unknownOption}
-          ${typeOptions}
-        </select>
-        <button type="button" class="sc-grader-remove" onclick="removeGrader(this)">Remove</button>
-      </div>
-      ${propsHtml}
+    <div class="sc-current-graders-note">
+      Current graders (from file) — click "Generate Graders" to regenerate from expected behavior and scoring rubric.
     </div>
+    <div>${chips}</div>
+    <input type="hidden" name="grader_count" value="${graders.length}" id="gen-grader-count-hidden">
+    ${graders.map((g, i) => buildGraderHiddenInputs(g, i)).join("\n")}
   `;
 }
+
+function renderEmptyGraderSection(_agent: string, _scenarioId: string): string {
+  return `
+    <div class="sc-gen-grader-empty">
+      No graders defined. Click "Generate Graders" to auto-generate from expected behavior and scoring rubric.
+    </div>
+    <input type="hidden" name="grader_count" value="0" id="gen-grader-count-hidden">
+  `;
+}
+
+/**
+ * GraderPreviewFragment — htmx fragment returned by POST /generate-graders.
+ * Replaces the inner HTML of #grader-preview-panel.
+ */
+export function GraderPreviewFragment(graders: GeneratedGrader[]): string {
+  if (graders.length === 0) {
+    return `<div class="sc-gen-grader-empty">No machine-checkable assertions found — scoring will rely entirely on LLM rubric evaluation.</div>
+<input type="hidden" name="grader_count" value="0" id="gen-grader-count-hidden">`;
+  }
+  const cards = graders.map((g, i) => {
+    const accepted = g.confidence !== "low";
+    return graderPreviewCard(g, i, accepted);
+  }).join("");
+  return `<div class="sc-gen-grader-list">${cards}</div>
+<input type="hidden" name="grader_count" id="gen-grader-count-hidden" value="${graders.filter(g => g.confidence !== "low").length}">`;
+}
+
 
 function renderIssue(issue: ValidationIssue): string {
   const icon = issue.level === "error" ? "&#10007;" : "&#9888;";
