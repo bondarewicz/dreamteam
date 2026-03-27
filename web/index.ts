@@ -15,6 +15,12 @@ import {
   evalRunsSSEHandler,
   evalRunLiveHandler,
 } from "./src/routes/evals.ts";
+import {
+  scenariosListHandler,
+  scenarioEditHandler,
+  scenarioValidateHandler,
+  scenarioSaveHandler,
+} from "./src/routes/scenarios.ts";
 import { serveStatic } from "./src/routes/static.ts";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -41,6 +47,12 @@ router.get("/evals/:runId/results", evalResultsFragment);
 router.get("/evals/:runId/trace/:resultId", traceHandler);
 router.post("/api/eval-runs", startEvalRunHandler);
 router.get("/api/eval-runs/live", evalRunsSSEHandler);
+
+// Scenario browser and editor
+router.get("/scenarios", scenariosListHandler);
+router.get("/scenarios/:agent/:scenarioId", scenarioEditHandler);
+router.post("/api/scenarios/:agent/:scenarioId/validate", scenarioValidateHandler);
+router.post("/api/scenarios/:agent/:scenarioId", scenarioSaveHandler);
 
 // Static file serving — manual pattern since router doesn't support wildcards directly
 const server = Bun.serve({

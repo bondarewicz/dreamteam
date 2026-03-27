@@ -149,20 +149,32 @@ for agent_dir in sorted(glob.glob(os.path.join(EVALS_DIR, '*/'))):
         continue
     agent_scenario_files = sorted(glob.glob(os.path.join(agent_dir, 'scenario-*.md')))
     ALL_SCENARIOS_TOTAL += len([f for f in agent_scenario_files if os.path.isfile(f)])
-    if AGENT_FILTER and agent != AGENT_FILTER:
-        continue
+    # Support comma-separated agent names (from multi-select UI)
+    if AGENT_FILTER:
+        allowed_agents = {a.strip() for a in AGENT_FILTER.split(',') if a.strip()}
+        if agent not in allowed_agents:
+            continue
     for scenario_file in agent_scenario_files:
         if os.path.isfile(scenario_file):
             if SCENARIO_FILTER:
                 basename = os.path.splitext(os.path.basename(scenario_file))[0]
-                if not _fnmatch.fnmatch(basename, SCENARIO_FILTER):
-                    continue
+                # Support comma-separated "agent/scenario-id" values (from multi-select UI)
+                # or single fnmatch glob pattern (legacy CLI usage)
+                if ',' in SCENARIO_FILTER or '/' in SCENARIO_FILTER:
+                    allowed = {s.strip() for s in SCENARIO_FILTER.split(',') if s.strip()}
+                    # Compare against full "agent/basename" to prevent cross-agent collisions
+                    qualified = f'{agent}/{basename}'
+                    if qualified not in allowed:
+                        continue
+                else:
+                    if not _fnmatch.fnmatch(basename, SCENARIO_FILTER):
+                        continue
             SCENARIOS.append(scenario_file)
 
 TOTAL = len(SCENARIOS)
 print(f'Discovered {TOTAL} scenarios (total across all agents: {ALL_SCENARIOS_TOTAL})')
 if AGENT_FILTER:
-    print(f'  (filtered to agent: {AGENT_FILTER})')
+    print(f'  (filtered to agents: {AGENT_FILTER})')
 if SCENARIO_FILTER:
     print(f'  (filtered to scenario: {SCENARIO_FILTER})')
 

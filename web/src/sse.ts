@@ -29,19 +29,21 @@ export function getActiveRun(): RunState | null {
 /** Build CLI args from form params */
 function buildArgs(opts: {
   agents: string[];
-  scenario: string;
+  scenarios: string[];
   trials: number;
   parallel: number;
 }): string[] {
   const args: string[] = [];
 
   if (opts.agents.length > 0 && !opts.agents.includes("all")) {
-    for (const agent of opts.agents) {
-      args.push("--agent", agent);
-    }
+    args.push("--agent", opts.agents.join(","));
   }
-  if (opts.scenario.trim()) {
-    args.push("--scenario", opts.scenario.trim());
+  // Pass selected scenarios as comma-separated "agent/scenario-id" values to --scenario (BR-5)
+  // Keep full agent/scenario-id format to avoid cross-agent basename collisions
+  const selectedScenarios = opts.scenarios
+    .filter(s => s.trim().length > 0);
+  if (selectedScenarios.length > 0) {
+    args.push("--scenario", selectedScenarios.join(","));
   }
   args.push("--trials", String(opts.trials));
   args.push("--parallel", String(opts.parallel));
@@ -74,7 +76,7 @@ function broadcast(run: RunState, chunk: Uint8Array) {
 /** Start a new eval run. Returns the runId or throws if one is already running. */
 export async function startEvalRun(opts: {
   agents: string[];
-  scenario: string;
+  scenarios: string[];
   trials: number;
   parallel: number;
 }): Promise<string> {
