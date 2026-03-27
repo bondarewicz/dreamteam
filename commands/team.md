@@ -90,7 +90,7 @@ The `TOPIC` variable is reused when generating the HTML report (`reports/retros/
 DRAFT_COUNTER=0
 REPO_ROOT="$(git rev-parse --show-toplevel)"  # already set above if recording; set here if not
 ```
-`DRAFT_COUNTER` increments each time an agent completes. It is used to name draft eval files `draft-YYYY-MM-DD-<TOPIC>-NNN.md`. Initialize it once at session start regardless of whether recording is enabled. The `TOPIC` variable (set when initializing the session) ensures files from different same-day sessions do not collide.
+`DRAFT_COUNTER` increments each time an agent completes. It is used to name draft eval files `draft-YYYY-MM-DD-HHMM-<TOPIC>-NNN.md`. Initialize it once at session start regardless of whether recording is enabled. The `TOPIC` variable (set when initializing the session) ensures files from different same-day sessions do not collide.
 
 **MANDATORY — Log task context immediately after init (1-5 lines):**
 ```bash
@@ -168,7 +168,7 @@ DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 DRAFT_DIR="${REPO_ROOT}/evals/bird/drafts"
 mkdir -p "$DRAFT_DIR"
-DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 ```
 Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders:
 - `<AgentName>` → `Bird`
@@ -185,8 +185,26 @@ When Bird completes, YOU (Coach K) present Bird's findings to the user:
 - Summarize Bird's key business rules and domain constraints
 - List the acceptance criteria Bird identified
 - Note Bird's confidence level and any flagged risks
-- **Ask the user: "Ready to proceed with implementation?"**
-- **Wait for user approval before spawning Shaq**
+- **Ask the user using AskUserQuestion (NEVER as free text):**
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Ready to proceed with implementation?",
+    header: "Checkpoint",
+    options: [
+      { label: "Proceed", description: "Bird's analysis looks good — start implementation with Shaq" },
+      { label: "Revise", description: "Re-run Bird with more context or adjusted scope" },
+      { label: "Abort", description: "Stop here — do not implement" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+- If user selects **Proceed**: log approval and spawn Shaq
+- If user selects **Revise**: ask what to change, re-run Bird with updated context
+- If user selects **Abort**: end the session cleanly (finish recording if enabled)
 
 This checkpoint is MANDATORY — never skip it. The user must explicitly approve before implementation begins.
 
@@ -225,7 +243,7 @@ DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 DRAFT_DIR="${REPO_ROOT}/evals/shaq/drafts"
 mkdir -p "$DRAFT_DIR"
-DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 ```
 Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Shaq`, set `<EXACT prompt...>` to the verbatim prompt you sent to Shaq, and set `<The actual output...>` to Shaq's complete output.
 
@@ -268,7 +286,7 @@ DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 DRAFT_DIR="${REPO_ROOT}/evals/kobe/drafts"
 mkdir -p "$DRAFT_DIR"
-DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 ```
 Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Kobe`, set `<EXACT prompt...>` to the verbatim prompt you sent to Kobe, and set `<The actual output...>` to Kobe's complete output.
 
@@ -303,7 +321,7 @@ DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 DRAFT_DIR="${REPO_ROOT}/evals/magic/drafts"
 mkdir -p "$DRAFT_DIR"
-DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 ```
 Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Magic`, set `<EXACT prompt...>` to the verbatim prompt you sent to Magic, and set `<The actual output...>` to Magic's complete output.
 
@@ -440,21 +458,21 @@ After all three PR Review agents complete, write one draft eval per agent (3 tot
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/bird/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/bird/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/bird/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 # Use Write tool: AgentName=Bird, prompt=verbatim prompt sent to Bird, output=Bird's complete output
 
 # MJ draft
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/mj/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/mj/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/mj/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 # Use Write tool: AgentName=MJ, prompt=verbatim prompt sent to MJ, output=MJ's complete output
 
 # Kobe draft
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/kobe/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/kobe/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/kobe/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 # Use Write tool: AgentName=Kobe, prompt=verbatim prompt sent to Kobe, output=Kobe's complete output
 ```
 
@@ -603,14 +621,14 @@ After logging Bird's and MJ's findings, write one draft eval per agent. For each
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/bird/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/bird/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/bird/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 # Use Write tool: AgentName=Bird, prompt=verbatim prompt sent to Bird, output=Bird's complete output
 
 # MJ draft
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/mj/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/mj/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/mj/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 # Use Write tool: AgentName=MJ, prompt=verbatim prompt sent to MJ, output=MJ's complete output
 ```
 
@@ -650,7 +668,7 @@ After Magic completes the handoff brief, write a draft eval:
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/magic/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/magic/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/magic/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 ```
 Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Magic`, set `<EXACT prompt...>` to the verbatim prompt you sent to Magic, and set `<The actual output...>` to Magic's complete output.
 
@@ -665,8 +683,26 @@ When Magic's handoff brief is ready, YOU (Coach K) do the task breakdown:
 - Break the work into ordered, shippable increments
 - Identify dependencies between tasks
 - Estimate complexity (S/M/L)
-- **Present to the user and ask: "Ready to proceed with implementation?"**
-- **Wait for user approval before spawning Shaq**
+- **Ask the user using AskUserQuestion (NEVER as free text):**
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Ready to proceed with implementation?",
+    header: "Checkpoint",
+    options: [
+      { label: "Approve plan", description: "Analysis and architecture look good — proceed to implementation with Shaq" },
+      { label: "Revise plan", description: "Adjust scope, approach, or re-run analysis agents" },
+      { label: "Abort", description: "Stop here — do not implement" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+- If user selects **Approve plan**: log approval and spawn Shaq
+- If user selects **Revise plan**: ask what to change, re-run affected agents
+- If user selects **Abort**: end the session cleanly (finish recording if enabled)
 
 This checkpoint is MANDATORY — never skip it.
 
@@ -726,7 +762,7 @@ After Shaq completes, write a draft eval before proceeding to Phase 4:
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/shaq/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/shaq/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/shaq/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 ```
 Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Shaq`, set `<EXACT prompt...>` to the verbatim prompt you sent to Shaq, and set `<The actual output...>` to Shaq's complete output.
 
@@ -827,18 +863,39 @@ After logging Kobe's and Pippen's verdicts, write one draft eval per agent. For 
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/kobe/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/kobe/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/kobe/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 # Use Write tool: AgentName=Kobe, prompt=verbatim prompt sent to Kobe, output=Kobe's complete output
 
 # Pippen draft
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/pippen/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/pippen/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/pippen/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 # Use Write tool: AgentName=Pippen, prompt=verbatim prompt sent to Pippen, output=Pippen's complete output
 ```
 
 **If Kobe or Pippen report findings that require fixes (verdict is SHIP WITH FIXES or BLOCK):**
+
+Ask the user using **AskUserQuestion** (NEVER as free text):
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Reviewers found issues. How do you want to handle them?",
+    header: "Fix-Verify",
+    options: [
+      { label: "Send all to Shaq", description: "Route all findings to Shaq for fixes, then re-verify" },
+      { label: "Review individually", description: "Let me review each finding before deciding what to fix" },
+      { label: "Override — skip fixes", description: "Proceed to synthesis without fixing (not recommended)" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+- If user selects **Send all to Shaq**: proceed with fix-verify loop as below
+- If user selects **Review individually**: present each finding and let the user decide which to fix
+- If user selects **Override — skip fixes**: log the override and proceed to synthesis
 
 Log each loop: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
 
@@ -855,7 +912,7 @@ Log each loop: `"$CAST_SCRIPT" marker "$CAST_FILE" "Fix-Verify Loop #N"`
 
    NEVER commit or push. Run build and tests after all fixes.
    ```
-3. **Wait for Shaq to complete the fixes.** Write a draft eval for Shaq: read `evals/draft-template.md`, use the Write tool, increment counter, filename `draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md`, use `evals/shaq/drafts/`.
+3. **Wait for Shaq to complete the fixes.** Write a draft eval for Shaq: read `evals/draft-template.md`, use the Write tool, increment counter, filename `draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md`, use `evals/shaq/drafts/`.
 4. **Re-launch Kobe and Pippen in parallel** to VERIFY their specific findings are resolved:
    ```
    You are [Kobe/Pippen], verifying that your findings have been correctly fixed.
@@ -931,7 +988,7 @@ After Magic completes synthesis, write a draft eval:
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
 DRAFT_NUM=$(printf "%03d" $DRAFT_COUNTER)
 mkdir -p "${REPO_ROOT}/evals/magic/drafts"
-DRAFT_FILE="${REPO_ROOT}/evals/magic/drafts/draft-$(date +%Y-%m-%d)-${TOPIC}-${DRAFT_NUM}.md"
+DRAFT_FILE="${REPO_ROOT}/evals/magic/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 ```
 Read the template at `evals/draft-template.md` and use the Write tool to create the file at the path stored in `$DRAFT_FILE`, substituting actual values for all `<...>` placeholders: set `<AgentName>` to `Magic`, set `<EXACT prompt...>` to the verbatim prompt you sent to Magic, and set `<The actual output...>` to Magic's complete output.
 
@@ -1016,11 +1073,26 @@ open "${CAST_FILE%.cast}.html"
 ```
 
 ### Human Confirmation Loop (when RECORDING=true — skip entirely if RECORDING=false)
-After every `finish` + `export-html` + `open`, the HTML report is visible in the browser. Ask the user:
+After every `finish` + `export-html` + `open`, the HTML report is visible in the browser. Ask the user using **AskUserQuestion** (NEVER as free text):
 
-> "The HTML report is open in your browser. Any feedback, or shall I upload the recording?"
+```
+AskUserQuestion({
+  questions: [{
+    question: "The HTML report is open in your browser. What would you like to do?",
+    header: "Recording",
+    options: [
+      { label: "Upload recording", description: "I'm done — upload to asciinema and finalize the report" },
+      { label: "I have feedback", description: "Reopen the session — I want changes before uploading" },
+      { label: "Skip upload", description: "Done, but don't upload the recording" }
+    ],
+    multiSelect: false
+  }]
+})
+```
 
-**Wait for explicit confirmation before uploading.** If the user gives feedback, enter the reopen cycle (below). Only upload when the user says they're done.
+- If user selects **Upload recording**: proceed to upload
+- If user selects **I have feedback**: enter the reopen cycle (below)
+- If user selects **Skip upload**: end the session without uploading
 
 This applies after EVERY finish — initial or reopen. Never skip asking.
 
@@ -1130,8 +1202,27 @@ Verdict: [PASS / CONDITIONAL / BLOCK]
 | Verdict | Criteria | Action |
 |---------|----------|--------|
 | **PASS** | pass@1 >= 80% AND flaky count = 0 | Proceed to Production Safety Gate |
-| **CONDITIONAL** | pass@3 >= 80% BUT pass@1 < 80% OR flaky > 0 | List flaky scenarios. Ask user: ship with known flakiness or fix first? |
+| **CONDITIONAL** | pass@3 >= 80% BUT pass@1 < 80% OR flaky > 0 | List flaky scenarios. Ask user via AskUserQuestion (see below). |
 | **BLOCK** | pass@3 < 80% OR any critical scenario fails all 3 trials | Do not proceed. Identify root cause and fix. |
+
+#### CONDITIONAL Verdict — Structured Decision
+
+When the eval gate returns CONDITIONAL, ask the user using **AskUserQuestion** (NEVER as free text):
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Eval gate returned CONDITIONAL — flaky scenarios detected. How do you want to proceed?",
+    header: "Eval Gate",
+    options: [
+      { label: "Ship with known flakiness", description: "Accept current pass rates and proceed to Production Safety Gate" },
+      { label: "Fix flaky scenarios", description: "Investigate and fix the flaky scenarios before shipping" },
+      { label: "Abort", description: "Do not ship — stop here" }
+    ],
+    multiSelect: false
+  }]
+})
+```
 
 **Critical scenarios** (escalation, stop conditions, out-of-scope) must pass at least 2 of 3 trials. A critical scenario failing all 3 is an automatic BLOCK regardless of overall pass rate.
 
@@ -1289,12 +1380,29 @@ Example:
 
 When an agent escalates (messages with "ESCALATION:"), Coach K MUST:
 1. **Read the escalation fully** — understand what the agent needs and why
-2. **Route appropriately:**
+2. **Route appropriately — always prefer AskUserQuestion with structured options over free text:**
    - Domain questions → ask the user or re-engage Bird
    - Architecture questions → ask the user or re-engage MJ
-   - Spec ambiguity → ask the user directly (AskUserQuestion)
-   - Missing information → ask the user directly
-   - Agent conflicts → resolve or ask the user to decide
+   - Spec ambiguity → ask the user via AskUserQuestion with the agent's proposed options as labeled choices
+   - Missing information → ask the user via AskUserQuestion if options are enumerable, free text only if genuinely unbounded
+   - Agent conflicts → present each agent's position as an AskUserQuestion option and let the user decide
+
+   **Escalation AskUserQuestion pattern** — when an agent suggests Options A/B/C, map them to structured choices:
+   ```
+   AskUserQuestion({
+     questions: [{
+       question: "[Agent] needs a decision: [escalation topic]",
+       header: "Escalation",
+       options: [
+         { label: "[Option A name]", description: "[Agent's description of option A]" },
+         { label: "[Option B name]", description: "[Agent's description of option B]" }
+         // ... map each agent-proposed option to a labeled choice
+       ],
+       multiSelect: false
+     }]
+   })
+   ```
+   This eliminates ambiguity from replies like "the first one" or "yeah that one."
 3. **Respond promptly** — the escalating agent is BLOCKED until you respond
 4. **Track escalations** — note them for Magic's metrics in the retro. Log: `"$CAST_SCRIPT" marker "$CAST_FILE" "ESCALATION: [agent] — [topic]"`
 5. **NEVER ignore an escalation** — an agent that escalated instead of guessing is doing the right thing. Reward this behavior by responding quickly.
