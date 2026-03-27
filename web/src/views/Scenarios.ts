@@ -300,7 +300,6 @@ export function ScenarioEditPage(
       </div>
       <p>Edit scenario fields. Click "Generate Graders" to auto-generate graders from expected behavior and scoring rubric.</p>
     </div>
-
     <form
       id="scenario-form"
       method="POST"
@@ -389,8 +388,6 @@ export function ScenarioEditPage(
           </div>
         </div>
 
-        ${issuesHtml}
-
         <!-- Actions -->
         <div class="sc-actions">
           <button
@@ -418,7 +415,8 @@ export function ScenarioEditPage(
           <button type="submit" class="sc-btn-primary" id="save-btn">
             Save
           </button>
-          <button
+          ${parsed.graders.length > 0 ? `<button
+            id="dry-run-btn"
             type="button"
             class="sc-btn-run"
             hx-post="/api/scenarios/${esc(agent)}/${esc(scenarioId)}/dry-run"
@@ -427,9 +425,16 @@ export function ScenarioEditPage(
             hx-swap="innerHTML"
           >
             Dry Run
-          </button>
-          <span id="dry-run-error" class="sc-dry-run-error"></span>
+          </button>` : ""}
           <a href="/scenarios?agent=${esc(agent)}" class="sc-btn-ghost">Cancel</a>
+        </div>
+
+        <!-- Feedback area (below all buttons) -->
+        <div class="sc-feedback-area">
+          ${issuesHtml}
+          ${parsed.graders.length > 0 ? `<span id="dry-run-error" class="sc-dry-run-error"></span>` : ""}
+          ${!savedFlash && parsed.graders.length === 0 ? `<div id="workflow-hint" style="padding:8px 14px;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:6px;font-size:13px;color:var(--partial)">Next step: click <strong>Generate Graders</strong>, then <strong>Save</strong> to enable dry runs.</div>` : ""}
+          ${savedFlash && parsed.graders.length > 0 ? `<div id="workflow-hint" style="padding:8px 14px;background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);border-radius:6px;font-size:13px;color:var(--pass)">Graders saved. Ready for <strong>Dry Run</strong>.</div>` : ""}
         </div>
 
       </div>
@@ -474,6 +479,10 @@ export function ScenarioEditPage(
       .sc-current-graders-note { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; padding: 8px 12px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; }
       .sc-current-grader-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; font-size: 12px; font-family: var(--mono); color: var(--text-dim); margin: 0 4px 4px 0; }
 
+      /* Feedback area (below buttons) */
+      .sc-feedback-area { display: flex; flex-direction: column; gap: 8px; }
+      .sc-feedback-area:empty { display: none; }
+
       /* Actions */
       .sc-actions { display: flex; gap: 10px; align-items: center; padding-top: 8px; flex-wrap: wrap; }
       .sc-btn-primary { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 9px 20px; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; text-decoration: none; }
@@ -481,7 +490,8 @@ export function ScenarioEditPage(
       .sc-btn-secondary { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--text-dim); transition: border-color 0.15s; }
       .sc-btn-secondary:hover { border-color: var(--text-muted); color: var(--text); }
       .sc-btn-run { background: rgba(74,222,128,0.12); border: 1px solid rgba(74,222,128,0.35); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--pass); transition: all 0.15s; }
-      .sc-btn-run:hover { background: rgba(74,222,128,0.22); border-color: var(--pass); }
+      .sc-btn-run:hover:not(:disabled) { background: rgba(74,222,128,0.22); border-color: var(--pass); }
+      .sc-btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
       .sc-btn-ghost { background: none; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; text-decoration: none; padding: 8px 4px; transition: color 0.15s; }
       .sc-btn-ghost:hover { color: var(--text); }
       .sc-spinner { font-size: 12px; color: var(--text-muted); }
@@ -552,6 +562,58 @@ export function ScenarioEditPage(
       document.addEventListener('htmx:afterSwap', function(evt) {
         if (evt.detail.target && evt.detail.target.id === 'grader-preview-panel') {
           syncGraderCount();
+          // Enable Dry Run when graders are generated via htmx (dry-run saves form first)
+          var dryRunBtn = document.getElementById('dry-run-btn');
+          if (dryRunBtn) {
+            var acceptedCount = document.querySelectorAll('.sc-gen-grader-checkbox:checked').length;
+            if (acceptedCount > 0) {
+              dryRunBtn.disabled = false;
+              dryRunBtn.title = 'Save first to persist graders';
+            } else {
+              dryRunBtn.disabled = true;
+              dryRunBtn.title = 'Generate graders and save first';
+            }
+          }
+          // Update workflow hint banner
+          var hint = document.getElementById('workflow-hint');
+          if (hint) {
+            var accepted = document.querySelectorAll('.sc-gen-grader-checkbox:checked').length;
+            if (accepted > 0) {
+              hint.style.background = 'rgba(251,191,36,0.1)';
+              hint.style.border = '1px solid rgba(251,191,36,0.3)';
+              hint.style.color = 'var(--partial)';
+              hint.innerHTML = 'Graders generated. Click <strong>Save</strong> to persist them, then run <strong>Dry Run</strong>.';
+              hint.style.display = '';
+            }
+          } else {
+            // No hint exists yet — inject one in the actions bar if graders appeared
+            var accepted2 = document.querySelectorAll('.sc-gen-grader-checkbox:checked').length;
+            if (accepted2 > 0) {
+              var newHint = document.createElement('div');
+              newHint.id = 'workflow-hint';
+              newHint.style.cssText = 'padding:8px 14px;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:6px;font-size:13px;color:var(--partial)';
+              newHint.innerHTML = 'Graders generated. Click <strong>Save</strong> to persist them, then run <strong>Dry Run</strong>.';
+              var feedbackArea = document.querySelector('.sc-feedback-area');
+              if (feedbackArea) feedbackArea.appendChild(newHint);
+            }
+          }
+        }
+      });
+
+      // Keep Dry Run button in sync as user toggles grader accept/reject checkboxes
+      document.addEventListener('change', function(evt) {
+        if (evt.target && evt.target.classList.contains('sc-gen-grader-checkbox')) {
+          var dryRunBtn = document.getElementById('dry-run-btn');
+          if (dryRunBtn) {
+            var acceptedCount = document.querySelectorAll('.sc-gen-grader-checkbox:checked').length;
+            if (acceptedCount > 0) {
+              dryRunBtn.disabled = false;
+              dryRunBtn.title = 'Save first to persist graders';
+            } else {
+              dryRunBtn.disabled = true;
+              dryRunBtn.title = 'Generate graders and save first';
+            }
+          }
         }
       });
     </script>
@@ -780,8 +842,6 @@ export function ScenarioGenerateFragment(
         <span style="font-size:12px;color:var(--text-muted)">Review and edit the fields below, then click Save to create the scenario file.</span>
       </div>
 
-      <div id="new-validation-result"></div>
-
       <form
         id="new-scenario-save-form"
         method="POST"
@@ -867,6 +927,9 @@ export function ScenarioGenerateFragment(
           </button>
           <a href="/scenarios" class="sc-btn-ghost">Cancel</a>
         </div>
+
+        <!-- Feedback area (below all buttons) -->
+        <div id="new-validation-result"></div>
 
       </form>
     </div>
