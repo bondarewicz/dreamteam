@@ -426,6 +426,14 @@ export function ScenarioEditPage(
           >
             Dry Run
           </button>` : ""}
+          ${parsed.graders.length > 0 ? `<button
+            id="copy-team-prompt-btn"
+            type="button"
+            class="sc-btn-copy"
+            onclick="copyTeamPrompt('${esc(agent)}', '${esc(scenarioId)}')"
+          >
+            Copy Team Prompt
+          </button>` : ""}
           <a href="/scenarios?agent=${esc(agent)}" class="sc-btn-ghost">Cancel</a>
         </div>
 
@@ -492,6 +500,8 @@ export function ScenarioEditPage(
       .sc-btn-run { background: rgba(74,222,128,0.12); border: 1px solid rgba(74,222,128,0.35); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--pass); transition: all 0.15s; }
       .sc-btn-run:hover:not(:disabled) { background: rgba(74,222,128,0.22); border-color: var(--pass); }
       .sc-btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
+      .sc-btn-copy { background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.3); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--accent); transition: all 0.15s; }
+      .sc-btn-copy:hover { background: rgba(88,166,255,0.18); border-color: var(--accent); }
       .sc-btn-ghost { background: none; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; text-decoration: none; padding: 8px 4px; transition: color 0.15s; }
       .sc-btn-ghost:hover { color: var(--text); }
       .sc-spinner { font-size: 12px; color: var(--text-muted); }
@@ -616,6 +626,57 @@ export function ScenarioEditPage(
           }
         }
       });
+
+      function copyTeamPrompt(agent, scenarioId) {
+        var form = document.getElementById('scenario-form');
+        if (!form) return;
+        var title = (form.querySelector('[name="title"]') || {}).value || '';
+        var prompt = (form.querySelector('[name="prompt"]') || {}).value || '';
+        var expectedBehavior = (form.querySelector('[name="expected_behavior"]') || {}).value || '';
+        var scoringRubric = (form.querySelector('[name="scoring_rubric"]') || {}).value || '';
+
+        var text = '/team Implement: ' + title + '\\n\\n'
+          + '## Context\\n' + prompt + '\\n\\n'
+          + '## Acceptance Criteria (from eval scenario ' + agent + '/' + scenarioId + ')\\n' + expectedBehavior + '\\n\\n'
+          + '## Scoring Rubric\\n' + scoringRubric + '\\n\\n'
+          + '## Validation\\n'
+          + 'After implementation, run dry run on scenario ' + agent + '/' + scenarioId + ' to verify.';
+
+        // Show modal with selectable text
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+        var modal = document.createElement('div');
+        modal.style.cssText = 'background:var(--surface-2,#1c1f26);border:1px solid var(--border,#333);border-radius:10px;padding:20px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;gap:12px;';
+        var header = document.createElement('div');
+        header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+        header.innerHTML = '<span style="font-weight:600;font-size:14px;color:var(--text,#e6edf3)">Team Prompt</span>';
+        var closeBtn = document.createElement('button');
+        closeBtn.textContent = 'Close';
+        closeBtn.style.cssText = 'background:var(--surface-3,#2d333b);border:1px solid var(--border,#333);border-radius:6px;padding:4px 12px;color:var(--text-dim,#8b949e);cursor:pointer;font-size:12px;';
+        closeBtn.onclick = function() { document.body.removeChild(overlay); };
+        header.appendChild(closeBtn);
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.readOnly = true;
+        ta.style.cssText = 'width:100%;min-height:300px;background:var(--surface,#0d1117);color:var(--text,#e6edf3);border:1px solid var(--border,#333);border-radius:6px;padding:12px;font-family:var(--mono,monospace);font-size:12px;line-height:1.5;resize:vertical;box-sizing:border-box;';
+        var copyBtn = document.createElement('button');
+        copyBtn.textContent = 'Copy to Clipboard';
+        copyBtn.style.cssText = 'align-self:flex-start;background:var(--accent,#58a6ff);color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;';
+        copyBtn.onclick = function() {
+          ta.focus(); ta.select();
+          document.execCommand('copy');
+          copyBtn.textContent = 'Copied!';
+          setTimeout(function() { copyBtn.textContent = 'Copy to Clipboard'; }, 2000);
+        };
+        modal.appendChild(header);
+        modal.appendChild(ta);
+        modal.appendChild(copyBtn);
+        overlay.appendChild(modal);
+        overlay.onclick = function(e) { if (e.target === overlay) document.body.removeChild(overlay); };
+        document.body.appendChild(overlay);
+        ta.focus();
+        ta.select();
+      }
     </script>
   `;
 }
