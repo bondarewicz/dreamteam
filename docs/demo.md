@@ -183,6 +183,14 @@ Narrate as it runs:
 - [ ] **"Each scenario is a realistic task, not a toy example"**
 - [ ] **"Under the hood it's just a markdown file anyone can edit"** — briefly flash the raw `.md` in editor to make the point, then back to web UI
 
+> SHOW: draft promotion flow — `/scenarios` page, click a draft
+
+- [ ] **Draft-to-production walkthrough** — "Here's a draft that was auto-captured from a real /team session"
+- [ ] Point at the workflow stepper: "7 steps — review, generate graders, save, validate, set category, dry run, promote"
+- [ ] Click **Validate** — "Watch: it auto-assigns the production scenario name and number"
+- [ ] Change category to "capability" — "Classify the scenario"
+- [ ] **"Dry Run validates it works, then Promote moves it to production. The whole pipeline is guided."**
+
 > SHOW: eval web dashboard
 
 - [ ] Per-agent pass rates
@@ -191,7 +199,12 @@ Narrate as it runs:
 
 - [ ] **Grading** — "Schema-aware graders, independent scoring, not self-assessed"
 - [ ] **Trials** — "We run --trials 3 minimum. Single trial can be lucky."
-- [ ] **Draft capture** — "Every /team session auto-generates draft eval scenarios for each agent. Real work becomes test cases. The eval suite grows organically from actual usage."
+- [ ] **Draft capture + promotion** — "Every /team session auto-generates draft eval scenarios for each agent. Real work becomes test cases."
+  - [ ] **Show the flow**: open `/scenarios`, point at a draft (dashed border, draft badge), click into it
+  - [ ] **Walk the stepper**: "7-step guided workflow — review content, generate graders, save, validate, set category, dry run, promote"
+  - [ ] **Highlight auto-naming**: "Click Validate — it computes the next scenario number and sets the production title automatically"
+  - [ ] **Highlight staleness protection**: "If you edit the prompt or graders after a dry run, it blocks promotion until you re-run. But changing the category is fine."
+  - [ ] **"The eval suite grows organically from actual usage. The more we use /team, the better our test coverage gets."**
 - [ ] **Real example — walk through Bird's improvement arc:**
   - Remind them: "pass@1 = first try. pass@3 = at least once in 3 (ceiling). pass^3 = all 3 pass (floor). Gap between pass@3 and pass^3 = flakiness."
   - Baseline: 65% pass@1, 75% pass@3 — 7 failing scenarios

@@ -186,12 +186,42 @@ When creating a new scenario via `/scenarios/new`:
 
 The Dry Run button only appears after graders are saved. This enforces the correct sequence.
 
+### Draft promotion workflow
+
+Every `/team` session auto-captures draft eval scenarios in `evals/<agent>/drafts/draft-*.md`. These drafts contain the exact prompt sent to each agent and the agent's actual output. To promote a draft to the production eval suite, use the guided workflow at `/scenarios`:
+
+1. **Review content** — Open the draft from the `/scenarios` page. Review the prompt, reference output, expected behavior, failure modes, and scoring rubric. The scoring rubric is auto-generated from the reference output at capture time, but may need refinement.
+
+2. **Generate Graders** — Click **Generate Graders** to create machine-checkable assertions from the expected behavior and scoring rubric. Review the generated graders — accept or reject each one.
+
+3. **Save** — Click **Save** to persist the graders to the draft file on disk.
+
+4. **Validate** — Click **Validate** to check for errors. Validate also auto-assigns the production scenario name (computing the next scenario number for the agent and setting the title to production format: `Eval: {Agent} — Scenario {NN} — {Name} ({Category})`).
+
+5. **Set category** — Change the category dropdown from "draft" to a real category:
+   - **capability** — tests a core agent competency ("can it do this at all?")
+   - **regression** — prevents a specific bug from recurring
+   - **happy-path** — standard input, expected behavior
+   - **edge-case** — unusual inputs or boundary conditions
+   - **adversarial** — actively tries to trip the agent
+
+6. **Dry Run** — Click **Dry Run** to execute a single-trial eval. This saves the form, runs the eval, and redirects to the live eval page. The dry run validates that graders execute correctly and the scenario produces a meaningful result. Note: Dry Run auto-saves the form, so no separate Save is needed between Validate and Dry Run.
+
+7. **Promote** — After the dry run completes, return to the draft edit page. The **Promote to Production** button appears. Click it to move the draft from `evals/<agent>/drafts/` to `evals/<agent>/scenario-NN-<name>.md`. The draft file is deleted after promotion.
+
+The draft edit page shows a 7-step workflow stepper at the top indicating your current position. Each step is checked off as you complete it.
+
+**Staleness protection**: If you edit eval-relevant fields (prompt, graders, scoring rubric) after a dry run, promotion is blocked until you re-run. Non-eval fields (category, title, overview) can be changed freely without invalidating the dry run.
+
+**When to promote**: Not every draft needs promotion. Promote drafts that test important behaviors you want to protect against regression. Skip drafts that test trivial or one-off interactions.
+
 ---
 
 ## File locations
 
 - Agent specs: `agents/<name>.md`
 - Scenario files: `evals/<agent>/scenario-NN-<name>.md`
+- Draft scenarios: `evals/<agent>/drafts/draft-*.md` (auto-captured from /team sessions)
 - Grader configs: embedded in scenario files under `graders:` block
 - Raw results: `evals/results/raw/<timestamp>/`
 - Compiled results: `evals/results/*.json`
