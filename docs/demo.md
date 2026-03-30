@@ -64,6 +64,7 @@ Walk the phases quickly — point at diagram as you go:
 - [ ] **"Each scenario is a realistic task with defined grading criteria"**
 - [ ] **"Scored by an independent grader — agents don't grade themselves"**
 - [ ] Point at dashboard: per-agent pass rates, scenario breakdown
+- [ ] **Explain pass@k and pass^k** — "You'll see three metrics: pass@1, pass@3, and pass^3. pass@k means: run the agent k times, does it pass *at least once*? That's the ceiling — what the agent is capable of. pass^k means: run it k times, does it pass *every single time*? That's the floor — how consistent it is. So for 3 trials: pass@3 is the best case, pass@1 is the expected single-shot experience, and pass^3 is the worst case. A scenario with pass@3=100% but pass^3=33% means the agent can always get it right eventually but fails 2 out of 3 times — it's capable but unreliable. When pass@3 equals pass^3, the agent is perfectly consistent. We optimize for pass@1 — that's what users actually experience — but we watch the gap between pass@3 and pass^3 to spot flaky scenarios."
 - [ ] **"When we change an agent spec, we re-run evals to prove it got better, not worse"**
 
 ---
@@ -79,13 +80,13 @@ Walk the phases quickly — point at diagram as you go:
 - [ ] **"On top of that — every /team session automatically creates draft eval scenarios for each agent that ran"**
 - [ ] **"So real work feeds directly into our test suite. The more we use it, the better our evals get."**
 - [ ] **Real example — Bird's improvement arc:**
-  - Quick explainer: "pass@1 means it passes on the first try. pass@3 means it passes at least once in 3 attempts. pass@1 is the bar we care about — that's real-world reliability."
+  - Quick explainer: "pass@1 = passes first try. pass@3 = passes at least once in 3 tries (ceiling). pass^3 = passes all 3 tries (floor). We care about pass@1 for real-world reliability and watch pass@3 vs pass^3 gap for flakiness."
   - "Bird started at 65% pass@1 — 7 out of 20 scenarios failing"
   - "Evals showed us the exact failure patterns: Bird was mixing escalation types — adding missing_context alongside contradiction — and sometimes producing empty acceptance criteria"
-  - "We went through 13 iterations of spec tuning. Hit a plateau at 70% — 5 hard-fail scenarios at 0/3 pass rate"
+  - "We went through 13 iterations of spec tuning. Hit a plateau at 70% — 5 hard-fail scenarios at 0/3 pass rate, meaning pass^3 was 0% on those — not just unreliable, completely broken"
   - "Breakthrough came from fixing the grader semantics — the contains grader now accepts Bird's substantively correct analysis even when it adds extra escalation types"
   - "Also added structured output contracts to Bird's spec: machine-to-machine framing, escalation type classification before analysis, explicit first/last character rules for JSON"
-  - "Result: Bird went from 65% to 90% pass@1, and 75% to 100% pass@3"
+  - "Result: Bird went from 65% to 90% pass@1, 75% to 100% pass@3, and pass^3 converged with pass@3 — meaning the wins are consistent, not lucky"
   - "That's the flywheel: evals surface the problem, traces show you exactly where, you tune the spec, re-run evals, measure the improvement"
 
 ---
@@ -192,12 +193,12 @@ Narrate as it runs:
 - [ ] **Trials** — "We run --trials 3 minimum. Single trial can be lucky."
 - [ ] **Draft capture** — "Every /team session auto-generates draft eval scenarios for each agent. Real work becomes test cases. The eval suite grows organically from actual usage."
 - [ ] **Real example — walk through Bird's improvement arc:**
-  - Remind them: "pass@1 = passes first try, pass@3 = passes at least once in 3 runs. pass@1 is real-world reliability."
+  - Remind them: "pass@1 = first try. pass@3 = at least once in 3 (ceiling). pass^3 = all 3 pass (floor). Gap between pass@3 and pass^3 = flakiness."
   - Baseline: 65% pass@1, 75% pass@3 — 7 failing scenarios
   - Failure analysis from evals: Bird was mixing escalation types (adding `missing_context` alongside `contradiction`), wrong type classification (scenario 15), empty acceptance criteria (scenario 17)
-  - 13 iterations of spec tuning — hit plateau at 70%
+  - 13 iterations of spec tuning — hit plateau at 70% — 5 hard-fail scenarios at 0% pass^3
   - Two breakthroughs: (1) fixed grader `contains` semantics to accept substantively correct output with extra types, (2) added structured output contract to Bird's spec — machine-to-machine framing, escalation type classification before analysis
-  - Result: 65% -> 90% pass@1, 75% -> 100% pass@3
+  - Result: 65% -> 90% pass@1, 75% -> 100% pass@3, pass^3 converged with pass@3 — consistent, not lucky
   - "Without evals we'd be guessing. With evals we knew exactly what was failing and could measure every change."
 
 ---
