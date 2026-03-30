@@ -64,6 +64,7 @@ export type ScenarioListItem = {
   title: string;
   category: string;
   type: string; // from title parens
+  kind: "production" | "draft" | "team";
 };
 
 // ── List Page ───────────────────────────────────────────────────────────────
@@ -99,18 +100,25 @@ export function ScenariosListPage(
     : groups;
 
   const groupsHtml = filteredGroups.map(g => {
-    const rows = g.scenarios.map(s => `
-      <tr>
+    const rows = g.scenarios.map(s => {
+      const isDraft = s.kind === "draft";
+      const href = isDraft
+        ? `/scenarios/${esc(g.agent)}/drafts/${esc(s.scenarioId)}`
+        : `/scenarios/${esc(g.agent)}/${esc(s.scenarioId)}`;
+      const draftBadge = isDraft ? `<span class="sc-draft-badge-row">draft</span> ` : "";
+      return `
+      <tr class="${isDraft ? "sc-draft-row" : ""}">
         <td>
-          <a href="/scenarios/${esc(g.agent)}/${esc(s.scenarioId)}" class="sc-scenario-link">
-            ${esc(s.scenarioId)}
+          <a href="${href}" class="sc-scenario-link">
+            ${draftBadge}${esc(s.scenarioId)}
           </a>
         </td>
         <td>${esc(s.title)}</td>
         <td><span class="sc-category-badge sc-cat-${esc(s.category)}">${esc(s.category || "—")}</span></td>
         <td><span class="sc-type-tag sc-type-${esc(typeClass(s.type))}">${esc(s.type || "—")}</span></td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
 
     return `
       <div class="sc-agent-group">
@@ -177,6 +185,11 @@ export function ScenariosListPage(
       .sc-type-edge-case { background: rgba(251,191,36,0.12); color: var(--partial); border: 1px solid rgba(251,191,36,0.25); }
       .sc-type-escalation-case { background: rgba(56,139,253,0.12); color: var(--accent); border: 1px solid rgba(56,139,253,0.25); }
       .sc-type-negative-case { background: rgba(248,113,113,0.12); color: var(--fail); border: 1px solid rgba(248,113,113,0.25); }
+      /* Draft rows */
+      .sc-draft-row { background: rgba(125,133,144,0.04); }
+      .sc-draft-row:hover { background: rgba(125,133,144,0.09) !important; }
+      .sc-draft-badge-row { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; background: rgba(125,133,144,0.18); color: var(--text-muted); border: 1px solid rgba(125,133,144,0.3); vertical-align: middle; margin-right: 2px; }
+      .sc-draft-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; background: rgba(125,133,144,0.18); color: var(--text-muted); border: 1px solid rgba(125,133,144,0.35); }
     </style>
   `;
 }
@@ -448,77 +461,6 @@ export function ScenarioEditPage(
       </div>
     </form>
 
-    <style>
-      .sc-edit-layout { display: flex; flex-direction: column; gap: 20px; max-width: 820px; }
-      .sc-field-group { display: flex; flex-direction: column; gap: 6px; }
-      .sc-field-narrow { max-width: 280px; }
-      .sc-field-label { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
-      .sc-field-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-muted); font-size: 11px; }
-      .sc-required { color: var(--fail) !important; }
-      .sc-text-input { width: 100%; background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; box-sizing: border-box; }
-      .sc-text-input:focus { border-color: var(--accent); }
-      .sc-textarea { width: 100%; background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; resize: vertical; line-height: 1.6; box-sizing: border-box; }
-      .sc-textarea:focus { border-color: var(--accent); }
-      .sc-textarea-mono { font-family: var(--mono); font-size: 12px; }
-      .sc-textarea-tall { min-height: 160px; }
-      .sc-select { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; cursor: pointer; }
-      .sc-select:focus { border-color: var(--accent); }
-
-      /* Generated grader cards */
-      .sc-gen-grader-list { display: flex; flex-direction: column; gap: 8px; }
-      .sc-gen-grader-card { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 6px; transition: border-color 0.15s, opacity 0.15s; }
-      .sc-gen-grader-accepted { border-color: rgba(74,222,128,0.4); }
-      .sc-gen-grader-rejected { opacity: 0.5; }
-      .sc-gen-grader-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-      .sc-gen-grader-type { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.2); border-radius: 4px; padding: 2px 8px; }
-      .sc-gen-grader-props { display: flex; flex-wrap: wrap; gap: 6px; }
-      .sc-grader-prop-chip { font-family: var(--mono); font-size: 11px; color: var(--text-dim); background: var(--surface-2); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 2px 7px; }
-      .sc-grader-prop-key { color: var(--text-muted); }
-      .sc-conf-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border-radius: 10px; padding: 2px 7px; margin-left: auto; }
-      .sc-conf-high { background: rgba(74,222,128,0.15); color: var(--pass); border: 1px solid rgba(74,222,128,0.3); }
-      .sc-conf-med { background: rgba(251,191,36,0.15); color: var(--partial); border: 1px solid rgba(251,191,36,0.3); }
-      .sc-conf-low { background: rgba(248,113,113,0.15); color: var(--fail); border: 1px solid rgba(248,113,113,0.3); }
-      .sc-gen-grader-source { font-size: 11px; color: var(--text-muted); font-style: italic; padding-left: 2px; line-height: 1.5; }
-      .sc-gen-grader-toggle { display: flex; align-items: center; gap: 5px; cursor: pointer; margin-left: auto; flex-shrink: 0; }
-      .sc-gen-grader-toggle input[type="checkbox"] { cursor: pointer; width: 14px; height: 14px; accent-color: var(--pass); }
-      .sc-gen-grader-toggle-label { font-size: 11px; font-weight: 600; color: var(--text-muted); user-select: none; }
-      .sc-gen-grader-accepted .sc-gen-grader-toggle-label { color: var(--pass); }
-      .sc-gen-grader-empty { font-size: 13px; color: var(--text-muted); padding: 16px; background: var(--surface-3); border: 1px dashed var(--border); border-radius: 6px; line-height: 1.6; }
-      .sc-current-graders-note { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; padding: 8px 12px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; }
-      .sc-current-grader-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; font-size: 12px; font-family: var(--mono); color: var(--text-dim); margin: 0 4px 4px 0; }
-
-      /* Feedback area (below buttons) */
-      .sc-feedback-area { display: flex; flex-direction: column; gap: 8px; }
-      .sc-feedback-area:empty { display: none; }
-
-      /* Actions */
-      .sc-actions { display: flex; gap: 10px; align-items: center; padding-top: 8px; flex-wrap: wrap; }
-      .sc-btn-primary { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 9px 20px; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; text-decoration: none; }
-      .sc-btn-primary:hover { opacity: 0.85; }
-      .sc-btn-secondary { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--text-dim); transition: border-color 0.15s; }
-      .sc-btn-secondary:hover { border-color: var(--text-muted); color: var(--text); }
-      .sc-btn-run { background: rgba(74,222,128,0.12); border: 1px solid rgba(74,222,128,0.35); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--pass); transition: all 0.15s; }
-      .sc-btn-run:hover:not(:disabled) { background: rgba(74,222,128,0.22); border-color: var(--pass); }
-      .sc-btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
-      .sc-btn-copy { background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.3); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--accent); transition: all 0.15s; }
-      .sc-btn-copy:hover { background: rgba(88,166,255,0.18); border-color: var(--accent); }
-      .sc-btn-ghost { background: none; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; text-decoration: none; padding: 8px 4px; transition: color 0.15s; }
-      .sc-btn-ghost:hover { color: var(--text); }
-      .sc-spinner { font-size: 12px; color: var(--text-muted); }
-      .sc-dry-run-error { font-size: 12px; color: var(--fail); }
-
-      /* Validation box */
-      .sc-validation-box { border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
-      .sc-validation-ok { background: rgba(74,222,128,0.08); border: 1px solid rgba(74,222,128,0.25); }
-      .sc-validation-has-errors { background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.25); }
-      .sc-validation-has-warnings { background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.25); }
-      .sc-issue { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.5; }
-      .sc-issue-icon { flex-shrink: 0; font-size: 13px; }
-      .sc-issue.error { color: var(--fail); }
-      .sc-issue.warn { color: var(--partial); }
-      .sc-issue.ok { color: var(--pass); }
-    </style>
-
     <script>
       // Toggle accept/reject on grader card
       function toggleGraderCard(checkbox) {
@@ -681,6 +623,419 @@ export function ScenarioEditPage(
   `;
 }
 
+/**
+ * Returns the current workflow step (1-7) based on draft state.
+ *
+ * Step 1 — Review content: placeholder text still present
+ * Step 2 — Generate Graders: content filled but no graders exist yet
+ * Step 3 — Save: graders generated in preview but not yet persisted
+ * Step 4 — Validate: graders saved but validation errors exist
+ * Step 5 — Set category: graders saved, no errors, but category is still "draft"
+ * Step 6 — Dry Run: category set, graders exist, no dry run result yet
+ * Step 7 — Promote: dry run complete
+ */
+function computeWorkflowStep(
+  hasPlaceholder: boolean,
+  gradersExist: boolean,
+  generatedGraders: GeneratedGrader[] | undefined,
+  categoryIsDraft: boolean,
+  dryRunDone: boolean,
+  issues: ValidationIssue[] = []
+): number {
+  if (hasPlaceholder) return 1;
+  if (!gradersExist && generatedGraders === undefined) return 2;
+  if (generatedGraders !== undefined && !gradersExist) return 3;
+  if (gradersExist) {
+    const hasErrors = issues.some(i => i.level === "error");
+    if (hasErrors) return 4;
+    if (categoryIsDraft) return 5;
+    if (!dryRunDone) return 6;
+    return 7;
+  }
+  return 3;
+}
+
+const WORKFLOW_STEPS: { label: string; hint: string }[] = [
+  {
+    label: "Review content",
+    hint: "Replace the placeholder text in Expected Behavior, Failure Modes, and Scoring Rubric with real criteria based on the reference output.",
+  },
+  {
+    label: "Generate Graders",
+    hint: "Click 'Generate Graders' below to create machine-checkable assertions from your scoring rubric.",
+  },
+  {
+    label: "Save",
+    hint: "Review the generated graders, then click 'Save' to persist them.",
+  },
+  {
+    label: "Validate",
+    hint: "Click 'Validate' to check for errors before proceeding.",
+  },
+  {
+    label: "Set category",
+    hint: "Set the category dropdown to classify this scenario (capability, regression, edge-case, etc.).",
+  },
+  {
+    label: "Dry Run",
+    hint: "Click 'Dry Run' to execute a single-trial eval and validate the scenario.",
+  },
+  {
+    label: "Promote",
+    hint: "Review the dry run results, then click 'Promote to Production' to finalize.",
+  },
+];
+
+/**
+ * Renders a horizontal workflow stepper bar for the draft edit page.
+ * currentStep is 1-based.
+ */
+function WorkflowStepper(currentStep: number): string {
+  const stepCircles = WORKFLOW_STEPS.map((step, i) => {
+    const n = i + 1;
+    const isCompleted = n < currentStep;
+    const isCurrent = n === currentStep;
+
+    let circleStyle: string;
+    let circleContent: string;
+    let labelStyle: string;
+
+    if (isCompleted) {
+      circleStyle = "background:var(--pass);border-color:var(--pass);color:#0d1117";
+      circleContent = "&#10003;";
+      labelStyle = "color:var(--pass)";
+    } else if (isCurrent) {
+      circleStyle = "background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 0 0 3px rgba(56,139,253,0.25)";
+      circleContent = String(n);
+      labelStyle = "color:var(--accent);font-weight:600";
+    } else {
+      circleStyle = "background:transparent;border-color:var(--border);color:var(--text-muted)";
+      circleContent = String(n);
+      labelStyle = "color:var(--text-muted)";
+    }
+
+    const connectorColor = isCompleted ? "var(--pass)" : "var(--border)";
+    const connectorHtml = i < WORKFLOW_STEPS.length - 1
+      ? `<div style="flex:1;height:2px;background:${connectorColor};margin:0 4px;align-self:center;min-width:12px"></div>`
+      : "";
+
+    return `
+      <div style="display:flex;align-items:center;flex:${i < WORKFLOW_STEPS.length - 1 ? "1" : "0 0 auto"}">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:48px">
+          <div style="width:28px;height:28px;border-radius:50%;border:2px solid;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;${circleStyle}">${circleContent}</div>
+          <span style="font-size:11px;white-space:nowrap;${labelStyle}">${esc(step.label)}</span>
+        </div>
+        ${connectorHtml}
+      </div>
+    `;
+  }).join("");
+
+  const currentHint = WORKFLOW_STEPS[currentStep - 1]?.hint ?? "";
+
+  return `
+    <div class="sc-workflow-stepper" style="margin-bottom:24px">
+      <div style="display:flex;align-items:flex-start;width:100%;overflow-x:auto;padding-bottom:4px">
+        ${stepCircles}
+      </div>
+      ${currentHint ? `<div style="margin-top:10px;padding:8px 14px;background:rgba(56,139,253,0.08);border:1px solid rgba(56,139,253,0.25);border-radius:6px;font-size:13px;color:var(--text)"><span style="color:var(--accent);font-weight:600">Step ${currentStep}:</span> ${esc(currentHint)}</div>` : ""}
+    </div>
+  `;
+}
+
+/**
+ * DraftEditPage — same as ScenarioEditPage but with draft-specific UI:
+ * - Draft badge in header
+ * - Workflow stepper showing current position in draft-to-production process
+ * - Form actions point to /api/scenarios/:agent/drafts/:draftId
+ * - Promote button shown when dryRunDone is true
+ * - Promote blocked by placeholder text / category=draft
+ */
+export function DraftEditPage(
+  agent: string,
+  draftId: string,
+  parsed: ParsedScenario,
+  issues: ValidationIssue[],
+  savedFlash = false,
+  generatedGraders?: GeneratedGrader[],
+  dryRunDone = false
+): string {
+  const PLACEHOLDER = "DRAFT - Needs human review";
+  const hasPlaceholder =
+    parsed.expected_behavior.includes(PLACEHOLDER) ||
+    parsed.failure_modes.includes(PLACEHOLDER) ||
+    parsed.scoring_rubric.includes(PLACEHOLDER);
+  const categoryIsDraft = !parsed.category || parsed.category === "draft";
+  const gradersExist = parsed.graders.length > 0;
+
+  const currentStep = computeWorkflowStep(
+    hasPlaceholder,
+    gradersExist,
+    generatedGraders,
+    categoryIsDraft,
+    dryRunDone,
+    issues
+  );
+  const stepperHtml = WorkflowStepper(currentStep);
+
+  // Build flash/error messages
+  let flashHtml = "";
+  if (savedFlash) {
+    flashHtml = `<div class="sc-validation-box sc-validation-ok" id="validation-result"><div class="sc-issue ok"><span class="sc-issue-icon">&#10003;</span><span>Draft saved successfully.</span></div></div>`;
+  } else if (issues.length > 0) {
+    const hasErrors = issues.some(i => i.level === "error");
+    flashHtml = `<div class="sc-validation-box ${hasErrors ? "sc-validation-has-errors" : "sc-validation-has-warnings"}" id="validation-result">${issues.map(renderIssue).join("")}</div>`;
+  } else {
+    flashHtml = `<div id="validation-result"></div>`;
+  }
+
+  const categoryIsKnown = parsed.category !== "" && KNOWN_CATEGORIES.includes(parsed.category as KnownCategory);
+  const categoryIsUnknown = parsed.category !== "" && !KNOWN_CATEGORIES.includes(parsed.category as KnownCategory);
+  const categoryOptions = KNOWN_CATEGORIES.map(cat =>
+    `<option value="${esc(cat)}"${parsed.category === cat ? " selected" : ""}>${esc(cat)}</option>`
+  ).join("");
+  const emptyOption = !categoryIsKnown
+    ? `<option value="" selected>-- select --</option>`
+    : `<option value="">-- select --</option>`;
+  const unknownOption = categoryIsUnknown
+    ? `<option value="${esc(parsed.category)}">${esc(parsed.category)} (unknown)</option>`
+    : "";
+
+  let graderSectionHtml: string;
+  if (generatedGraders !== undefined) {
+    graderSectionHtml = renderGeneratedGraderSection(generatedGraders, agent, draftId);
+  } else if (parsed.graders.length > 0) {
+    graderSectionHtml = renderCurrentGraderSection(parsed.graders, agent, draftId);
+  } else {
+    graderSectionHtml = renderEmptyGraderSection(agent, draftId);
+  }
+
+  // Build promote section
+  let promoteHtml = "";
+  if (dryRunDone) {
+    const promoteBlocked = hasPlaceholder || categoryIsDraft;
+    const promoteBlockReason = hasPlaceholder
+      ? "Placeholder text must be replaced before promoting."
+      : categoryIsDraft
+        ? "Category must be set (not 'draft') before promoting."
+        : "";
+    if (promoteBlocked) {
+      promoteHtml = `
+        <div class="sc-promote-form">
+          <div class="sc-promote-header">
+            <span class="sc-promote-title">Ready to promote</span>
+            <span class="sc-promote-blocked-reason">${esc(promoteBlockReason)}</span>
+          </div>
+          <button type="button" class="sc-btn-promote" disabled title="${esc(promoteBlockReason)}">
+            Promote to Production
+          </button>
+        </div>
+      `;
+    } else {
+      promoteHtml = `
+        <div class="sc-promote-form">
+          <div class="sc-promote-header">
+            <span class="sc-promote-title">Dry run complete — ready to promote</span>
+            <span class="sc-promote-hint">This will rename the draft to a production scenario file.</span>
+          </div>
+          <form method="POST" action="/api/scenarios/${esc(agent)}/drafts/${esc(draftId)}/promote" style="display:inline">
+            <button type="submit" class="sc-btn-promote">
+              Promote to Production
+            </button>
+          </form>
+        </div>
+      `;
+    }
+  }
+
+  return `
+    <div class="page-title">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <a href="/scenarios?agent=${esc(agent)}" style="color:${agentColor(agent)};text-decoration:none;font-size:13px;font-weight:600">&#8592; ${esc(agent)}</a>
+        <span style="color:var(--border)">/</span>
+        <span class="sc-draft-badge">draft</span>
+        <h1 style="margin:0;font-family:var(--mono);font-size:16px">${esc(draftId)}</h1>
+      </div>
+    </div>
+
+    ${stepperHtml}
+
+    ${promoteHtml}
+
+    <form
+      id="scenario-form"
+      method="POST"
+      action="/api/scenarios/${esc(agent)}/drafts/${esc(draftId)}"
+    >
+      <div class="sc-edit-layout">
+
+        <!-- Title -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-title">Title</label>
+          <input id="f-title" name="title" type="text" class="sc-text-input" value="${esc(parsed.title)}">
+        </div>
+
+        <!-- Overview -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-overview">Overview</label>
+          <textarea id="f-overview" name="overview" class="sc-textarea" rows="3">${esc(parsed.overview)}</textarea>
+        </div>
+
+        <!-- Category -->
+        <div class="sc-field-group sc-field-narrow">
+          <label class="sc-field-label" for="f-category">Category</label>
+          <select id="f-category" name="category" class="sc-select">
+            ${emptyOption}
+            ${unknownOption}
+            ${categoryOptions}
+          </select>
+        </div>
+
+        <!-- Prompt -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-prompt">
+            Prompt
+            <span class="sc-field-hint sc-required">Required — verbatim input to the agent</span>
+          </label>
+          <textarea id="f-prompt" name="prompt" class="sc-textarea sc-textarea-mono sc-textarea-tall" rows="10">${esc(parsed.prompt)}</textarea>
+        </div>
+
+        <!-- Expected Behavior -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-expected-behavior">Expected Behavior</label>
+          <textarea id="f-expected-behavior" name="expected_behavior" class="sc-textarea" rows="6">${esc(parsed.expected_behavior)}</textarea>
+        </div>
+
+        <!-- Failure Modes -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-failure-modes">Failure Modes</label>
+          <textarea id="f-failure-modes" name="failure_modes" class="sc-textarea" rows="5">${esc(parsed.failure_modes)}</textarea>
+        </div>
+
+        <!-- Scoring Rubric -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-scoring-rubric">
+            Scoring Rubric
+            <span class="sc-field-hint">Should include pass:, partial:, fail: sub-sections</span>
+          </label>
+          <textarea id="f-scoring-rubric" name="scoring_rubric" class="sc-textarea sc-textarea-mono" rows="8">${esc(parsed.scoring_rubric)}</textarea>
+        </div>
+
+        <!-- Reference Output -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-reference-output">
+            Reference Output
+            <span class="sc-field-hint">Optional — expected verbatim output</span>
+          </label>
+          <textarea id="f-reference-output" name="reference_output" class="sc-textarea sc-textarea-mono" rows="5">${esc(parsed.reference_output)}</textarea>
+        </div>
+
+        <!-- Generated Graders Panel -->
+        <div class="sc-field-group" id="graders-section">
+          <label class="sc-field-label">
+            Generated Graders
+            <span class="sc-field-hint">Auto-generated from expected behavior and scoring rubric</span>
+          </label>
+          <div id="grader-preview-panel">
+            ${graderSectionHtml}
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="sc-actions">
+          <button
+            type="button"
+            class="sc-btn-secondary"
+            hx-post="/api/scenarios/${esc(agent)}/drafts/${esc(draftId)}/generate-graders"
+            hx-include="#scenario-form"
+            hx-target="#grader-preview-panel"
+            hx-swap="innerHTML"
+            hx-indicator="#gen-graders-spinner"
+          >
+            Generate Graders
+          </button>
+          <span id="gen-graders-spinner" class="htmx-indicator sc-spinner">generating...</span>
+          <button type="submit" class="sc-btn-primary" id="save-btn">
+            Save
+          </button>
+          <button
+            type="button"
+            class="sc-btn-secondary"
+            hx-post="/api/scenarios/${esc(agent)}/drafts/${esc(draftId)}/validate"
+            hx-include="#scenario-form"
+            hx-target="#validation-result"
+            hx-swap="outerHTML"
+          >
+            Validate
+          </button>
+          ${parsed.graders.length > 0 ? `<button
+            id="dry-run-btn"
+            type="button"
+            class="sc-btn-run"
+            hx-post="/api/scenarios/${esc(agent)}/drafts/${esc(draftId)}/dry-run"
+            hx-include="#scenario-form"
+            hx-target="#dry-run-error"
+            hx-swap="innerHTML"
+          >
+            Dry Run
+          </button>` : ""}
+          <a href="/scenarios?agent=${esc(agent)}" class="sc-btn-ghost">Cancel</a>
+        </div>
+
+        <!-- Feedback area -->
+        <div class="sc-feedback-area">
+          ${flashHtml}
+          ${gradersExist ? `<span id="dry-run-error" class="sc-dry-run-error"></span>` : ""}
+        </div>
+
+      </div>
+    </form>
+
+    <script>
+      function toggleGraderCard(checkbox) {
+        const idx = checkbox.dataset.idx;
+        const card = document.getElementById('gen-grader-card-' + idx);
+        const label = checkbox.closest('.sc-gen-grader-toggle').querySelector('.sc-gen-grader-toggle-label');
+        const hiddenDiv = document.getElementById('gen-grader-hidden-' + idx);
+        if (checkbox.checked) {
+          card.classList.add('sc-gen-grader-accepted');
+          card.classList.remove('sc-gen-grader-rejected');
+          label.textContent = 'Accepted';
+          if (hiddenDiv) hiddenDiv.innerHTML = card.dataset.hiddenInputs || '';
+        } else {
+          card.classList.remove('sc-gen-grader-accepted');
+          card.classList.add('sc-gen-grader-rejected');
+          label.textContent = 'Rejected';
+          if (hiddenDiv) hiddenDiv.innerHTML = '';
+        }
+        syncGraderCount();
+      }
+      function syncGraderCount() {
+        const acceptedCheckboxes = document.querySelectorAll('.sc-gen-grader-checkbox:checked');
+        let countEl = document.getElementById('gen-grader-count-hidden');
+        if (!countEl) {
+          countEl = document.createElement('input');
+          countEl.type = 'hidden';
+          countEl.name = 'grader_count';
+          countEl.id = 'gen-grader-count-hidden';
+          document.getElementById('scenario-form').appendChild(countEl);
+        }
+        countEl.value = String(acceptedCheckboxes.length);
+      }
+      document.addEventListener('DOMContentLoaded', function() { syncGraderCount(); });
+      document.addEventListener('htmx:afterSwap', function(evt) {
+        if (evt.detail.target && evt.detail.target.id === 'grader-preview-panel') {
+          syncGraderCount();
+          var dryRunBtn = document.getElementById('dry-run-btn');
+          if (dryRunBtn) {
+            var accepted = document.querySelectorAll('.sc-gen-grader-checkbox:checked').length;
+            dryRunBtn.disabled = accepted === 0;
+          }
+        }
+      });
+    </script>
+  `;
+}
+
 function renderGeneratedGraderSection(graders: GeneratedGrader[], agent: string, scenarioId: string): string {
   if (graders.length === 0) {
     return `<div class="sc-gen-grader-empty">No machine-checkable assertions found — scoring will rely entirely on LLM rubric evaluation.</div>`;
@@ -745,13 +1100,28 @@ function renderIssue(issue: ValidationIssue): string {
   return `<div class="sc-issue ${esc(issue.level)}"><span class="sc-issue-icon">${icon}</span><span>${esc(issue.message)}</span></div>`;
 }
 
-export function ValidationResultFragment(issues: ValidationIssue[]): string {
-  if (issues.length === 0) {
-    return `<div class="sc-validation-box sc-validation-ok" id="validation-result"><div class="sc-issue ok"><span class="sc-issue-icon">&#10003;</span><span>No issues found — file is ready to save.</span></div></div>`;
-  }
+export function ValidationResultFragment(issues: ValidationIssue[], suggestedTitle?: string): string {
   const hasErrors = issues.some(i => i.level === "error");
+
+  // Build the suggested-title injection block when a suggestion is available and there are no errors
+  const titleSuggestionHtml = (suggestedTitle && !hasErrors) ? `
+    <input type="hidden" id="suggested-title" value="${esc(suggestedTitle)}">
+    <div class="sc-issue ok" style="margin-top:6px"><span class="sc-issue-icon">&#8594;</span><span>Title auto-set to: <strong>${esc(suggestedTitle)}</strong></span></div>
+    <script>
+      (function() {
+        var inp = document.getElementById('suggested-title');
+        if (inp) {
+          var titleField = document.getElementById('f-title');
+          if (titleField) titleField.value = inp.value;
+        }
+      })();
+    </script>` : "";
+
+  if (issues.length === 0) {
+    return `<div class="sc-validation-box sc-validation-ok" id="validation-result"><div class="sc-issue ok"><span class="sc-issue-icon">&#10003;</span><span>No issues found — file is ready to save.</span></div>${titleSuggestionHtml}</div>`;
+  }
   const boxClass = hasErrors ? "sc-validation-has-errors" : "sc-validation-has-warnings";
-  return `<div class="sc-validation-box ${boxClass}" id="validation-result">${issues.map(renderIssue).join("")}</div>`;
+  return `<div class="sc-validation-box ${boxClass}" id="validation-result">${issues.map(renderIssue).join("")}${titleSuggestionHtml}</div>`;
 }
 
 export function SaveSuccessPage(agent: string, scenarioId: string): string {
@@ -842,30 +1212,6 @@ export function ScenarioNewPage(preselectedAgent = ""): string {
       <div id="generated-fields"></div>
 
     </div>
-
-    <style>
-      .sc-edit-layout { display: flex; flex-direction: column; gap: 20px; max-width: 820px; }
-      .sc-field-group { display: flex; flex-direction: column; gap: 6px; }
-      .sc-field-narrow { max-width: 280px; }
-      .sc-field-label { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
-      .sc-field-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-muted); font-size: 11px; }
-      .sc-required { color: var(--fail) !important; font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; }
-      .sc-text-input { width: 100%; background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; box-sizing: border-box; }
-      .sc-text-input:focus { border-color: var(--accent); }
-      .sc-textarea { width: 100%; background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; resize: vertical; line-height: 1.6; box-sizing: border-box; }
-      .sc-textarea:focus { border-color: var(--accent); }
-      .sc-textarea-mono { font-family: var(--mono); font-size: 12px; }
-      .sc-textarea-tall { min-height: 160px; }
-      .sc-select { background: var(--surface-3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); padding: 8px 12px; outline: none; transition: border-color 0.15s; cursor: pointer; }
-      .sc-select:focus { border-color: var(--accent); }
-      .sc-actions { display: flex; gap: 10px; align-items: center; padding-top: 8px; flex-wrap: wrap; }
-      .sc-btn-primary { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 9px 20px; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; text-decoration: none; }
-      .sc-btn-primary:hover { opacity: 0.85; }
-      .sc-btn-ghost { background: none; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; text-decoration: none; padding: 8px 4px; transition: color 0.15s; }
-      .sc-btn-ghost:hover { color: var(--text); }
-      .sc-spinner { font-size: 12px; color: var(--text-muted); }
-      .sc-generate-error { color: var(--fail); font-size: 13px; padding: 12px 16px; background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.25); border-radius: 8px; }
-    </style>
 
   `;
 }
