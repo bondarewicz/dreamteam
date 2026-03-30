@@ -5,16 +5,26 @@
  * GET  /scenarios/:agent/:scenarioId           — edit form
  * POST /api/scenarios/:agent/:scenarioId       — save
  * POST /api/scenarios/:agent/:scenarioId/validate — validate only (htmx)
+ *
+ * Draft lifecycle routes (registered BEFORE generic /:agent/:scenarioId):
+ * GET  /scenarios/:agent/drafts/:draftId              — draft edit page
+ * POST /api/scenarios/:agent/drafts/:draftId           — save draft
+ * POST /api/scenarios/:agent/drafts/:draftId/validate  — validate draft
+ * POST /api/scenarios/:agent/drafts/:draftId/generate-graders — generate graders
+ * POST /api/scenarios/:agent/drafts/:draftId/dry-run   — run eval on draft
+ * POST /api/scenarios/:agent/drafts/:draftId/promote   — promote to production
  */
 
 import path from "path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { readdirSync } from "node:fs";
+import { getDb } from "../db.ts";
 import { Layout, maybeLayout } from "../views/Layout.ts";
 import { esc } from "../views/html.ts";
 import {
   ScenariosListPage,
   ScenarioEditPage,
+  DraftEditPage,
   ScenarioNewPage,
   ScenarioGenerateFragment,
   ValidationResultFragment,
@@ -45,6 +55,100 @@ const EVALS_DIR = path.join(REPO_ROOT, "evals");
 
 function scenarioPath(agent: string, scenarioId: string): string {
   return path.join(EVALS_DIR, agent, `${scenarioId}.md`);
+}
+
+function draftPath(agent: string, draftId: string): string {
+  return path.join(EVALS_DIR, agent, "drafts", `${draftId}.md`);
+}
+
+/**
+ * Compute the next available scenario number for an agent.
+ * Scans evals/<agent>/scenario-NN-*.md, finds the max NN, returns max+1.
+ * Returns 1 if no scenarios exist yet. Zero-padded to 2 digits.
+ */
+function computeNextScenarioNumber(agentDir: string): number {
+  try {
+    const files = readdirSync(agentDir);
+    const nums: number[] = [];
+    for (const f of files) {
+      const m = /^scenario-(\d+)-.*\.md$/.exec(f);
+      if (m) nums.push(parseInt(m[1], 10));
+    }
+    if (nums.length === 0) return 1;
+    return Math.max(...nums) + 1;
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * Check whether a dry run has been completed for a given draft.
+ * We look up the DB for any eval_results with the draft's temp scenario_id.
+ */
+function hasDryRunResult(agent: string, draftId: string): boolean {
+  try {
+    const db = getDb();
+    const tempScenarioId = `scenario-_draft-temp-${draftId}`;
+    const row = db.query(
+      "SELECT COUNT(*) as c FROM eval_results WHERE agent = ? AND scenario_id = ?"
+    ).get(agent, tempScenarioId) as { c: number } | null;
+    return (row?.c ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Path to the dry-run content-hash sidecar file for a given draft.
+ * Written at dry-run time; compared at promote time to detect post-dry-run edits
+ * to eval-relevant fields only.
+ */
+function dryRunHashSidecarPath(agent: string, draftId: string): string {
+  return path.join(EVALS_DIR, agent, "drafts", `.dryrun-${draftId}.hash`);
+}
+
+/**
+ * Compute a hash of only the eval-relevant fields of a parsed scenario.
+ * Changes to category, title, overview, and reference_output do NOT affect
+ * eval execution or scoring and should NOT invalidate a dry run.
+ */
+function evalContentHash(parsed: ParsedScenario): string {
+  const content = [
+    parsed.prompt,
+    parsed.expected_behavior,
+    parsed.failure_modes,
+    parsed.scoring_rubric,
+    JSON.stringify(parsed.graders),
+  ].join("\x00");
+  return String(Bun.hash(content));
+}
+
+/**
+ * Record a hash of the eval-relevant draft fields as the dry-run baseline.
+ * Called after successfully saving the draft and before starting the eval.
+ */
+function recordDryRunHash(agent: string, draftId: string): void {
+  try {
+    const content = readFileSync(draftPath(agent, draftId), "utf-8");
+    const parsed = parseScenario(content);
+    writeFileSync(dryRunHashSidecarPath(agent, draftId), evalContentHash(parsed), "utf-8");
+  } catch { /* non-fatal */ }
+}
+
+/**
+ * Check if the eval-relevant fields of the draft have changed since the last dry run.
+ * Returns true (allow promotion) only if a sidecar exists AND the eval content hash matches.
+ * Non-eval changes (category, title, overview, reference_output) do NOT invalidate the hash.
+ */
+function isDryRunFresh(agent: string, draftId: string): boolean {
+  try {
+    const recorded = readFileSync(dryRunHashSidecarPath(agent, draftId), "utf-8").trim();
+    const content = readFileSync(draftPath(agent, draftId), "utf-8");
+    const parsed = parseScenario(content);
+    return evalContentHash(parsed) === recorded;
+  } catch {
+    return false;
+  }
 }
 
 // ── Parsing ──────────────────────────────────────────────────────────────────
@@ -293,7 +397,7 @@ export function serializeScenario(p: ParsedScenario): string {
 const TITLE_RE = /^Eval:\s+\S.*—\s+Scenario\s+\d+\s+—\s+.+\(.+\)\s*$/;
 const FIELD_BOUNDARY_RE = /^[a-zA-Z_][a-zA-Z0-9_]*:\s/;
 
-export function validateScenario(p: ParsedScenario): ValidationIssue[] {
+export function validateScenario(p: ParsedScenario, isDraft = false): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   // Block: empty prompt
@@ -321,8 +425,8 @@ export function validateScenario(p: ParsedScenario): ValidationIssue[] {
     }
   }
 
-  // Warn: title format
-  if (!TITLE_RE.test(p.title)) {
+  // Warn: title format (skip for drafts — they use a different title convention)
+  if (!isDraft && !TITLE_RE.test(p.title)) {
     issues.push({ level: "warn", message: `Title format mismatch. Expected: "Eval: {Agent} — Scenario {N} — {Name} ({Type})" with em dashes. Got: "${p.title}"` });
   }
 
@@ -339,21 +443,23 @@ export function validateScenario(p: ParsedScenario): ValidationIssue[] {
     if (!/^\s*fail:/m.test(rubric)) issues.push({ level: "warn", message: "Scoring rubric missing 'fail:' sub-section." });
   }
 
-  // Warn: field boundary violations in content fields
-  const contentFields: Array<[string, string]> = [
-    ["prompt", p.prompt],
-    ["expected_behavior", p.expected_behavior],
-    ["failure_modes", p.failure_modes],
-    ["scoring_rubric", p.scoring_rubric],
-    ["reference_output", p.reference_output],
-  ];
-  for (const [fieldName, fieldValue] of contentFields) {
-    const lines = fieldValue.split("\n");
-    for (const line of lines) {
-      // Look for unindented lines that match the field boundary pattern
-      if (FIELD_BOUNDARY_RE.test(line) && !/^\s/.test(line)) {
-        issues.push({ level: "warn", message: `Field "${fieldName}" contains a line that looks like a top-level field boundary: "${line.slice(0, 80)}"` });
-        break; // one warning per field is enough
+  // Warn: field boundary violations in content fields (skip for drafts — prompts often contain "TASK:" etc.)
+  if (!isDraft) {
+    const contentFields: Array<[string, string]> = [
+      ["prompt", p.prompt],
+      ["expected_behavior", p.expected_behavior],
+      ["failure_modes", p.failure_modes],
+      ["scoring_rubric", p.scoring_rubric],
+      ["reference_output", p.reference_output],
+    ];
+    for (const [fieldName, fieldValue] of contentFields) {
+      const lines = fieldValue.split("\n");
+      for (const line of lines) {
+        // Look for unindented lines that match the field boundary pattern
+        if (FIELD_BOUNDARY_RE.test(line) && !/^\s/.test(line)) {
+          issues.push({ level: "warn", message: `Field "${fieldName}" contains a line that looks like a top-level field boundary: "${line.slice(0, 80)}"` });
+          break; // one warning per field is enough
+        }
       }
     }
   }
@@ -434,9 +540,29 @@ function parseScenarioListItem(agent: string, scenarioId: string): ScenarioListI
     const name = nameMatch ? nameMatch[1].trim() : titleLine;
     const type = nameMatch?.[2] ?? "";
     const category = extractLine(content, "category");
-    return { agent, scenarioId, title: name, category, type };
+    return { agent, scenarioId, title: name, category, type, kind: "production" };
   } catch {
-    return { agent, scenarioId, title: scenarioId, category: "", type: "" };
+    return { agent, scenarioId, title: scenarioId, category: "", type: "", kind: "production" };
+  }
+}
+
+/**
+ * Parse a draft file for the list view.
+ * draftId is the filename without .md extension (e.g. "draft-2026-03-30-1900-foo")
+ */
+function parseDraftListItem(agent: string, draftId: string): ScenarioListItem {
+  try {
+    const content = readFileSync(draftPath(agent, draftId), "utf-8");
+    const titleLine = extractTitle(content);
+    // Extract name from draft title: "Eval: {Agent} — Draft — {Name} ({Type})"
+    // or just use the full title if pattern doesn't match
+    const nameMatch = /—\s+Draft\s+—\s+(.+?)(?:\s+\((.+?)\))?\s*$/.exec(titleLine);
+    const name = nameMatch ? nameMatch[1].trim() : (titleLine || draftId);
+    const type = nameMatch?.[2] ?? "";
+    const category = extractLine(content, "category") || "draft";
+    return { agent, scenarioId: draftId, title: name, category, type, kind: "draft" };
+  } catch {
+    return { agent, scenarioId: draftId, title: draftId, category: "draft", type: "", kind: "draft" };
   }
 }
 
@@ -465,6 +591,20 @@ function loadScenarioListGroups(
         }
       } catch {
         // skip
+      }
+
+      // Scan drafts/ subdirectory (AC-12: no error if missing)
+      try {
+        const draftsDir = path.join(agentDir, "drafts");
+        const draftFiles = readdirSync(draftsDir);
+        for (const f of draftFiles.sort()) {
+          if (f.startsWith("draft-") && f.endsWith(".md")) {
+            const draftId = f.replace(/\.md$/, "");
+            scenarios.push(parseDraftListItem(agent, draftId));
+          }
+        }
+      } catch {
+        // drafts/ directory doesn't exist — that's fine (AC-12)
       }
 
       if (scenarios.length > 0) {
@@ -648,6 +788,363 @@ export async function scenarioDryRunHandler(req: Request, params: Record<string,
   return new Response(null, {
     status: 302,
     headers: { Location: "/evals/live" },
+  });
+}
+
+// ── Draft route handlers ─────────────────────────────────────────────────────
+
+/** Path traversal guard for agent/draftId params */
+function isPathSafe(...parts: string[]): boolean {
+  for (const p of parts) {
+    if (!p || p.includes("..") || p.includes("/")) return false;
+  }
+  return true;
+}
+
+/** GET /scenarios/:agent/drafts/:draftId */
+export function draftEditHandler(req: Request, params: Record<string, string>): Response {
+  const { agent, draftId } = params;
+  if (!agent || !draftId) return html("Not Found", 404);
+  if (!isPathSafe(agent, draftId)) return html("Bad Request", 400);
+
+  let content: string;
+  try {
+    content = readFileSync(draftPath(agent, draftId), "utf-8");
+  } catch {
+    return html(Layout("Not Found", `<div class="empty-state">Draft not found: ${esc(agent)}/drafts/${esc(draftId)}</div>`), 404);
+  }
+
+  const parsed = parseScenario(content);
+  const url = new URL(req.url);
+  const savedFlash = url.searchParams.get("saved") === "1";
+  const errorParam = url.searchParams.get("error") ?? "";
+  const dryRunDone = hasDryRunResult(agent, draftId);
+
+  // Build issues, possibly adding a promote-blocked error
+  let issues = savedFlash && !errorParam ? [] : validateScenario(parsed, true);
+  if (errorParam === "placeholder") {
+    issues = [{ level: "error", message: "Promotion blocked: replace placeholder text 'DRAFT - Needs human review' before promoting." }, ...issues];
+  } else if (errorParam === "category") {
+    issues = [{ level: "error", message: "Promotion blocked: set a non-draft category before promoting." }, ...issues];
+  } else if (errorParam === "nodryrun") {
+    issues = [{ level: "error", message: "Promotion blocked: a dry run must be completed first." }, ...issues];
+  } else if (errorParam === "conflict") {
+    issues = [{ level: "error", message: "Promotion failed: scenario number conflict — try again." }, ...issues];
+  } else if (errorParam === "stalerun") {
+    issues = [{ level: "error", message: "Promotion blocked: draft was modified after dry run — re-run before promoting." }, ...issues];
+  }
+
+  const body = DraftEditPage(agent, draftId, parsed, issues, savedFlash && !errorParam, undefined, dryRunDone);
+  return html(maybeLayout(req, `${draftId} — ${agent} (draft)`, body, "/scenarios"));
+}
+
+/** POST /api/scenarios/:agent/drafts/:draftId — save draft */
+export async function draftSaveHandler(req: Request, params: Record<string, string>): Promise<Response> {
+  const { agent, draftId } = params;
+  if (!agent || !draftId) return html("Bad Request", 400);
+  if (!isPathSafe(agent, draftId)) return html("Bad Request", 400);
+
+  // Ensure drafts directory exists
+  const draftsDir = path.join(EVALS_DIR, agent, "drafts");
+  mkdirSync(draftsDir, { recursive: true });
+
+  const formParams = await parseFormBody(req);
+  const parsed = parsedFromForm(formParams);
+  const issues = validateScenario(parsed, true);
+  const hasErrors = issues.some(i => i.level === "error");
+
+  if (hasErrors) {
+    const dryRunDone = hasDryRunResult(agent, draftId);
+    const body = DraftEditPage(agent, draftId, parsed, issues, false, undefined, dryRunDone);
+    return html(maybeLayout(req, `${draftId} — ${agent} (draft)`, body, "/scenarios"));
+  }
+
+  const serialized = serializeScenario(parsed);
+  try {
+    writeFileSync(draftPath(agent, draftId), serialized, "utf-8");
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const errorIssues: ValidationIssue[] = [{ level: "error", message: `Failed to write file: ${errMsg}` }];
+    const dryRunDone = hasDryRunResult(agent, draftId);
+    const body = DraftEditPage(agent, draftId, parsed, errorIssues, false, undefined, dryRunDone);
+    return html(maybeLayout(req, `${draftId} — ${agent} (draft)`, body, "/scenarios"), 500);
+  }
+
+  return new Response(null, {
+    status: 302,
+    headers: { Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?saved=1` },
+  });
+}
+
+/** POST /api/scenarios/:agent/drafts/:draftId/validate — htmx fragment */
+export async function draftValidateHandler(req: Request, params: Record<string, string>): Promise<Response> {
+  const { agent, draftId } = params;
+  if (!agent || !draftId) return html("Bad Request", 400);
+  if (!isPathSafe(agent, draftId)) return html("Bad Request", 400);
+
+  const formParams = await parseFormBody(req);
+  const parsed = parsedFromForm(formParams);
+  const issues = validateScenario(parsed, true);
+  const hasErrors = issues.some(i => i.level === "error");
+
+  // When validation passes (no errors), compute the suggested production title
+  let suggestedTitle: string | undefined;
+  if (!hasErrors) {
+    const agentDir = path.join(EVALS_DIR, agent);
+    const nextNum = computeNextScenarioNumber(agentDir);
+    const paddedNum = String(nextNum).padStart(2, "0");
+    const agentDisplay = agent.charAt(0).toUpperCase() + agent.slice(1);
+    const category = parsed.category || "capability";
+
+    // Extract name from draft title pattern: "Eval: {Agent} — Draft — {Name} ({Suffix})"
+    // Strip recognized draft prefixes and suffixes to isolate the human-readable name
+    let name = parsed.title;
+    const draftPrefixRe = /^Eval:\s+\S.*?—\s+Draft\s+—\s+(.+)$/;
+    const draftMatch = draftPrefixRe.exec(parsed.title);
+    if (draftMatch) {
+      name = draftMatch[1].trim();
+      // Strip trailing "(Auto-captured)" suffix
+      name = name.replace(/\s*\(Auto-captured\)\s*$/, "").trim();
+    }
+
+    suggestedTitle = `Eval: ${agentDisplay} — Scenario ${paddedNum} — ${name} (${category})`;
+  }
+
+  return html(ValidationResultFragment(issues, suggestedTitle));
+}
+
+/** POST /api/scenarios/:agent/drafts/:draftId/generate-graders — htmx fragment */
+export async function draftGenerateGradersHandler(req: Request, params: Record<string, string>): Promise<Response> {
+  const { agent, draftId } = params;
+  if (!agent || !draftId) return html("Bad Request", 400);
+  if (!isPathSafe(agent, draftId)) return html("Bad Request", 400);
+
+  const formParams = await parseFormBody(req);
+  const expectedBehavior = formParams.get("expected_behavior") ?? "";
+  const scoringRubric = formParams.get("scoring_rubric") ?? "";
+
+  const generated = generateGraders(expectedBehavior, scoringRubric, agent);
+  return html(GraderPreviewFragment(generated));
+}
+
+/** POST /api/scenarios/:agent/drafts/:draftId/dry-run — save draft, temp file, start eval */
+export async function draftDryRunHandler(req: Request, params: Record<string, string>): Promise<Response> {
+  const { agent, draftId } = params;
+  if (!agent || !draftId) return html("Bad Request", 400);
+  if (!isPathSafe(agent, draftId)) return html("Bad Request", 400);
+
+  // Check if a run is already in progress
+  const active = getActiveRun();
+  if (active && !active.done) {
+    return html(`<span class="sc-dry-run-error">A run is already in progress — wait for it to finish before starting a dry run.</span>`);
+  }
+
+  const formParams = await parseFormBody(req);
+  const parsed = parsedFromForm(formParams);
+  const issues = validateScenario(parsed, true);
+  const hasErrors = issues.some(i => i.level === "error");
+
+  if (hasErrors) {
+    const errorMessages = issues.filter(i => i.level === "error").map(i => i.message).join("; ");
+    return html(`<span class="sc-dry-run-error">Cannot dry run — validation errors: ${esc(errorMessages)}</span>`);
+  }
+
+  // BR-8: Dry run blocked if graders array is empty
+  if (parsed.graders.length === 0) {
+    return html(`<span class="sc-dry-run-error">Cannot dry run — no graders defined. Generate and save graders first.</span>`);
+  }
+
+  // Save the draft first
+  const draftsDir = path.join(EVALS_DIR, agent, "drafts");
+  mkdirSync(draftsDir, { recursive: true });
+  const serialized = serializeScenario(parsed);
+  try {
+    writeFileSync(draftPath(agent, draftId), serialized, "utf-8");
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return html(`<span class="sc-dry-run-error">Failed to save draft before dry run: ${esc(errMsg)}</span>`);
+  }
+
+  // Record a hash of eval-relevant fields at dry-run time so promote can detect post-dry-run edits.
+  recordDryRunHash(agent, draftId);
+
+  // Create a temp production path so eval-run.sh can discover it
+  // Temp file format: scenario-_draft-temp-{draftId}.md
+  const tempScenarioId = `scenario-_draft-temp-${draftId}`;
+  const tempPath = path.join(EVALS_DIR, agent, `${tempScenarioId}.md`);
+
+  try {
+    writeFileSync(tempPath, serialized, "utf-8");
+
+    await startEvalRun({
+      agents: [agent],
+      scenarios: [`${agent}/${tempScenarioId}`],
+      trials: 1,
+      parallel: 1,
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    // Clean up temp file on error
+    try {
+      const { unlinkSync } = await import("node:fs");
+      unlinkSync(tempPath);
+    } catch { /* ignore */ }
+    return html(`<span class="sc-dry-run-error">Failed to start dry run: ${esc(errMsg)}</span>`);
+  }
+
+  // Capture the active run immediately (before any await) to avoid a race
+  // where getActiveRun() could return null if the process exits very quickly.
+  // Clean up temp file in background after eval process exits.
+  const activeForCleanup = getActiveRun();
+  if (activeForCleanup?.proc) {
+    (async () => {
+      try { await activeForCleanup.proc.exited; } catch { /* ignore */ }
+      try {
+        const { unlinkSync } = await import("node:fs");
+        unlinkSync(tempPath);
+      } catch { /* ignore */ }
+    })();
+  }
+
+  const isHtmx = req.headers.get("HX-Request") === "true";
+  if (isHtmx) {
+    return new Response(null, {
+      status: 200,
+      headers: { "HX-Redirect": "/evals/live" },
+    });
+  }
+  return new Response(null, {
+    status: 302,
+    headers: { Location: "/evals/live" },
+  });
+}
+
+/** POST /api/scenarios/:agent/drafts/:draftId/promote — promote draft to production */
+export async function draftPromoteHandler(req: Request, params: Record<string, string>): Promise<Response> {
+  const { agent, draftId } = params;
+  if (!agent || !draftId) return html("Bad Request", 400);
+  if (!isPathSafe(agent, draftId)) return html("Bad Request", 400);
+
+  // Read the draft file
+  let content: string;
+  try {
+    content = readFileSync(draftPath(agent, draftId), "utf-8");
+  } catch {
+    return html("Draft not found", 404);
+  }
+
+  const parsed = parseScenario(content);
+
+  // BR-7: Blocked if placeholder text remains
+  const PLACEHOLDER = "DRAFT - Needs human review";
+  if (
+    parsed.expected_behavior.includes(PLACEHOLDER) ||
+    parsed.failure_modes.includes(PLACEHOLDER) ||
+    parsed.scoring_rubric.includes(PLACEHOLDER)
+  ) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=placeholder`,
+      },
+    });
+  }
+
+  // AC-9: Promote blocked if category is still 'draft'
+  if (!parsed.category || parsed.category === "draft") {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=category`,
+      },
+    });
+  }
+
+  // BR-3: Promotion only after a completed dry run
+  if (!hasDryRunResult(agent, draftId)) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=nodryrun`,
+      },
+    });
+  }
+
+  // BR-3 (staleness): Block if draft was edited after the dry run was performed.
+  if (!isDryRunFresh(agent, draftId)) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=stalerun`,
+      },
+    });
+  }
+
+  // BR-5: Compute next unique scenario number
+  const agentDir = path.join(EVALS_DIR, agent);
+
+  // Derive slug from title name part
+  const titleLine = extractTitle(content);
+  const nameMatch = /—\s+(?:Draft\s+—\s+)?(.+?)(?:\s+\((.+?)\))?\s*$/.exec(titleLine);
+  const namePart = nameMatch ? nameMatch[1].trim() : (parsed.title || draftId);
+  const slug = slugify(namePart);
+
+  // Update the title line to replace "Draft" with "Scenario {NN}" — computed per attempt
+  // so that the padded number matches the actual file written.
+  let newScenarioId: string | undefined;
+  let newPath: string | undefined;
+  let serialized: string | undefined;
+
+  // Retry loop: handles concurrent promotions where two requests compute the same number.
+  // On EEXIST, recompute the next number and try again (up to 3 attempts).
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const nextNum = computeNextScenarioNumber(agentDir);
+    const paddedNum = String(nextNum).padStart(2, "0");
+    newScenarioId = `scenario-${paddedNum}-${slug}`;
+    newPath = path.join(agentDir, `${newScenarioId}.md`);
+
+    const updatedTitle = parsed.title
+      .replace(/—\s*Draft\s*—/, `— Scenario ${paddedNum} —`)
+      .replace(/\s+/g, " ")
+      .trim();
+    const updatedParsed = { ...parsed, title: updatedTitle };
+    serialized = serializeScenario(updatedParsed);
+
+    try {
+      writeFileSync(newPath, serialized, { flag: "wx" });
+      break; // success
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EEXIST" && attempt < 2) {
+        continue; // recompute and retry
+      }
+      if (code === "EEXIST") {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=conflict`,
+          },
+        });
+      }
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return html(`Promotion failed: ${esc(errMsg)}`, 500);
+    }
+  }
+
+  // BR-13: Delete draft after successful promotion
+  try {
+    const { unlinkSync } = await import("node:fs");
+    unlinkSync(draftPath(agent, draftId));
+  } catch {
+    // Draft deletion failed but promotion succeeded — not fatal
+  }
+
+  // Redirect to the new production scenario
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: `/scenarios/${encodeURIComponent(agent)}/${encodeURIComponent(newScenarioId!)}?saved=1`,
+    },
   });
 }
 

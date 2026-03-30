@@ -25,6 +25,12 @@ import {
   scenarioNewHandler,
   scenarioGenerateHandler,
   scenarioNewSaveHandler,
+  draftEditHandler,
+  draftSaveHandler,
+  draftValidateHandler,
+  draftGenerateGradersHandler,
+  draftDryRunHandler,
+  draftPromoteHandler,
 } from "./src/routes/scenarios.ts";
 import { serveStatic } from "./src/routes/static.ts";
 
@@ -56,6 +62,17 @@ router.get("/api/eval-runs/live", evalRunsSSEHandler);
 // Scenario browser and editor
 router.get("/scenarios", scenariosListHandler);
 router.get("/scenarios/new", scenarioNewHandler);
+
+// Draft lifecycle routes — registered BEFORE generic /:agent/:scenarioId to prevent
+// 'drafts' being matched as a scenarioId by the generic route
+router.get("/scenarios/:agent/drafts/:draftId", draftEditHandler);
+router.post("/api/scenarios/:agent/drafts/:draftId/validate", draftValidateHandler);
+router.post("/api/scenarios/:agent/drafts/:draftId/generate-graders", draftGenerateGradersHandler);
+router.post("/api/scenarios/:agent/drafts/:draftId/dry-run", draftDryRunHandler);
+router.post("/api/scenarios/:agent/drafts/:draftId/promote", draftPromoteHandler);
+router.post("/api/scenarios/:agent/drafts/:draftId", draftSaveHandler);
+
+// Generic scenario routes
 router.get("/scenarios/:agent/:scenarioId", scenarioEditHandler);
 router.post("/api/scenarios/generate", scenarioGenerateHandler);
 router.post("/api/scenarios/new", scenarioNewSaveHandler);
