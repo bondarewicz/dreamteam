@@ -550,6 +550,8 @@ function parseScenarioListItem(agent: string, scenarioId: string): ScenarioListI
  * Parse a draft file for the list view.
  * draftId is the filename without .md extension (e.g. "draft-2026-03-30-1900-foo")
  */
+const PLACEHOLDER_TEXT = "DRAFT - Needs human review";
+
 function parseDraftListItem(agent: string, draftId: string): ScenarioListItem {
   try {
     const content = readFileSync(draftPath(agent, draftId), "utf-8");
@@ -560,9 +562,16 @@ function parseDraftListItem(agent: string, draftId: string): ScenarioListItem {
     const name = nameMatch ? nameMatch[1].trim() : (titleLine || draftId);
     const type = nameMatch?.[2] ?? "";
     const category = extractLine(content, "category") || "draft";
-    return { agent, scenarioId: draftId, title: name, category, type, kind: "draft" };
+
+    // Compute readiness: category set, dry run completed, no placeholder text
+    const categoryReady = category !== "draft" && category !== "";
+    const dryRunDone = hasDryRunResult(agent, draftId);
+    const hasPlaceholder = content.includes(PLACEHOLDER_TEXT);
+    const draftReady = categoryReady && dryRunDone && !hasPlaceholder;
+
+    return { agent, scenarioId: draftId, title: name, category, type, kind: "draft", draftReady };
   } catch {
-    return { agent, scenarioId: draftId, title: draftId, category: "draft", type: "", kind: "draft" };
+    return { agent, scenarioId: draftId, title: draftId, category: "draft", type: "", kind: "draft", draftReady: false };
   }
 }
 

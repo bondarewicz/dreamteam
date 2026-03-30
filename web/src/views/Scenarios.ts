@@ -65,6 +65,7 @@ export type ScenarioListItem = {
   category: string;
   type: string; // from title parens
   kind: "production" | "draft" | "team";
+  draftReady?: boolean;
 };
 
 // ── List Page ───────────────────────────────────────────────────────────────
@@ -105,7 +106,11 @@ export function ScenariosListPage(
       const href = isDraft
         ? `/scenarios/${esc(g.agent)}/drafts/${esc(s.scenarioId)}`
         : `/scenarios/${esc(g.agent)}/${esc(s.scenarioId)}`;
-      const draftBadge = isDraft ? `<span class="sc-draft-badge-row">draft</span> ` : "";
+      const draftBadge = isDraft
+        ? (s.draftReady
+            ? `<span class="sc-ready-badge-row">ready</span> `
+            : `<span class="sc-draft-badge-row">draft</span> `)
+        : "";
       return `
       <tr class="${isDraft ? "sc-draft-row" : ""}">
         <td>
@@ -190,6 +195,7 @@ export function ScenariosListPage(
       .sc-draft-row:hover { background: rgba(125,133,144,0.09) !important; }
       .sc-draft-badge-row { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; background: rgba(125,133,144,0.18); color: var(--text-muted); border: 1px solid rgba(125,133,144,0.3); vertical-align: middle; margin-right: 2px; }
       .sc-draft-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; background: rgba(125,133,144,0.18); color: var(--text-muted); border: 1px solid rgba(125,133,144,0.35); }
+      .sc-ready-badge-row { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; background: rgba(74,222,128,0.18); color: var(--pass); border: 1px solid rgba(74,222,128,0.4); vertical-align: middle; margin-right: 2px; }
     </style>
   `;
 }
