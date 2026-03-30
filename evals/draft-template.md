@@ -17,27 +17,32 @@ reference_output: |
   <The actual output the agent returned during this session>
 
 expected_behavior: |
-  DRAFT - Needs human review.
-  The agent produced the following output during a live session. A human reviewer should:
-  1. Determine if this output represents correct behavior worth encoding as expected
-  2. Extract the key behaviors that should be tested
-  3. Write concrete expected_behavior criteria
+  <Auto-generate from reference_output. Describe what the agent must produce:
+  - Output format (JSON, prose, structured text)
+  - Required top-level keys or sections present in reference_output
+  - Key content properties each section must contain
+  - Example: "Agent produces valid JSON with a business_rules array (each entry has id, rule, testable_assertion) and an acceptance_criteria array (each entry has id, given, when, then) and a confidence object.">
 
 failure_modes: |
-  DRAFT - Needs human review.
-  A human reviewer should identify:
-  1. What would constitute incorrect behavior for this prompt
-  2. Common failure patterns for this agent type
-  3. Edge cases the agent might miss
+  <Auto-generate from reference_output. Identify what would constitute failure:
+  - Output format violations (e.g., not valid JSON, markdown fences around JSON)
+  - Missing required top-level keys found in reference_output
+  - Sections present but lacking required sub-fields
+  - Off-topic or hallucinated content unrelated to the prompt
+  - Example: "Output is not valid JSON. Missing business_rules array. Acceptance criteria present but entries lack given/when/then structure. No confidence level provided.">
 
 scoring_rubric: |
-  DRAFT - Needs human review.
+  <Auto-generate from reference_output. Define pass/partial/fail thresholds:>
 
   pass:
-    - [criteria to be defined by human reviewer]
+    - <Primary format requirement met — e.g., output is valid JSON with no surrounding markdown>
+    - <All required top-level sections present — derived from keys in reference_output>
+    - <Content is substantive — e.g., entries have required sub-fields, not empty arrays>
 
   partial:
-    - [criteria to be defined by human reviewer]
+    - <Format correct but one or more sections missing or incomplete>
+    - <Sections present but sub-fields lack required detail — e.g., acceptance criteria present but entries lack given/when/then>
 
   fail:
-    - [criteria to be defined by human reviewer]
+    - <Output is not valid JSON (or wrong format entirely)>
+    - <Output is completely off-topic or refuses to engage with the task>

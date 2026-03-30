@@ -1,14 +1,24 @@
-# Eval: Bird — Draft — Passbar multi-segment domain analysis (Auto-captured)
+# Eval: Bird — Scenario 22 — Passbar multi-segment domain analysis (capability)
 
 ## Overview
 
-Auto-captured from Dream Team session on 2026-03-30. Needs human review before promotion to eval suite.
+Auto-captured from Dream Team session on 2026-03-30. Scoring rubric auto-generated from reference_output. Ready for Generate Graders.
 
 ---
 
-category: draft
+category: capability
 
-graders: []
+graders:
+  - type: json_valid
+  - type: json_field
+    path: "business_rules"
+    min_items: 1
+  - type: json_field
+    path: "acceptance_criteria"
+    min_items: 1
+  - type: json_field
+    path: "edge_cases"
+    min_items: 1
 
 prompt: |
   Analyze this task and provide:
@@ -80,27 +90,40 @@ reference_output: |
   }
 
 expected_behavior: |
-  DRAFT - Needs human review.
-  The agent produced the following output during a live session. A human reviewer should:
-  1. Determine if this output represents correct behavior worth encoding as expected
-  2. Extract the key behaviors that should be tested
-  3. Write concrete expected_behavior criteria
+  Agent produces valid JSON (no markdown fences) with the following top-level structure:
+  - domain_analysis object containing business_context and ubiquitous_language array
+  - business_rules array where each entry has id (e.g. "BR-1"), rule (string), and at least one of invariant or testable_assertion
+  - acceptance_criteria array where each entry has id (e.g. "AC-1"), given, when, and then fields
+  - edge_cases array listing at least 2 non-obvious scenarios with expected_behavior
+  - confidence object with a numeric level field
+
+  The business rules must be specific to the task (passbar segment rendering) and include at least one rule about null handling and one about zero-total behavior.
+  The acceptance criteria must cover the core cases: mixed counts, all-fail, all-zero, all-pass, and null counts.
 
 failure_modes: |
-  DRAFT - Needs human review.
-  A human reviewer should identify:
-  1. What would constitute incorrect behavior for this prompt
-  2. Common failure patterns for this agent type
-  3. Edge cases the agent might miss
+  - Output is not valid JSON or is wrapped in markdown code fences
+  - Missing business_rules array entirely
+  - Missing acceptance_criteria array entirely
+  - Acceptance criteria entries lack given/when/then structure (e.g., only a description string)
+  - Business rules present but are generic platitudes rather than domain-specific constraints
+  - No confidence level provided
+  - Missing edge_cases array or edge_cases is empty
+  - Output addresses a different task than the passbar segmentation prompt
 
 scoring_rubric: |
-  DRAFT - Needs human review.
-
   pass:
-    - [criteria to be defined by human reviewer]
+    - Output is valid JSON with no surrounding markdown
+    - business_rules array is present with at least 5 entries, each having id and rule
+    - acceptance_criteria array is present with at least 5 entries, each having given, when, and then fields
+    - edge_cases array is present with at least 2 entries
+    - confidence object with numeric level is present
 
   partial:
-    - [criteria to be defined by human reviewer]
+    - Output is valid JSON but one required section is missing or has fewer than 3 entries
+    - Acceptance criteria present but entries lack given/when/then (only description strings)
+    - Business rules present but fewer than 3 entries or missing id fields
 
   fail:
-    - [criteria to be defined by human reviewer]
+    - Output is not valid JSON
+    - Missing both business_rules and acceptance_criteria
+    - Output is completely off-topic or refuses to engage with the task
