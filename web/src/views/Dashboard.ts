@@ -77,7 +77,7 @@ export function DashboardPage(
           <span class="pa">${run.partial_count ?? 0}p</span>
           <span class="f">${run.fail_count ?? 0}F</span>
         </div>
-        <div>${passBar(rate)}</div>
+        <div>${passBar(run.pass_count, run.partial_count, run.fail_count)}</div>
         <div class="run-passrate">${pct(rate)}</div>
         <div class="run-scenarios">${run.scenarios_run ?? 0}/${run.scenarios_total ?? 0}</div>
         <div class="run-badges">${badgesHtml}</div>

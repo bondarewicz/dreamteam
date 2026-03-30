@@ -47,13 +47,6 @@ export function cost(n: number | null | undefined): string {
   return `$${n.toFixed(4)}`;
 }
 
-/** Pass rate bar fill class */
-export function barClass(rate: number): string {
-  if (rate >= 0.7) return "";
-  if (rate >= 0.4) return "mid";
-  return "low";
-}
-
 /** Agent chip HTML */
 export function agentChip(agent: string): string {
   const key = agent.toLowerCase();
@@ -67,11 +60,26 @@ export function scoreBadge(score: string): string {
   return `<span class="badge ${esc(score)}">${esc(score)}</span>`;
 }
 
-/** Pass rate bar HTML */
-export function passBar(rate: number): string {
-  const w = Math.round(rate * 100);
-  const cls = barClass(rate);
-  return `<div class="passbar"><div class="passbar-fill ${cls}" style="width:${w}%"></div></div>`;
+/** Pass rate bar HTML — multi-segment (green/yellow/red) proportional to counts */
+export function passBar(pass: number | null | undefined, partial: number | null | undefined, fail: number | null | undefined): string {
+  const p = Math.max(0, pass ?? 0);
+  const pa = Math.max(0, partial ?? 0);
+  const f = Math.max(0, fail ?? 0);
+  const total = p + pa + f;
+  if (total === 0) {
+    return `<div class="passbar"></div>`;
+  }
+  // Build ordered list of non-zero segments; the last one uses flex:1 to absorb rounding slack.
+  const nonZero: Array<{ cls: string; count: number }> = [];
+  if (p > 0) nonZero.push({ cls: "pass", count: p });
+  if (pa > 0) nonZero.push({ cls: "partial", count: pa });
+  if (f > 0) nonZero.push({ cls: "fail", count: f });
+  const segments = nonZero.map((seg, i) => {
+    const isLast = i === nonZero.length - 1;
+    const widthStyle = isLast ? "flex:1" : `width:${Math.round((seg.count / total) * 100)}%`;
+    return `<div class="passbar-seg ${seg.cls}" style="${widthStyle}"></div>`;
+  });
+  return `<div class="passbar">${segments.join("")}</div>`;
 }
 
 /** Truncate a string to max chars */
