@@ -183,12 +183,17 @@ Narrate as it runs:
 - [ ] **"Each scenario is a realistic task, not a toy example"**
 - [ ] **"Under the hood it's just a markdown file anyone can edit"** — briefly flash the raw `.md` in editor to make the point, then back to web UI
 
-> SHOW: draft promotion flow — `/scenarios` page, click a draft
+> SHOW: draft promotion flow — `/scenarios` page
 
-- [ ] **Draft-to-production walkthrough** — "Here's a draft that was auto-captured from a real /team session"
-- [ ] Point at the workflow stepper: "7 steps — review, generate graders, save, validate, set category, dry run, promote"
+- [ ] **Point at the two badge states** — "Notice the green READY badge on Kobe's draft vs the gray DRAFT badge on Shaq's"
+  - Kobe `draft-2026-03-30-1900-passbar-segments-003` — **READY** (green): has graders, category set, dry run done
+  - Shaq `draft-2026-03-30-1900-passbar-segments-002` — **DRAFT** (gray): still needs graders, dry run, etc.
+- [ ] **"The badge tells you at a glance which drafts are ready to promote and which still need work"**
+- [ ] Click into Kobe's READY draft — show the workflow stepper at step 7 (Promote)
+- [ ] **"This one is ready — one click to make it a production scenario"**
+- [ ] Click into Shaq's DRAFT — show the workflow stepper at an earlier step
+- [ ] Point at the stepper: "7 steps — review, generate graders, save, validate, set category, dry run, promote"
 - [ ] Click **Validate** — "Watch: it auto-assigns the production scenario name and number"
-- [ ] Change category to "capability" — "Classify the scenario"
 - [ ] **"Dry Run validates it works, then Promote moves it to production. The whole pipeline is guided."**
 
 > SHOW: eval web dashboard
