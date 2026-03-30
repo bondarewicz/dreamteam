@@ -1,4 +1,4 @@
-# Eval: Kobe — Draft — Passbar quality review (Auto-captured)
+# Eval: Kobe — Scenario 21 — Passbar quality review (capability)
 
 ## Overview
 
@@ -6,9 +6,13 @@ Auto-captured from Dream Team session on 2026-03-30. Scoring rubric auto-generat
 
 ---
 
-category: draft
+category: capability
 
-graders: []
+graders:
+  - type: json_valid
+  - type: json_field
+    path: "critical_findings"
+    min_items: 1
 
 prompt: |
   Review this implementation for critical risks. Max 3 findings.

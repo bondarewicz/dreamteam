@@ -8,7 +8,11 @@ Auto-captured from Dream Team session on 2026-03-30. Scoring rubric auto-generat
 
 category: draft
 
-graders: []
+graders:
+  - type: json_valid
+  - type: json_field
+    path: "acceptance_criteria_coverage"
+    min_items: 1
 
 prompt: |
   Implement this task according to the domain analysis below.
