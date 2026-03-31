@@ -52,6 +52,7 @@ graph LR
     Q -->|Document or synthesize| magic["`**/magic**`"]
     Q -->|Automated PR review| cr["`**/code-review**`"]
     Q -->|Multi-perspective PR review| team_pr["`**/team** PR Review`"]
+    Q -->|Visual DDD / event storming| team_miro["`**/team** + Miro`"]
     Q -->|Full pipeline| team["`**/team**`"]
 ```
 
@@ -64,6 +65,7 @@ graph LR
 | `/pippen` | Verify operational readiness | "Do we have enough logging to debug at 3am?" |
 | `/magic` | Synthesize perspectives into docs/ADRs | "Document why we chose event sourcing" |
 | `/team` | Task too big for one agent | "Build a real-time notification system" |
+| `/team` + Miro | Visual architecture & DDD | "/team analyze this Miro board and create event storming" |
 | `/code-review` | Automated PR review | "/code-review 42" |
 
 ## /team — Coach K Orchestration
@@ -391,6 +393,66 @@ To change a model: edit `model:` in `agents/<name>.md`, run `./scripts/install.s
 ### Usage monitoring
 
 Coach K includes a **Lineup Card** at the end of every `/team` run. Use `/usage` before and after a session to see rate limit impact.
+
+## Miro Integration
+
+The Dream Team integrates with [Miro](https://miro.com) as a first-class collaboration surface via MCP. Agents can read board context, create diagrams, write documents, and build tables — turning analysis into visual artifacts without leaving the workflow.
+
+### What agents can do on Miro
+
+| Capability | Tool | Use case |
+|-----------|------|----------|
+| **Read board context** | `context_get`, `context_explore` | Understand existing diagrams, frames, and documents before analysis |
+| **Create diagrams** | `diagram_create` | Flowcharts, UML sequence, UML class, and ER diagrams |
+| **Write documents** | `doc_create`, `doc_update` | Domain catalogs, decision logs, hot spots, process documentation |
+| **Build tables** | `table_create`, `table_sync_rows` | Structured data like event catalogs, service inventories, risk matrices |
+| **Read images** | `image_get_data`, `image_get_url` | Analyze mockups, screenshots, or existing visual artifacts |
+
+### How it works with /team
+
+In a `/team` session, Coach K coordinates agents to both analyze and update Miro boards:
+
+1. **Bird** reads the board to understand existing architecture, then produces domain analysis (bounded contexts, domain events, business rules)
+2. **MJ** reads the board for system context, then produces architectural decisions (service decomposition, event flows, CQRS boundaries)
+3. **Coach K** synthesizes their findings and creates visual artifacts on the board:
+   - Event storming flowcharts with DDD color coding
+   - Service decomposition diagrams with infrastructure mapping
+   - Sequence diagrams for sagas and process flows
+   - Document cards for domain event catalogs, hot spots, and migration plans
+
+### Setup
+
+Three commands to get started:
+
+```bash
+# Step 1 — Add the Miro MCP server
+claude mcp add --transport http miro https://mcp.miro.com
+
+# Step 2 — Verify it was added
+claude mcp list
+# You should see:
+#   miro: https://mcp.miro.com (HTTP) - ! Needs authentication
+
+# Step 3 — Authenticate
+claude mcp authenticate miro
+# This opens Miro in your browser — log in and select which team the MCP server can access
+```
+
+After authenticating, the Miro tools are available in all Claude Code sessions. The MCP server handles token refresh automatically — no API keys to manage.
+
+### Example: DDD Event Storming from Architecture Diagram
+
+The [demo board](https://miro.com/app/board/uXjVGp3Xb4A=/) was created by running Bird + MJ against **MJ Eval Scenario 05 — Microservices Decomposition** (a courier platform with 8 engineers, 5K writes/sec location tracking, strict payment consistency). The board started with a generic web architecture diagram; the Dream Team added all DDD event storming artifacts:
+
+```
+/team come up with implementation plan for https://miro.com/app/board/uXjVGp3Xb4A=/
+```
+
+This reads the board, launches Bird + MJ for domain and architecture analysis, then updates the board with:
+- Process-level event storming flowchart (commands, aggregates, events, policies per bounded context)
+- Service decomposition diagram with team topology (4 services for 8 engineers)
+- Saga sequence diagram showing the full order-payment-delivery lifecycle
+- Document cards for domain events catalog, hot spots, and migration strategy
 
 ## Built-in Tension (by design)
 

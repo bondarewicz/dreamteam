@@ -107,7 +107,8 @@ DEMO: Willow automapper warning
 
 > SHOW: nothing, just talk. Keep it forward-looking.
 
-- [ ] **"Three things on the roadmap"**
+- [ ] **"We just shipped Miro integration — agents can now read boards, create diagrams, write docs, all via MCP. DDD event storming, architecture diagrams, domain catalogs — directly on Miro."**
+- [ ] **"Three more things on the roadmap"**
 - [ ] **"One — optimizing Shaq's delivery speed. Right now only ~40-50% of Shaq's 100-turn budget goes to actual code writing. The rest is coordination, codebase exploration, and reporting. Three levers to fix that:"**
   - "Lever 1: Richer handoff briefs from Magic — Shaq spends 10-15 turns exploring the codebase to find patterns. If Magic's brief includes exact file paths and code snippets to follow, we recover those turns."
   - "Lever 2: Pre-resolved ambiguity from Bird — every time Shaq hits an edge case not covered in the acceptance criteria, he stalls, escalates, waits for an answer. If Bird covers edge cases upfront, those stalls go away."
@@ -238,7 +239,44 @@ Narrate as it runs:
 
 ---
 
-### 2.5 RECORDINGS + RETROS — 3 min
+### 2.5 MIRO INTEGRATION — 5 min
+
+> SHOW: Miro board at [https://miro.com/app/board/uXjVGp3Xb4A=/](https://miro.com/app/board/uXjVGp3Xb4A=/)
+>
+> This board was created by running Bird + MJ against **MJ Eval Scenario 05 — Microservices Decomposition** (a courier platform with 8 engineers, 5K writes/sec location tracking, strict payment consistency). The board started with a generic web architecture diagram; the Dream Team added all the DDD event storming artifacts.
+
+- [ ] **"The Dream Team doesn't just analyze — it creates visual artifacts directly on Miro boards"**
+- [ ] **"This is a first-class integration via MCP — agents read board context, create diagrams, write documents"**
+- [ ] **"This board started with a basic architecture diagram. We pointed Bird and MJ at an existing eval scenario — a courier platform decomposition — and they produced everything you see here."**
+
+Walk through what's on the board:
+
+- [ ] **Scenario Context Card** (top-left) — "First, the scenario: a courier platform monolith, 8 engineers, 500 couriers sending GPS every 10 seconds, payment with strict consistency. This is MJ's eval scenario 05 — a real test case we use to validate the architecture agent."
+- [ ] **Event Storming Flowchart** — "Bird analyzed the domain and identified 6 bounded contexts, 24 domain events, 16 business rules. Coach K turned those into this DDD event storming diagram — commands, aggregates, events, policies, all color-coded by bounded context."
+- [ ] **Service Decomposition** — "MJ recommended 4 services for an 8-person team. Not 6, not 8 — that's the key insight. The diagram shows team topology (2 engineers per service), infrastructure (TimescaleDB for location, PostgreSQL for payments), and external systems."
+- [ ] **Saga Sequence Diagram** — "The full order-payment-delivery flow as a UML sequence diagram — showing sync vs async boundaries between all 4 services plus the courier app."
+- [ ] **Document Cards** — "Domain events catalog with payloads and consumers, 6 hot spots needing team discussion, migration strategy with strangler fig pattern across 4 phases. All created by the agents."
+
+> SHOW: the /team command that created this
+
+```
+/team come up with implementation plan for https://miro.com/app/board/uXjVGp3Xb4A=/
+```
+
+- [ ] **"One command. Bird does domain analysis, MJ does architecture, Coach K orchestrates the Miro updates."**
+- [ ] **"The board becomes a living artifact — not a static diagram someone drew once and forgot"**
+- [ ] **"We used an existing eval scenario as the domain input — the same scenarios we test agents with become the source material for real visual output"**
+
+Key points to emphasize:
+
+- [ ] **"Agents read before they write"** — context_get and context_explore analyze existing board content first
+- [ ] **"Standard DDD notation"** — event storming colors, swim lanes by bounded context, standard sticky note conventions
+- [ ] **"Works with any Miro board URL"** — just paste it into a /team command
+- [ ] **"Setup is just OAuth"** — first use prompts for browser auth, then it just works
+
+---
+
+### 2.6 RECORDINGS + RETROS — 3 min
 
 > SHOW: retro HTML report in browser
 
@@ -257,7 +295,7 @@ Walk through sections quickly — point at each:
 
 ---
 
-### 2.6 HOW TO USE IT — 2 min
+### 2.7 HOW TO USE IT — 2 min
 
 > SHOW: terminal or a summary slide
 
@@ -267,6 +305,7 @@ Quick reference — say each one:
 - [ ] `/shaq` — "Implement this feature"
 - [ ] `/kobe` — "Review this code ruthlessly"
 - [ ] `/team` — "This is too big for one agent"
+- [ ] `/team` + Miro URL — "Analyze this board and create event storming"
 - [ ] `/code-review 42` — "Review this PR"
 
 - [ ] **Installation** — "Clone the repo, run `scripts/install.sh`, restart Claude Code. That's it."
@@ -289,6 +328,7 @@ Quick reference — say each one:
 | "What if an agent hallucinates?"           | Escalation protocol, confidence assessment, human checkpoint, fix-verify loop. Multiple safety nets.                                                                                                                                                                                                                                                                                                                                     |
 | "Can we use this in CI/CD?"                | `/code-review` already works for PRs. Team-wide evals in V2 will enable pipeline integration.                                                                                                                                                                                                                                                                                                                                            |
 | "Can we run evals outside Claude Code?"    | Yes. `scripts/eval-export-workbench.sh` exports scenarios to CSV for [Anthropic Workbench](https://platform.claude.com/workbench). Same scenarios, same rubrics — just a different execution environment. Useful for comparing models or prompt variations side-by-side.                                                                                                                                                                 |
+| "How does the Miro integration work?"      | MCP (Model Context Protocol). Miro exposes tools via an MCP server — diagram_create, doc_create, context_get, etc. Claude Code connects to it via OAuth. Agents read board context first, then create artifacts. No API keys to manage, no plugins to install.                                                                                                                                                                           |
 | "Why basketball players?"                  | Deliberate trade-off. Anthropic's best practices recommend gerund-form descriptive names (e.g., `defining-domain-rules` instead of `bird`). We audited this and accepted the FAIL — persona names carry identity and team cohesion that functional names destroy. The descriptions compensate with clear role context. And yes, the personas can be changed — they're just markdown files. The architecture doesn't depend on the names. |
 
 ---
@@ -305,8 +345,11 @@ Quick reference — say each one:
 - [ ] Start eval web dashboard on localhost:3000
 - [ ] Capture `/usage` cost numbers from the dry-run
 - [ ] Test screen share — terminal font size, theme readability
+- [ ] Authorize Miro MCP server (run any Miro tool once, complete OAuth in browser)
+- [ ] Verify Miro demo board is accessible: [https://miro.com/app/board/uXjVGp3Xb4A=/](https://miro.com/app/board/uXjVGp3Xb4A=/) (created from MJ Eval Scenario 05 — courier platform)
 - [ ] Pre-open all tabs/files:
   - [ ] README.md (agent table)
+  - [ ] Miro board: [https://miro.com/app/board/uXjVGp3Xb4A=/](https://miro.com/app/board/uXjVGp3Xb4A=/)
   - [ ] Mermaid diagram screenshot
   - [ ] `agents/bird.md`
   - [ ] `agents/shaq.md`
