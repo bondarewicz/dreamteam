@@ -260,7 +260,8 @@ dreamteam/
 ├── scripts/
 │   ├── install.sh             # Installer script
 │   ├── cast.sh                # Asciicast v3 recording helper
-│   └── eval-report.sh         # Eval HTML report generator
+│   ├── eval-report.sh         # Eval HTML report generator
+│   └── eval-export-workbench.sh  # Export scenarios to Anthropic Workbench CSV
 ├── docs/                      # Markdown docs, analysis, checkpoints
 │   ├── team-improvement-analysis.md
 │   └── claude-skillz-analysis.md
@@ -319,6 +320,25 @@ PORT=8080 bun run start
 ### First-run auto-migration
 
 On startup, if the SQLite database is empty, the server automatically imports all existing JSON eval results from `evals/results/`. No manual migration step is needed — just start the server and the data will be there.
+
+## Anthropic Workbench Export
+
+Eval scenarios can be exported to [Anthropic Workbench](https://platform.claude.com/workbench) for batch evaluation with different models, system prompts, or temperature settings.
+
+```bash
+# Export a single agent's scenarios to CSV
+scripts/eval-export-workbench.sh bird
+
+# Export all agents (one CSV per agent)
+scripts/eval-export-workbench.sh --all
+
+# Include scoring rubric as a grading prompt column
+scripts/eval-export-workbench.sh bird --with-rubric
+```
+
+Output: `evals/<agent>/workbench-import.csv`
+
+In Workbench: set System Prompt to the agent definition (`agents/<name>.md`), set User Message to `{{scenario_input}}`, then import the CSV under the Evaluate tab. See `evals/README.md` for the full step-by-step workflow.
 
 ## Models & Tuning
 
