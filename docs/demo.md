@@ -55,6 +55,13 @@ Walk the phases quickly — point at diagram as you go:
 
 ---
 
+DEMO: Willow automapper warning
+
+1. Build sln
+2. Catch a warning
+3. /team suggest possible approaches to avoid automapper dependency, use bird, mj & kobe in parallel and present their suggestions
+4. While it runs move to evals
+
 ### 1.3 EVALS — HOW WE KNOW IT WORKS — 4 min
 
 > SHOW: eval web dashboard (have it pre-loaded at localhost:3000)
@@ -64,7 +71,12 @@ Walk the phases quickly — point at diagram as you go:
 - [ ] **"Each scenario is a realistic task with defined grading criteria"**
 - [ ] **"Scored by an independent grader — agents don't grade themselves"**
 - [ ] Point at dashboard: per-agent pass rates, scenario breakdown
-- [ ] **Explain pass@k and pass^k** — "You'll see three metrics: pass@1, pass@3, and pass^3. pass@k means: run the agent k times, does it pass *at least once*? That's the ceiling — what the agent is capable of. pass^k means: run it k times, does it pass *every single time*? That's the floor — how consistent it is. So for 3 trials: pass@3 is the best case, pass@1 is the expected single-shot experience, and pass^3 is the worst case. A scenario with pass@3=100% but pass^3=33% means the agent can always get it right eventually but fails 2 out of 3 times — it's capable but unreliable. When pass@3 equals pass^3, the agent is perfectly consistent. We optimize for pass@1 — that's what users actually experience — but we watch the gap between pass@3 and pass^3 to spot flaky scenarios."
+- [ ] **Explain pass@k and pass^k** — "You'll see three metrics: pass@1, pass@3, and pass^3. pass@k means: run the agent k times, does it pass _at least once_? That's the ceiling — what the agent is capable of. pass^k means: run it k times, does it pass _every single time_? That's the floor — how consistent it is. So for 3 trials: pass@3 is the best case, pass@1 is the expected single-shot experience, and pass^3 is the worst case. A scenario with pass@3=100% but pass^3=33% means the agent can always get it right eventually but fails 2 out of 3 times — it's capable but unreliable. When pass@3 equals pass^3, the agent is perfectly consistent. We optimize for pass@1 — that's what users actually experience — but we watch the gap between pass@3 and pass^3 to spot flaky scenarios."
+- [ ] **Explain blind spots** — "These metrics tell you how good the agent is _at the things you thought to test_. But there's always a blind spot — the scenarios you didn't write. A 100% pass rate on 20 scenarios doesn't mean the agent is perfect, it means it's perfect at those 20 tasks. That's why we have three defenses against blind spots:"
+  - "One — draft eval capture. Every `/team` session auto-generates draft scenarios from real work. So the test suite grows from actual usage, not just imagination."
+  - "Two — failure mode fields. Every scenario defines `failure_modes` — specific anti-patterns we've seen. When we discover a new failure in production, we add it as a scenario. The suite encodes our scar tissue."
+  - "Three — category separation. `regression` scenarios protect what works. `capability` scenarios push the frontier. If all your scenarios are regression, you've stopped learning. If all are capability, you're not protecting your gains."
+  - "The honest truth: evals are a lower bound on quality, never an upper bound. But a measured lower bound beats an unmeasured guess every time."
 - [ ] **"When we change an agent spec, we re-run evals to prove it got better, not worse"**
 
 ---
@@ -80,7 +92,7 @@ Walk the phases quickly — point at diagram as you go:
 - [ ] **"On top of that — every /team session automatically creates draft eval scenarios for each agent that ran"**
 - [ ] **"So real work feeds directly into our test suite. The more we use it, the better our evals get."**
 - [ ] **Real example — Bird's improvement arc:**
-  - Quick explainer: "pass@1 = passes first try. pass@3 = passes at least once in 3 tries (ceiling). pass^3 = passes all 3 tries (floor). We care about pass@1 for real-world reliability and watch pass@3 vs pass^3 gap for flakiness."
+  - Quick explainer: "pass@1 = passes first try. pass@3 = passes at least once in 3 tries (ceiling). pass^3 = passes all 3 tries (floor). We care about pass@1 for real-world reliability and watch pass@3 vs pass^3 gap for flakiness. And remember — these metrics only cover scenarios we've written. Blind spots shrink over time as real usage generates new draft scenarios."
   - "Bird started at 65% pass@1 — 7 out of 20 scenarios failing"
   - "Evals showed us the exact failure patterns: Bird was mixing escalation types — adding missing_context alongside contradiction — and sometimes producing empty acceptance criteria"
   - "We went through 13 iterations of spec tuning. Hit a plateau at 70% — 5 hard-fail scenarios at 0/3 pass rate, meaning pass^3 was 0% on those — not just unreliable, completely broken"
