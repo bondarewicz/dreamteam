@@ -222,6 +222,11 @@ Narrate as it runs:
   - [ ] **Highlight auto-naming**: "Click Validate — it computes the next scenario number and sets the production title automatically"
   - [ ] **Highlight staleness protection**: "If you edit the prompt or graders after a dry run, it blocks promotion until you re-run. But changing the category is fine."
   - [ ] **"The eval suite grows organically from actual usage. The more we use /team, the better our test coverage gets."**
+- [ ] **Workbench export** — "We can export any agent's scenarios to Anthropic Workbench for batch evaluation"
+  - [ ] Show the command: `scripts/eval-export-workbench.sh bird --with-rubric`
+  - [ ] **"One CSV per agent. Set the system prompt to the agent spec, user message to the template variable, import the CSV — done."**
+  - [ ] **"This lets you test against different models, temperatures, or prompt variations side-by-side on [platform.claude.com/workbench](https://platform.claude.com/workbench)"**
+  - [ ] **"The same scenarios we run locally via eval-run.sh work identically in Workbench — one test suite, two execution environments"**
 - [ ] **Real example — walk through Bird's improvement arc:**
   - Remind them: "pass@1 = first try. pass@3 = at least once in 3 (ceiling). pass^3 = all 3 pass (floor). Gap between pass@3 and pass^3 = flakiness."
   - Baseline: 65% pass@1, 75% pass@3 — 7 failing scenarios
@@ -283,6 +288,7 @@ Quick reference — say each one:
 | "How does this compare to Cursor/Copilot?" | This is a team of specialists with evals, not autocomplete. Different layer.                                                                                                                                                                                                                                                                                                                                                             |
 | "What if an agent hallucinates?"           | Escalation protocol, confidence assessment, human checkpoint, fix-verify loop. Multiple safety nets.                                                                                                                                                                                                                                                                                                                                     |
 | "Can we use this in CI/CD?"                | `/code-review` already works for PRs. Team-wide evals in V2 will enable pipeline integration.                                                                                                                                                                                                                                                                                                                                            |
+| "Can we run evals outside Claude Code?"    | Yes. `scripts/eval-export-workbench.sh` exports scenarios to CSV for [Anthropic Workbench](https://platform.claude.com/workbench). Same scenarios, same rubrics — just a different execution environment. Useful for comparing models or prompt variations side-by-side.                                                                                                                                                                 |
 | "Why basketball players?"                  | Deliberate trade-off. Anthropic's best practices recommend gerund-form descriptive names (e.g., `defining-domain-rules` instead of `bird`). We audited this and accepted the FAIL — persona names carry identity and team cohesion that functional names destroy. The descriptions compensate with clear role context. And yes, the personas can be changed — they're just markdown files. The architecture doesn't depend on the names. |
 
 ---
