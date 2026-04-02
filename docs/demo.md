@@ -85,9 +85,8 @@ DEMO: Willow automapper warning
 
 > SHOW: a retro HTML report (pre-opened in browser tab)
 
-- [ ] **"Every session produces two artifacts"**
+- [ ] **"Every session produces an HTML retro report"**
 - [ ] Point at retro: **"An HTML report — timeline, what each agent did, what was caught, team metrics"**
-- [ ] **"And a replayable terminal recording"**
 - [ ] **"These traces let us debug bad decisions, spot patterns, and measure improvement over time"**
 - [ ] **"On top of that — every /team session automatically creates draft eval scenarios for each agent that ran"**
 - [ ] **"So real work feeds directly into our test suite. The more we use it, the better our evals get."**
@@ -173,7 +172,7 @@ Walk through the spec file top to bottom:
 > SHOW: terminal, font size large
 
 - [ ] Run `/team` Quick Fix on the prepared scenario
-- [ ] If it's slow or stalls — **switch to pre-recorded backup immediately, don't wait**
+- [ ] If it's slow or stalls — **open a second terminal with the dry-run retro report and walk through it**
 
 Narrate as it runs:
 
@@ -182,8 +181,6 @@ Narrate as it runs:
 - [ ] **Shaq phase** — plan mode first, then implementation, AC coverage mapping
 - [ ] **Kobe phase** — findings, confidence levels, severity ratings
 - [ ] **Magic phase** — final synthesis, retro report
-
-> If using backup recording: play at 2x, pause at each phase transition to explain
 
 ---
 
@@ -276,7 +273,7 @@ Key points to emphasize:
 
 ---
 
-### 2.6 RECORDINGS + RETROS — 3 min
+### 2.6 RETRO REPORTS — 3 min
 
 > SHOW: retro HTML report in browser
 
@@ -287,10 +284,6 @@ Walk through sections quickly — point at each:
 - [ ] Agent activity cards
 - [ ] Key findings per agent (rendered as cards)
 - [ ] Confidence levels per agent (shown as pills on each agent card)
-
-> SHOW: asciinema recording (briefly)
-
-- [ ] **"Markers let you jump to key moments — agent spawns, human decisions, findings"**
 - [ ] **"These feed directly back into agent improvement"**
 
 ---
@@ -339,7 +332,6 @@ Quick reference — say each one:
 
 - [ ] Pick demo scenario — business-legible, non-trivial
 - [ ] Dry-run with `/team` Quick Fix — confirm it finishes in ~10 min
-- [ ] Record the dry-run as backup
 - [ ] Verify retro report generates and looks clean
 - [ ] Pre-render the Full Team mermaid diagram as screenshot
 - [ ] Start eval web dashboard on localhost:3000
@@ -358,5 +350,4 @@ Quick reference — say each one:
   - [ ] Eval web dashboard
   - [ ] `evals/bird/scenario-01-domain-rule-extraction.md`
   - [ ] A retro HTML report
-  - [ ] An asciinema recording
   - [ ] Terminal ready with the demo scenario

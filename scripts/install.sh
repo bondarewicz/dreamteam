@@ -74,6 +74,8 @@ echo ""
 # --- Step 6: Install scripts (symlinks — always in sync, never stale) ---
 SCRIPTS_DST="$CLAUDE_DIR/scripts"
 mkdir -p "$SCRIPTS_DST"
+# Remove dangling symlink from prior installations that included cast.sh
+rm -f "$SCRIPTS_DST/cast.sh"
 echo "Installing scripts (symlinks)..."
 script_count=0
 for script_file in "$SCRIPT_DIR"/*.sh; do
@@ -90,7 +92,6 @@ echo "  $script_count scripts installed."
 echo ""
 
 # --- Step 7: Ensure output directories exist ---
-mkdir -p "$REPO_DIR/recordings"
 mkdir -p "$REPO_DIR/reports/retros"
 mkdir -p "$REPO_DIR/reports/evals"
 mkdir -p "$REPO_DIR/evals/results"
@@ -105,9 +106,6 @@ echo "  shaq    — Primary Code Executor"
 echo "  kobe    — Quality & Risk Enforcer"
 echo "  pippen  — Stability, Integration & Defense"
 echo "  magic   — Context Synthesizer & Team Glue"
-echo ""
-echo "Scripts:"
-echo "  cast.sh — Session recording helper"
 echo ""
 echo "Commands:"
 echo "  /mj           — Architecture design & health diagnostics"

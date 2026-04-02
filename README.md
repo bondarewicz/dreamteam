@@ -176,24 +176,13 @@ graph TD
 - Enable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` in settings.json or environment
 - If not enabled, Coach K falls back to Quick Fix subagent workflow
 
-### Session Recordings
-
-Every `/team` session (all modes) is recorded as an [asciicast v3](https://docs.asciinema.org/manual/asciicast/v3/) file with navigable markers at key moments:
-
-- Phase transitions, agent spawns/completions, human decisions, escalations, fix-verify loops
-- Uploaded to asciinema (unlisted) at session end — link saved to the retro
-- Local file saved to `recordings/YYYY-MM-DD-<topic>.cast` (gitignored — uploaded to asciinema)
-
-The recording is constructed programmatically via `scripts/cast.sh` — it captures the team workflow narrative, not raw terminal output.
-
 ### Retrospectives
 
-After every `/team` session, an HTML retrospective report is generated at `reports/retros/YYYY-MM-DD-<topic>.html`:
+After every `/team` session, a checkpoint is saved to `docs/checkpoint-<topic>.md` with all agent outputs preserved for future sessions. Magic's synthesis captures the retro narrative including:
 
-- Executive summary, timeline, agent activity cards, findings table
+- Executive summary, agent contributions, decisions made
 - **Team metrics:** escalation count, confidence levels per agent, finding attribution, fix-verify loop count, contradictions detected
-- **Session recording** link (asciinema URL or local path)
-- Standalone HTML — viewable offline, all CSS inline
+- Standalone HTML retros are stored in `reports/retros/` for historical reference
 
 ### Git Safety
 
@@ -261,7 +250,6 @@ dreamteam/
 │   └── code-review.md         # /code-review (automated PR review)
 ├── scripts/
 │   ├── install.sh             # Installer script
-│   ├── cast.sh                # Asciicast v3 recording helper
 │   ├── eval-report.sh         # Eval HTML report generator
 │   └── eval-export-workbench.sh  # Export scenarios to Anthropic Workbench CSV
 ├── docs/                      # Markdown docs, analysis, checkpoints
@@ -270,7 +258,6 @@ dreamteam/
 ├── evals/                     # Eval scenarios and results
 │   ├── <agent>/scenario-*.md  # 20-25 scenarios per agent (125 total)
 │   └── results/*.json         # Eval run results (append-only)
-├── recordings/                # Session recordings (.cast, gitignored)
 ├── reports/
 │   ├── retros/                # Session retro HTML reports
 │   └── evals/                 # Eval HTML dashboards
@@ -289,7 +276,7 @@ The `web/` directory contains a lightweight Bun server that serves eval results 
 **Prerequisites:**
 - [Bun](https://bun.sh) — `curl -fsSL https://bun.sh/install | bash`
 - [SQLite](https://www.sqlite.org/download.html) — included on macOS; on Linux install via `apt install sqlite3` or `brew install sqlite`
-- [Python 3](https://www.python.org/downloads/) — used by eval scripts and session recordings (stdlib only, no external deps)
+- [Python 3](https://www.python.org/downloads/) — used by eval scripts (stdlib only, no external deps)
 
 ### Start the server
 
