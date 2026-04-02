@@ -38,6 +38,8 @@ PHASE="all"
 TRIALS=1
 DRY_RUN=""
 
+TIMEOUT_PER_PHASE=""
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --parallel)
@@ -54,6 +56,8 @@ while [ $# -gt 0 ]; do
       TRIALS="$2"; shift 2 ;;
     --dry-run)
       DRY_RUN="yes"; shift ;;
+    --timeout-per-phase)
+      TIMEOUT_PER_PHASE="$2"; shift 2 ;;
     -h|--help)
       sed -n '/^# Usage:/,/^[^#]/p' "$0" | head -n -1 | sed 's/^# \{0,2\}//'
       exit 0 ;;
@@ -80,6 +84,7 @@ exec python3 - \
   ${SCENARIO_FILTER:+--scenario "$SCENARIO_FILTER"} \
   --trials "$TRIALS" \
   ${DRY_RUN:+--dry-run} \
+  ${TIMEOUT_PER_PHASE:+--timeout-per-phase "$TIMEOUT_PER_PHASE"} \
   << 'PYEOF'
 # Full orchestrator — Python3 stdlib only, macOS compatible
 import sys
@@ -97,15 +102,16 @@ import concurrent.futures
 # ── CLI parsing (receives args from bash) ─────────────────────────────────────
 
 parser = argparse.ArgumentParser(add_help=False)
-parser.add_argument('--parallel',    type=int,   default=10)
-parser.add_argument('--phase',       default='all')
-parser.add_argument('--script-dir',  default='.')
-parser.add_argument('--repo-root',   default='.')
-parser.add_argument('--resume',      default='')
-parser.add_argument('--agent',       default='')
-parser.add_argument('--scenario',    default='')
-parser.add_argument('--trials',      type=int,   default=1)
-parser.add_argument('--dry-run',     action='store_true')
+parser.add_argument('--parallel',          type=int,   default=10)
+parser.add_argument('--phase',             default='all')
+parser.add_argument('--script-dir',        default='.')
+parser.add_argument('--repo-root',         default='.')
+parser.add_argument('--resume',            default='')
+parser.add_argument('--agent',             default='')
+parser.add_argument('--scenario',          default='')
+parser.add_argument('--trials',            type=int,   default=1)
+parser.add_argument('--dry-run',           action='store_true')
+parser.add_argument('--timeout-per-phase', type=int,   default=0)
 args = parser.parse_args()
 
 PARALLEL     = args.parallel
@@ -117,6 +123,10 @@ AGENT_FILTER    = args.agent
 SCENARIO_FILTER = args.scenario
 TRIALS          = max(1, args.trials)
 DRY_RUN      = args.dry_run
+# Timeout per phase: 0 means use defaults (300s individual, 600s team)
+_timeout_per_phase_arg = args.timeout_per_phase
+TIMEOUT_INDIVIDUAL = _timeout_per_phase_arg if _timeout_per_phase_arg > 0 else 300
+TIMEOUT_TEAM       = _timeout_per_phase_arg if _timeout_per_phase_arg > 0 else 600
 
 EVALS_DIR   = os.path.join(REPO_ROOT, 'evals')
 RESULTS_DIR = os.path.join(REPO_ROOT, 'evals', 'results')
@@ -178,26 +188,9 @@ if AGENT_FILTER:
 if SCENARIO_FILTER:
     print(f'  (filtered to scenario: {SCENARIO_FILTER})')
 
-# ── Dry run ───────────────────────────────────────────────────────────────────
+# ── Dry run ──────────────────────────────────────────────────────────────────
 
-if DRY_RUN:
-    print()
-    print('DRY RUN -- would execute the following:')
-    print(f'  Phase: {PHASE}')
-    print(f'  Parallel: {PARALLEL}')
-    print(f'  Raw dir: {RAW_DIR}')
-    print()
-    for scenario_file in SCENARIOS:
-        agent       = os.path.basename(os.path.dirname(scenario_file))
-        scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
-        raw_output  = os.path.join(RAW_DIR, f'{agent}-{scenario_id}.json')
-        if os.path.isfile(raw_output):
-            print(f'  SKIP (exists): {agent}/{scenario_id}')
-        else:
-            print(f'  RUN: {agent}/{scenario_id}')
-    print()
-    print('Dry run complete. No changes made.')
-    sys.exit(0)
+# (see if DRY_RUN block below, after team scenario helpers)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -304,10 +297,460 @@ def run_graders(scenario_file, raw_output_file):
     grader_results  = normalize_grader_json(grader_json)
     return grader_results, grader_override
 
+
+# ── Team scenario helpers ─────────────────────────────────────────────────────
+
+
+def parse_team_scenario(content):
+    """Parse a team scenario file into (phases_list, pipeline_fields).
+
+    phases_list: list of dicts with keys:
+      phase_num, agent, prompt, expected_behavior, failure_modes,
+      scoring_rubric, graders_raw, reference_output, human_decision
+    pipeline_fields: dict with keys:
+      pipeline_expected_behavior, pipeline_failure_modes, pipeline_scoring_rubric
+    """
+    phases = []
+    phase_num = 1
+    while True:
+        # Detect phase N by looking for phase_N_agent field
+        agent_m = re.search(
+            r'^phase_' + str(phase_num) + r'_agent:\s*(\S+)',
+            content, re.MULTILINE
+        )
+        if not agent_m:
+            break
+
+        phase_agent = agent_m.group(1).strip()
+
+        # Extract phase_N_prompt using a scoped extraction
+        def _extract_phase_field(field, pn=phase_num, c=content):
+            key = f'phase_{pn}_{field}'
+            m = re.search(
+                r'^' + re.escape(key) + r':\s*\|?\s*\n(.*?)(?=\nphase_\d+_[a-zA-Z]|\npipeline_[a-zA-Z]|\Z)',
+                c, re.DOTALL | re.MULTILINE
+            )
+            return m.group(1).rstrip() if m else ''
+
+        phase_prompt           = _extract_phase_field('prompt')
+        phase_expected         = _extract_phase_field('expected_behavior')
+        phase_failure          = _extract_phase_field('failure_modes')
+        phase_rubric           = _extract_phase_field('scoring_rubric')
+        phase_reference        = _extract_phase_field('reference_output')
+        phase_graders_raw      = _extract_phase_field('graders')
+
+        # human_decision is the prompt field for human phases
+        human_decision = phase_prompt if phase_agent == 'human' else ''
+
+        phases.append({
+            'phase_num':        phase_num,
+            'agent':            phase_agent,
+            'prompt':           phase_prompt,
+            'expected_behavior': phase_expected,
+            'failure_modes':    phase_failure,
+            'scoring_rubric':   phase_rubric,
+            'graders_raw':      phase_graders_raw,
+            'reference_output': phase_reference,
+            'human_decision':   human_decision,
+        })
+        phase_num += 1
+
+    # Pipeline-level fields
+    pipeline_fields = {
+        'pipeline_expected_behavior': extract_field('pipeline_expected_behavior', content),
+        'pipeline_failure_modes':     extract_field('pipeline_failure_modes',     content),
+        'pipeline_scoring_rubric':    extract_field('pipeline_scoring_rubric',    content),
+    }
+
+    return phases, pipeline_fields
+
+
+def run_team_scenario(scenario_file, trial=0):
+    """Run a team scenario by executing each phase sequentially.
+    Returns the raw_output_file path (team-{scenario_id}[-tN].json).
+    """
+    agent       = 'team'
+    scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
+
+    if trial == 0:
+        raw_output = os.path.join(RAW_DIR, f'team-{scenario_id}.json')
+    else:
+        raw_output = os.path.join(RAW_DIR, f'team-{scenario_id}-t{trial}.json')
+
+    if os.path.isfile(raw_output):
+        trial_label = f' [trial {trial+1}/{TRIALS}]' if TRIALS > 1 else ''
+        print(f'  SKIP (raw output exists): team/{scenario_id}{trial_label}')
+        return raw_output
+
+    trial_label = f' [trial {trial+1}/{TRIALS}]' if TRIALS > 1 else ''
+    print(f'  Running team scenario: team/{scenario_id}{trial_label}')
+
+    with open(scenario_file, encoding='utf-8', errors='replace') as f:
+        content = f.read()
+
+    phases, pipeline_fields = parse_team_scenario(content)
+
+    start_ms  = int(datetime.datetime.now().timestamp() * 1000)
+    timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    phase_outputs = []
+    total_input_tokens  = 0
+    total_output_tokens = 0
+    total_cost_usd      = 0.0
+
+    for phase in phases:
+        pn         = phase['phase_num']
+        ph_agent   = phase['agent']
+        ph_prompt  = phase['prompt']
+
+        print(f'    Phase {pn} ({ph_agent}): running...')
+
+        if ph_agent == 'human':
+            # Human phase: store fixture text as output, skip LLM
+            fixture_text = phase['human_decision'] or ph_prompt
+            phase_record = {
+                'phase_num':    pn,
+                'agent':        ph_agent,
+                'agent_output': fixture_text,
+                'duration_ms':  0,
+                'tokens_used':  0,
+                'input_tokens': 0,
+                'output_tokens': 0,
+                'cost_usd':     0.0,
+                'is_fixture':   True,
+                'trace':        [],
+            }
+        else:
+            # LLM phase
+            record = run_single_agent_call(ph_agent, f'{scenario_id}/phase-{pn}', ph_prompt, timeout=TIMEOUT_TEAM)
+            total_input_tokens  += record.get('input_tokens', 0)
+            total_output_tokens += record.get('output_tokens', 0)
+            total_cost_usd      += record.get('cost_usd', 0.0)
+            phase_record = {
+                'phase_num':    pn,
+                'agent':        ph_agent,
+                'agent_output': record.get('agent_output', ''),
+                'duration_ms':  record.get('duration_ms', 0),
+                'tokens_used':  record.get('tokens_used', 0),
+                'input_tokens': record.get('input_tokens', 0),
+                'output_tokens': record.get('output_tokens', 0),
+                'cost_usd':     record.get('cost_usd', 0.0),
+                'is_fixture':   False,
+                'trace':        record.get('trace', []),
+            }
+            if record.get('error'):
+                phase_record['error'] = record['error']
+
+        # Run per-phase graders if defined
+        graders_raw = phase.get('graders_raw', '').strip()
+        if graders_raw and graders_raw not in ('[]', ''):
+            # Write a temp scenario file with just the phase fields so eval-graders.sh can evaluate it
+            temp_content = (
+                f"# Team Phase {pn} grader check\n\n---\n\n"
+                f"graders:\n{graders_raw}\n\n"
+                f"expected_behavior: |\n  {phase.get('expected_behavior', '')}\n\n"
+            )
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as tf:
+                tf.write(temp_content)
+                temp_scenario_path = tf.name
+
+            temp_raw = {
+                'agent_output': phase_record.get('agent_output', ''),
+            }
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as tf2:
+                json.dump(temp_raw, tf2)
+                temp_raw_path = tf2.name
+
+            try:
+                grader_results, grader_override = run_graders(temp_scenario_path, temp_raw_path)
+                phase_record['grader_results']  = grader_results
+                phase_record['grader_override'] = grader_override
+            finally:
+                try: os.unlink(temp_scenario_path)
+                except: pass
+                try: os.unlink(temp_raw_path)
+                except: pass
+
+        phase_outputs.append(phase_record)
+        print(f'    Phase {pn} ({ph_agent}): done')
+
+    end_ms      = int(datetime.datetime.now().timestamp() * 1000)
+    duration_ms = end_ms - start_ms
+
+    combined = {
+        'agent':               'team',
+        'scenario_id':         scenario_id,
+        'phases':              phase_outputs,
+        'agent_output':        json.dumps(phase_outputs),
+        'agent_output_excerpt': f'[{len(phase_outputs)} phases]',
+        'duration_ms':         duration_ms,
+        'tokens_used':         total_input_tokens + total_output_tokens,
+        'input_tokens':        total_input_tokens,
+        'output_tokens':       total_output_tokens,
+        'cost_usd':            total_cost_usd,
+        'timestamp':           timestamp,
+        'pipeline_fields':     pipeline_fields,
+    }
+
+    with open(raw_output, 'w', encoding='utf-8') as f:
+        json.dump(combined, f, indent=2, ensure_ascii=False)
+
+    print(f'  Done team scenario: team/{scenario_id}{trial_label} ({duration_ms}ms)')
+    return raw_output
+
+
+def score_team_scenario_all_trials(scenario_file, scored_dir):
+    """Score all trials of a team scenario using the pipeline-level rubric.
+    Returns the scored_file path or None.
+
+    If the scenario file no longer exists on disk (e.g. a temp file that was cleaned up
+    after the agent phase completed), we fall back to reading pipeline_fields from the raw
+    output JSON written during phase 1.  This makes resume runs and dry-run temp files safe.
+    """
+    scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
+    scored_file = os.path.join(scored_dir, f'team-{scenario_id}.json')
+
+    # --- Read scenario metadata ---
+    # Primary: read the scenario file from disk.
+    # Fallback: if the file is gone (temp dry-run files are deleted after the process exits,
+    # and this code path can be reached on a --resume run after cleanup), load pipeline_fields
+    # from the trial-0 raw output which always stores a copy of pipeline_fields.
+    pipeline_fields  = {}
+    scenario_name    = ''
+    scenario_type    = 'happy-path'
+    category         = ''
+
+    try:
+        with open(scenario_file, encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        _phases, pipeline_fields = parse_team_scenario(content)
+        scenario_name, scenario_type, category = parse_scenario_meta(content)
+    except FileNotFoundError:
+        # Scenario file is gone — try to recover pipeline_fields from the raw output.
+        raw_output_t0 = os.path.join(RAW_DIR, f'team-{scenario_id}.json')
+        if os.path.isfile(raw_output_t0):
+            try:
+                with open(raw_output_t0, encoding='utf-8', errors='replace') as f:
+                    _raw = json.load(f)
+                pipeline_fields = _raw.get('pipeline_fields', {})
+                print(
+                    f'  WARN: scenario file missing ({scenario_file}); '
+                    f'recovered pipeline_fields from raw output — '
+                    f'scenario_name/type/category will be blank',
+                    file=sys.stderr
+                )
+            except Exception as e:
+                print(
+                    f'  ERROR: scenario file missing AND could not read raw output '
+                    f'for team/{scenario_id}: {e}',
+                    file=sys.stderr
+                )
+                return None
+        else:
+            print(
+                f'  ERROR: scenario file missing and no raw output found for '
+                f'team/{scenario_id} — cannot score',
+                file=sys.stderr
+            )
+            return None
+
+    trial_results = []
+    for t in range(TRIALS):
+        if t == 0:
+            raw_output = os.path.join(RAW_DIR, f'team-{scenario_id}.json')
+        else:
+            raw_output = os.path.join(RAW_DIR, f'team-{scenario_id}-t{t}.json')
+
+        if not os.path.isfile(raw_output):
+            trial_label = f' [trial {t+1}]' if TRIALS > 1 else ''
+            print(f'  SKIP (no raw output for scoring): team/{scenario_id}{trial_label}')
+            continue
+
+        trial_label = f' [trial {t+1}/{TRIALS}]' if TRIALS > 1 else ''
+        print(f'  Scoring team: team/{scenario_id}{trial_label}')
+
+        with open(raw_output, encoding='utf-8', errors='replace') as f:
+            raw_data = json.load(f)
+
+        phase_outputs = raw_data.get('phases', [])
+
+        # Check grader hard gate: any phase with grader_override=True forces pipeline fail
+        any_grader_fail = any(p.get('grader_override', False) for p in phase_outputs)
+
+        # Build pipeline scoring prompt from all phase outputs
+        phase_summaries = []
+        for p in phase_outputs:
+            pn        = p.get('phase_num', '?')
+            pa        = p.get('agent', 'unknown')
+            po        = p.get('agent_output', '')[:1000]
+            pf        = 'FIXTURE' if p.get('is_fixture') else ''
+            phase_summaries.append(f'Phase {pn} ({pa}) {pf}:\n{po}')
+        all_phases_text = '\n\n---\n\n'.join(phase_summaries)
+
+        score_prompt = (
+            f"You are Coach K scoring a Dream Team pipeline run against a rubric. Return ONLY valid JSON.\n\n"
+            f"SCENARIO: {scenario_id}\n\n"
+            f"PIPELINE EXPECTED BEHAVIOR:\n{pipeline_fields.get('pipeline_expected_behavior', '')}\n\n"
+            f"PIPELINE FAILURE MODES:\n{pipeline_fields.get('pipeline_failure_modes', '')}\n\n"
+            f"PIPELINE SCORING RUBRIC:\n{pipeline_fields.get('pipeline_scoring_rubric', '')}\n\n"
+            f"PHASE OUTPUTS:\n{all_phases_text}\n\n"
+            f'Score the full pipeline. Return JSON:\n'
+            f'{{\n'
+            f'  "score": "pass|partial|fail",\n'
+            f'  "confidence_stated": <0-100>,\n'
+            f'  "justification": "<which rubric criteria were met/missed across the full pipeline>",\n'
+            f'  "observations": [{{"type": "positive|negative", "text": "..."}}]\n'
+            f'}}'
+        )
+
+        score_json  = ''
+        score_error = ''
+        parsed_score = None
+
+        if shutil.which('claude'):
+            for attempt in range(2):
+                try:
+                    proc = subprocess.run(
+                        ['claude', '-p'],
+                        input=score_prompt,
+                        capture_output=True,
+                        text=True,
+                        timeout=TIMEOUT_TEAM
+                    )
+                    score_json = proc.stdout
+                    if proc.returncode != 0:
+                        score_error = f'claude scoring exited non-zero: {proc.stderr[:300].replace(chr(10), " ")}'
+                        print(f'  ERROR scoring team/{scenario_id}{trial_label}: {score_error}', file=sys.stderr)
+                except subprocess.TimeoutExpired:
+                    score_error = f'claude team scoring timed out after {TIMEOUT_TEAM}s'
+                    print(f'  TIMEOUT scoring team/{scenario_id}{trial_label}: exceeded {TIMEOUT_TEAM}s limit', file=sys.stderr)
+                    break
+                except Exception as e:
+                    score_error = f'claude invocation error: {e}'
+                    print(f'  ERROR: {score_error}', file=sys.stderr)
+
+                parsed_score = parse_score_json(score_json)
+                if parsed_score is not None:
+                    break
+                if attempt == 0:
+                    print(f'  RETRY scoring parse for team/{scenario_id}{trial_label}')
+                    score_json = ''
+        else:
+            score_error  = 'claude CLI not found in PATH'
+            parsed_score = None
+
+        if not parsed_score:
+            parsed_score = {}
+
+        final_score = (parsed_score or {}).get('score', 'fail')
+        if any_grader_fail or not parsed_score or score_error:
+            final_score = 'fail'
+
+        if not parsed_score or score_error:
+            parsed_score.setdefault('justification', f'scoring parse error: {score_error or "no output"}')
+            parsed_score.setdefault('observations',  [{'type': 'negative', 'text': 'scoring failed'}])
+            parsed_score.setdefault('confidence_stated', 0)
+
+        result = {
+            'score':                final_score,
+            'confidence_stated':    parsed_score.get('confidence_stated', 0),
+            'justification':        parsed_score.get('justification', ''),
+            'observations':         parsed_score.get('observations', []),
+            'agent_output_excerpt': raw_data.get('agent_output_excerpt', '[team]'),
+            'duration_ms':          raw_data.get('duration_ms', 0),
+            'tokens_used':          raw_data.get('tokens_used', 0),
+            'input_tokens':         raw_data.get('input_tokens', 0),
+            'output_tokens':        raw_data.get('output_tokens', 0),
+            'cost_usd':             raw_data.get('cost_usd', 0.0),
+            'timestamp':            raw_data.get('timestamp', ''),
+            'phases':               phase_outputs,
+        }
+        if any_grader_fail:
+            result['grader_override'] = True
+
+        print(f'  Scored team: team/{scenario_id}{trial_label} -> {final_score}')
+        trial_results.append(result)
+
+    if not trial_results:
+        return None
+
+    primary = trial_results[0]
+    scored_result = {
+        'agent':                'team',
+        'scenario_id':          scenario_id,
+        'scenario_type':        scenario_type or 'happy-path',
+        'scenario_name':        scenario_name or scenario_id,
+        'score':                primary['score'],
+        'confidence_stated':    primary['confidence_stated'],
+        'justification':        primary['justification'],
+        'observations':         primary['observations'],
+        'agent_output_excerpt': primary['agent_output_excerpt'],
+        'duration_ms':          primary['duration_ms'],
+        'tokens_used':          primary['tokens_used'],
+        'input_tokens':         primary.get('input_tokens', 0),
+        'output_tokens':        primary.get('output_tokens', 0),
+        'cost_usd':             primary.get('cost_usd', 0.0),
+        'timestamp':            primary['timestamp'],
+        'phases':               primary.get('phases', []),
+    }
+
+    if primary.get('grader_override'):
+        scored_result['grader_override'] = True
+    if category:
+        scored_result['category'] = category
+
+    if TRIALS > 1:
+        scored_result['trials'] = trial_results
+        scores_set = set(t['score'] for t in trial_results)
+        scored_result['flaky'] = len(scores_set) > 1
+        scored_result['pass_hat_k'] = any(t['score'] == 'pass' for t in trial_results)
+
+    with open(scored_file, 'w', encoding='utf-8') as f:
+        json.dump(scored_result, f, indent=2, ensure_ascii=False)
+
+    return scored_file
+
+
+# ── Dry run (runs after helpers and team helpers are defined) ────────────────
+
+
+if DRY_RUN:
+    print()
+    print('DRY RUN -- would execute the following:')
+    print(f'  Phase: {PHASE}')
+    print(f'  Parallel: {PARALLEL}')
+    print(f'  Raw dir: {RAW_DIR}')
+    print()
+    for scenario_file in SCENARIOS:
+        agent       = os.path.basename(os.path.dirname(scenario_file))
+        scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
+        if agent == 'team':
+            with open(scenario_file, encoding='utf-8', errors='replace') as _f:
+                _content = _f.read()
+            _phases = parse_team_scenario(_content)[0]
+            phase_count = len(_phases)
+            raw_output = os.path.join(RAW_DIR, f'team-{scenario_id}.json')
+            if os.path.isfile(raw_output):
+                print(f'  SKIP (exists): {agent}/{scenario_id} [{phase_count} phases]')
+            else:
+                print(f'  RUN (team): {agent}/{scenario_id} [{phase_count} phases]')
+        else:
+            raw_output  = os.path.join(RAW_DIR, f'{agent}-{scenario_id}.json')
+            if os.path.isfile(raw_output):
+                print(f'  SKIP (exists): {agent}/{scenario_id}')
+            else:
+                print(f'  RUN: {agent}/{scenario_id}')
+    print()
+    print('Dry run complete. No changes made.')
+    sys.exit(0)
+
 # ── Phase 1: Agent Runs ───────────────────────────────────────────────────────
 
-def run_single_agent_call(agent, scenario_id, prompt):
-    """Execute one agent call. Returns a record dict."""
+def run_single_agent_call(agent, scenario_id, prompt, timeout=None):
+    """Execute one agent call. Returns a record dict.
+
+    timeout: seconds to allow the subprocess before killing it (None = no limit).
+    """
     start_ms  = int(datetime.datetime.now().timestamp() * 1000)
     timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
     error_note = ''
@@ -327,7 +770,8 @@ def run_single_agent_call(agent, scenario_id, prompt):
                  '--append-system-prompt', 'EVAL MODE: You are running in a headless evaluation. Do NOT enter plan mode. Do NOT call EnterPlanMode. Do NOT wait for approval. Execute the task directly and produce your complete final output immediately.'],
                 input=prompt,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=timeout
             )
             raw_stdout = proc.stdout
             if proc.returncode != 0:
@@ -369,6 +813,10 @@ def run_single_agent_call(agent, scenario_id, prompt):
                 agent_output = raw_stdout
                 error_note   = (error_note + ' | ' if error_note else '') + f'NDJSON parse error: {parse_err}'
                 print(f'  ERROR parsing stream-json for {agent}/{scenario_id}: {parse_err}', file=sys.stderr)
+        except subprocess.TimeoutExpired:
+            error_note   = f'claude timed out after {timeout}s'
+            agent_output = ''
+            print(f'  TIMEOUT: {agent}/{scenario_id} exceeded {timeout}s limit', file=sys.stderr)
         except Exception as e:
             error_note   = f'claude invocation error: {e}'
             agent_output = ''
@@ -425,7 +873,7 @@ def run_agent_scenario(scenario_file, trial=0):
     if not prompt:
         print(f'  WARN: empty prompt extracted for {agent}/{scenario_id}', file=sys.stderr)
 
-    record = run_single_agent_call(agent, scenario_id, prompt)
+    record = run_single_agent_call(agent, scenario_id, prompt, timeout=TIMEOUT_INDIVIDUAL)
 
     with open(raw_output, 'w', encoding='utf-8') as f:
         json.dump(record, f, indent=2, ensure_ascii=False)
@@ -446,8 +894,15 @@ def phase_agents():
         for t in range(TRIALS):
             work_items.append((sf, t))
 
+    def _dispatch(sf, t):
+        agent = os.path.basename(os.path.dirname(sf))
+        if agent == 'team':
+            return run_team_scenario(sf, t)
+        else:
+            return run_agent_scenario(sf, t)
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=PARALLEL) as executor:
-        futures = [executor.submit(run_agent_scenario, sf, t) for sf, t in work_items]
+        futures = [executor.submit(_dispatch, sf, t) for sf, t in work_items]
         for future in concurrent.futures.as_completed(futures):
             try:
                 future.result()
@@ -471,6 +926,11 @@ def phase_graders():
     for scenario_file in SCENARIOS:
         agent       = os.path.basename(os.path.dirname(scenario_file))
         scenario_id = os.path.splitext(os.path.basename(scenario_file))[0]
+
+        # Team scenarios run graders inline during phase_agents() — skip here
+        if agent == 'team':
+            print(f'  SKIP (team, graders run inline): {agent}/{scenario_id}')
+            continue
 
         for t in range(TRIALS):
             if t == 0:
@@ -546,12 +1006,17 @@ def score_single_trial(agent, scenario_id, scenario_file, raw_output, scored_fil
                     ['claude', '-p'],
                     input=score_prompt,
                     capture_output=True,
-                    text=True
+                    text=True,
+                    timeout=TIMEOUT_INDIVIDUAL
                 )
                 score_json = proc.stdout
                 if proc.returncode != 0:
                     score_error = f'claude scoring exited non-zero: {proc.stderr[:300].replace(chr(10), " ")}'
                     print(f'  ERROR scoring {agent}/{scenario_id}{trial_label}: {score_error}', file=sys.stderr)
+            except subprocess.TimeoutExpired:
+                score_error = f'claude scoring timed out after {TIMEOUT_INDIVIDUAL}s'
+                print(f'  TIMEOUT scoring {agent}/{scenario_id}{trial_label}: exceeded {TIMEOUT_INDIVIDUAL}s limit', file=sys.stderr)
+                break
             except Exception as e:
                 score_error = f'claude invocation error: {e}'
                 print(f'  ERROR: {score_error}', file=sys.stderr)
@@ -698,8 +1163,15 @@ def phase_score():
     scored_dir = os.path.join(RAW_DIR, 'scored')
     os.makedirs(scored_dir, exist_ok=True)
 
+    def _score_dispatch(sf):
+        agent = os.path.basename(os.path.dirname(sf))
+        if agent == 'team':
+            return score_team_scenario_all_trials(sf, scored_dir)
+        else:
+            return score_scenario_all_trials(sf, scored_dir)
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=PARALLEL) as executor:
-        futures = [executor.submit(score_scenario_all_trials, sf, scored_dir) for sf in SCENARIOS]
+        futures = [executor.submit(_score_dispatch, sf) for sf in SCENARIOS]
         for future in concurrent.futures.as_completed(futures):
             try:
                 future.result()

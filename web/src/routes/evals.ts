@@ -2,7 +2,8 @@ import {
   getRun, getRunResults, getResult,
   getAgentSummaries, getAgentSummariesAlpha, getDistinctAgents,
   getPreviousBaselineRun, getAllRunsAsc, getPersistentNonPassScenarios,
-  getAgentsForAllRuns, getAgentsForRuns, getRunsPage, getGlobalStats
+  getAgentsForAllRuns, getAgentsForRuns, getRunsPage, getGlobalStats,
+  getPhaseResultIds
 } from "../db.ts";
 import type { ScenarioHistoryEntry } from "../db.ts";
 import { Layout, maybeLayout } from "../views/Layout.ts";
@@ -73,11 +74,12 @@ export function evalRunHandler(req: Request, params: Record<string, string>): Re
     : [];
 
   const persistentNonPass = getPersistentNonPassScenarios();
+  const phaseResultIds = getPhaseResultIds(runId);
 
   const body = EvalRunPage(
     run, results, summaries, agents, filterAgent, filterScore,
     previousBaseline, previousBaselineResults, previousBaselineSummaries, allRunsForTrend,
-    persistentNonPass
+    persistentNonPass, phaseResultIds
   );
   return html(maybeLayout(req, run.run_id, body, "/evals"));
 }

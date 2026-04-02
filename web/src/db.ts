@@ -170,7 +170,7 @@ export function getRun(runId: string): EvalRun | null {
 
 export function getRunResults(runId: string, agent?: string, score?: string): EvalResult[] {
   const db = getDb();
-  let sql = "SELECT * FROM eval_results WHERE run_id = ?";
+  let sql = "SELECT * FROM eval_results WHERE run_id = ? AND (scenario_type IS NULL OR scenario_type != 'team-phase')";
   const params: unknown[] = [runId];
   if (agent) { sql += " AND agent = ?"; params.push(agent); }
   if (score) { sql += " AND score = ?"; params.push(score); }
@@ -190,7 +190,7 @@ export function getAgentSummaries(runId: string): AgentSummary[] {
 
 export function getDistinctAgents(runId: string): string[] {
   const db = getDb();
-  const rows = db.query("SELECT DISTINCT agent FROM eval_results WHERE run_id = ? ORDER BY agent").all(runId) as { agent: string }[];
+  const rows = db.query("SELECT DISTINCT agent FROM eval_results WHERE run_id = ? AND (scenario_type IS NULL OR scenario_type != 'team-phase') ORDER BY agent").all(runId) as { agent: string }[];
   return rows.map(r => r.agent);
 }
 
@@ -218,7 +218,7 @@ export function getAgentsForRuns(runIds: string[]): Map<string, string[]> {
   if (uncoveredIds.length > 0) {
     const fallbackPlaceholders = uncoveredIds.map(() => "?").join(",");
     const fallbackRows = db.query(
-      `SELECT DISTINCT run_id, agent FROM eval_results WHERE run_id IN (${fallbackPlaceholders}) ORDER BY run_id, agent ASC`
+      `SELECT DISTINCT run_id, agent FROM eval_results WHERE run_id IN (${fallbackPlaceholders}) AND (scenario_type IS NULL OR scenario_type != 'team-phase') ORDER BY run_id, agent ASC`
     ).all(...uncoveredIds) as { run_id: string; agent: string }[];
     for (const row of fallbackRows) {
       if (!map.has(row.run_id)) map.set(row.run_id, []);
@@ -250,13 +250,25 @@ export function getAgentsForAllRuns(): Map<string, string[]> {
   // Fallback: eval_results only for run_ids NOT already covered by agent_summaries
   // This handles in-progress or crashed runs that never wrote agent_summaries rows.
   const fallbackRows = db.query(
-    "SELECT DISTINCT run_id, agent FROM eval_results WHERE run_id NOT IN (SELECT DISTINCT run_id FROM agent_summaries) ORDER BY run_id, agent ASC"
+    "SELECT DISTINCT run_id, agent FROM eval_results WHERE run_id NOT IN (SELECT DISTINCT run_id FROM agent_summaries) AND (scenario_type IS NULL OR scenario_type != 'team-phase') ORDER BY run_id, agent ASC"
   ).all() as { run_id: string; agent: string }[];
   for (const row of fallbackRows) {
     if (!map.has(row.run_id)) map.set(row.run_id, []);
     map.get(row.run_id)!.push(row.agent);
   }
 
+  return map;
+}
+
+export function getPhaseResultIds(runId: string): Map<string, number> {
+  const db = getDb();
+  const rows = db.query(
+    "SELECT id, scenario_id FROM eval_results WHERE run_id = ? AND scenario_id LIKE '%--phase-%'"
+  ).all(runId) as Array<{id: number; scenario_id: string}>;
+  const map = new Map<string, number>();
+  for (const row of rows) {
+    map.set(row.scenario_id, row.id);
+  }
   return map;
 }
 
@@ -342,7 +354,7 @@ export function getScenarioHistory(agent: string, scenarioId: string): ScenarioH
   const result: ScenarioHistoryEntry[] = [];
   for (const run of runs) {
     const rows = db.query(
-      "SELECT score FROM eval_results WHERE run_id = ? AND agent = ? AND scenario_id = ? ORDER BY score ASC"
+      "SELECT score FROM eval_results WHERE run_id = ? AND agent = ? AND scenario_id = ? AND (scenario_type IS NULL OR scenario_type != 'team-phase') ORDER BY score ASC"
     ).all(run.run_id, agent, scenarioId) as { score: string }[];
     if (rows.length === 0) continue;
     // Use worst score across trials
@@ -367,6 +379,7 @@ export function getPersistentNonPassScenarios(): Array<{
   const rows = db.query(`
     SELECT agent, scenario_id
     FROM eval_results
+    WHERE scenario_type IS NULL OR scenario_type != 'team-phase'
     GROUP BY agent, scenario_id
     HAVING COUNT(DISTINCT run_id) >= 2
       AND SUM(CASE WHEN score = 'pass' THEN 1 ELSE 0 END) = 0

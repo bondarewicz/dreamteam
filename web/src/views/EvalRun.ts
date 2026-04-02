@@ -60,7 +60,8 @@ export function EvalRunPage(
   previousBaselineResults: EvalResult[] = [],
   previousBaselineSummaries: AgentSummary[] = [],
   allRuns: EvalRun[] = [],
-  persistentNonPass: Array<{ agent: string; scenario_id: string; history: ScenarioHistoryEntry[] }> = []
+  persistentNonPass: Array<{ agent: string; scenario_id: string; history: ScenarioHistoryEntry[] }> = [],
+  phaseResultIds: Map<string, number> = new Map()
 ): string {
   const total = results.length;
   const trialCount = run.trials ?? 1;
@@ -261,6 +262,9 @@ export function EvalRunPage(
   // Per-agent sections
   const agentSections = buildAgentSections(results, summaries, run.run_id, byScenario, trialCount);
 
+  // Team pipeline phase sections (one card-group per agent, below team card)
+  const teamPhaseSections = buildTeamPhaseSections(results, phaseResultIds, run.run_id);
+
   // Missing sections (bugs 7-10)
   const flakyScenariosHtml = trialCount > 1 ? buildFlakyScenariosSection(byScenario, summaries) : "";
   const agentReliabilityHtml = trialCount > 1 ? buildAgentReliabilitySection(byScenario, summaries, trialCount) : "";
@@ -327,6 +331,7 @@ export function EvalRunPage(
     ${calibrationHtml}
     ${focusHtml}
     ${agentSections}
+    ${teamPhaseSections}
     ${flakyScenariosHtml}
     ${agentReliabilityHtml}
     ${regressionAlertsSectionHtml}
@@ -878,6 +883,9 @@ function buildAgentSections(
         } catch { /* skip */ }
       }
 
+      // Phase-level structured observations (team results only)
+      const phaseObsHtml = agent === "team" ? phaseObservations(displayResult.agent_output) : "";
+
       // Footer meta: duration, tokens, cost
       const metaLine = [
         displayResult.duration_ms ? ms(displayResult.duration_ms) : null,
@@ -931,6 +939,7 @@ function buildAgentSections(
         ${graderRowHtml}
         ${trialRowHtml}
         ${criteriaHtml}
+        ${phaseObsHtml}
         ${justHtml}
         ${failureHtml}
         ${metaLine ? `<div class="b-mismatch" style="color:var(--text-dim);font-weight:400">${metaLine}</div>` : ""}
@@ -965,6 +974,455 @@ function buildAgentSections(
   }
 
   return sections.join("\n");
+}
+
+// ── phaseObservations: per-phase structured output for team results ───────────
+function formatPhaseOutput(raw: string): string {
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw);
+    return esc(JSON.stringify(parsed, null, 2));
+  } catch {
+    return esc(raw);
+  }
+}
+
+/**
+ * Extract display text from a finding object.
+ * Kobe's critical_findings and important_issues use { title, risk } — not { text }.
+ * Fallback chain: title -> text -> description -> JSON.stringify(f)
+ */
+function findingText(f: unknown): string {
+  if (typeof f === "string") return f;
+  if (f && typeof f === "object") {
+    const obj = f as Record<string, unknown>;
+    if (typeof obj.title === "string" && obj.title) return obj.title;
+    if (typeof obj.text === "string" && obj.text) return obj.text;
+    if (typeof obj.description === "string" && obj.description) return obj.description;
+    return JSON.stringify(f);
+  }
+  return String(f);
+}
+
+/**
+ * Build an HTML snippet showing per-phase observations extracted from a team
+ * result's agent_output JSON (array of phase records).
+ *
+ * For Kobe phases, renders critical_findings and important_issues using
+ * findingText() so that { title, risk } objects display their title instead
+ * of raw JSON.
+ */
+function phaseObservations(agentOutput: string | null): string {
+  if (!agentOutput) return "";
+
+  let phases: unknown[];
+  try {
+    const parsed = JSON.parse(agentOutput);
+    if (!Array.isArray(parsed)) return "";
+    phases = parsed;
+  } catch {
+    return "";
+  }
+
+  const parts: string[] = [];
+
+  for (const phase of phases) {
+    if (!phase || typeof phase !== "object") continue;
+    const p = phase as Record<string, unknown>;
+    const phaseAgent = typeof p.agent === "string" ? p.agent.toLowerCase() : "";
+    const phaseNum = p.phase_num;
+    if (p.is_fixture) continue; // skip human/fixture phases
+
+    // Only render for agents with known structured output
+    if (!["kobe", "bird", "mj", "shaq", "pippen", "magic"].includes(phaseAgent)) continue;
+
+    const rawOutput = typeof p.agent_output === "string" ? p.agent_output : "";
+    if (!rawOutput) continue;
+
+    let parsed: Record<string, unknown>;
+    try {
+      const o = JSON.parse(rawOutput);
+      if (!o || typeof o !== "object" || Array.isArray(o)) continue;
+      parsed = o as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    const items: string[] = [];
+
+    if (phaseAgent === "kobe") {
+      // critical_findings: { title, risk }
+      if (Array.isArray(parsed.critical_findings)) {
+        for (const f of parsed.critical_findings) {
+          items.push(`<li class="missed"><span class="b-crit-dot missed"></span> ${esc(findingText(f))}</li>`);
+        }
+      }
+      // important_issues: { title, ... }
+      if (Array.isArray(parsed.important_issues)) {
+        for (const f of parsed.important_issues) {
+          items.push(`<li class="missed" style="opacity:0.75"><span class="b-crit-dot missed"></span> ${esc(findingText(f))}</li>`);
+        }
+      }
+    } else if (phaseAgent === "bird") {
+      if (Array.isArray(parsed.escalations) && parsed.escalations.length > 0) {
+        for (const f of parsed.escalations) {
+          items.push(`<li class="missed"><span class="b-crit-dot missed"></span> ${esc(findingText(f))}</li>`);
+        }
+      }
+    }
+
+    if (items.length > 0) {
+      const agentLabel = phaseAgent.charAt(0).toUpperCase() + phaseAgent.slice(1);
+      const pLabel = phaseNum != null ? ` (phase ${phaseNum})` : "";
+      parts.push(`<div style="font-size:10px;font-weight:600;color:var(--text-muted);margin:4px 0 2px;text-transform:uppercase;letter-spacing:0.5px">${esc(agentLabel)}${esc(pLabel)}</div><ul class="b-criteria">${items.join("")}</ul>`);
+    }
+  }
+
+  if (parts.length === 0) return "";
+  return `<div class="b-phase-obs">${parts.join("")}</div>`;
+}
+
+// ── Team Phase Sections ──────────────────────────────────────────────────────
+/**
+ * Build per-phase agent section cards for team eval runs.
+ * Each agent that appeared as a phase in any team result gets its own
+ * collapsible <details> section below the team card, with one b-card per phase.
+ */
+function buildTeamPhaseSections(results: EvalResult[], phaseResultIds: Map<string, number>, runId: string): string {
+  // Collect all parseable phases from team results
+  interface PhaseEntry {
+    scenarioId: string;
+    scenarioName: string;
+    phaseNum: number | null;
+    agent: string; // phase-level agent name, lowercased
+    agentOutput: string; // raw JSON string of the phase's agent_output
+    graderResults: string | null; // raw JSON of phase-level grader results (if any)
+    durationMs: number | null;
+    tokensUsed: number | null;
+    costUsd: number | null;
+    isFixture: boolean;
+    overallScore: string; // parent result's score used as fallback
+  }
+
+  const phases: PhaseEntry[] = [];
+
+  for (const r of results) {
+    if (r.agent !== "team") continue;
+    if (!r.agent_output) continue;
+
+    let phaseList: unknown[];
+    try {
+      const parsed = JSON.parse(r.agent_output);
+      if (Array.isArray(parsed)) {
+        phaseList = parsed;
+      } else if (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).phases)) {
+        phaseList = (parsed as Record<string, unknown>).phases as unknown[];
+      } else {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    for (const phase of phaseList) {
+      if (!phase || typeof phase !== "object") continue;
+      const p = phase as Record<string, unknown>;
+      const phaseAgent = typeof p.agent === "string" ? p.agent.toLowerCase() : "";
+      if (!phaseAgent) continue;
+
+      const rawOutput = typeof p.agent_output === "string" ? p.agent_output : "";
+      const isFixture = Boolean(p.is_fixture);
+
+      // Phase grader_results may be stored directly in the phase object (array or legacy string)
+      const phaseGraderResults = Array.isArray(p.grader_results)
+        ? JSON.stringify(p.grader_results)
+        : typeof p.grader_results === "string" ? p.grader_results : null;
+
+      // Derive pass/fail from grader_results if present, else use parent score
+      let phaseScore = r.score;
+      if (Array.isArray(p.grader_results) && p.grader_results.length > 0) {
+        const graders = p.grader_results as Array<{ passed: boolean }>;
+        const allPass = graders.every(g => g.passed);
+        phaseScore = allPass && !p.grader_override ? "pass" : "fail";
+      } else if (typeof p.grader_results === "string") {
+        try {
+          const graders = JSON.parse(p.grader_results) as Array<{ passed: boolean }>;
+          const allPass = graders.every(g => g.passed);
+          phaseScore = allPass && !p.grader_override ? "pass" : "fail";
+        } catch { /* use parent score */ }
+      } else if (!p.grader_results || (Array.isArray(p.grader_results) && p.grader_results.length === 0)) {
+        phaseScore = p.grader_override ? "fail" : "pass";
+      } else if (typeof p.score === "string") {
+        phaseScore = p.score;
+      }
+
+      phases.push({
+        scenarioId: r.scenario_id,
+        scenarioName: r.scenario_name ?? r.scenario_id,
+        phaseNum: typeof p.phase_num === "number" ? p.phase_num : null,
+        agent: phaseAgent,
+        agentOutput: rawOutput,
+        graderResults: phaseGraderResults,
+        durationMs: typeof p.duration_ms === "number" ? p.duration_ms : null,
+        tokensUsed: typeof p.tokens_used === "number" ? p.tokens_used : null,
+        costUsd: typeof p.cost_usd === "number" ? p.cost_usd : null,
+        isFixture,
+        overallScore: phaseScore,
+      });
+    }
+  }
+
+  if (phases.length === 0) return "";
+
+  // Group by agent name
+  const byAgent = new Map<string, PhaseEntry[]>();
+  for (const p of phases) {
+    if (!byAgent.has(p.agent)) byAgent.set(p.agent, []);
+    byAgent.get(p.agent)!.push(p);
+  }
+
+  // Sort agent groups alphabetically using AGENT_ORDER
+  const agentOrder = [...byAgent.keys()].sort((a, b) => {
+    const ai = AGENT_ORDER.indexOf(a.toLowerCase());
+    const bi = AGENT_ORDER.indexOf(b.toLowerCase());
+    if (ai === -1 && bi === -1) return a.localeCompare(b);
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+
+  const sections: string[] = [];
+
+  for (const agentKey of agentOrder) {
+    const agentPhases = byAgent.get(agentKey)!;
+    const color = agentColor(agentKey);
+    const agentLabel = agentKey.charAt(0).toUpperCase() + agentKey.slice(1);
+    const role = AGENT_ROLES[agentKey] ?? "Agent";
+
+    const passCount = agentPhases.filter(p => !p.isFixture && p.overallScore === "pass").length;
+    const totalNonFixture = agentPhases.filter(p => !p.isFixture).length;
+
+    const cards = agentPhases.map(p => {
+      const phaseLabel = p.phaseNum != null ? `Phase ${p.phaseNum}` : "Phase";
+      const cardScore = p.overallScore;
+      const scoreLabelCap = cardScore.charAt(0).toUpperCase() + cardScore.slice(1);
+      const cardOpacity = p.isFixture ? ' style="opacity:0.55"' : "";
+
+      // Grader chips from phase-level grader_results
+      let graderRowHtml = "";
+      if (p.graderResults) {
+        try {
+          const graders: Array<{type: string; config?: Record<string,unknown>; passed: boolean; detail?: string}> = JSON.parse(p.graderResults);
+          const chips = graders.map(g => {
+            const chipClass = g.passed ? "grader-pass" : "grader-fail";
+            const icon = g.passed ? "&#10003;" : "&#10007;";
+            let label = esc(g.type);
+            if (g.config && typeof g.config === "object") {
+              const parts: string[] = [];
+              if (g.config.path) parts.push(`path=${g.config.path}`);
+              if (g.config.min_items != null) parts.push(`min_items=${g.config.min_items}`);
+              if (g.config.max_items != null) parts.push(`max_items=${g.config.max_items}`);
+              if (g.config.min != null) parts.push(`min=${g.config.min}`);
+              if (g.config.max != null) parts.push(`max=${g.config.max}`);
+              if (g.config.type_check) parts.push(`type_check=${g.config.type_check}`);
+              if (parts.length > 0) label += " " + parts.map(esc).join(" ");
+            }
+            return `<span class="grader-chip ${chipClass}"><span class="grader-icon">${icon}</span> ${label}</span>`;
+          }).join("");
+          graderRowHtml = `
+        <div class="grader-row">
+          <span class="grader-label">Graders</span>
+          ${chips}
+        </div>`;
+        } catch { /* skip */ }
+      }
+
+      // Output extraction using findingText — per-agent structured output
+      const criteriaHtml = phaseFindingHtml(agentKey, p.agentOutput, p.isFixture);
+
+      // Meta line
+      const metaLine = [
+        p.durationMs ? ms(p.durationMs) : null,
+        p.tokensUsed ? `${(p.tokensUsed / 1000).toFixed(1)}k tok` : null,
+        p.costUsd ? cost(p.costUsd) : null,
+      ].filter(Boolean).join(" &middot; ");
+
+      const fixtureLabel = p.isFixture ? `<span style="color:var(--text-muted);font-size:10px;font-style:italic">(fixture)</span>` : "";
+
+      // Trace link for non-fixture phases that have a persisted result row
+      const runIdEncoded = encodeURIComponent(runId);
+      const phaseKey = p.phaseNum != null ? `${p.scenarioId}--phase-${p.phaseNum}` : null;
+      const resultId = (!p.isFixture && phaseKey) ? (phaseResultIds.get(phaseKey) ?? null) : null;
+      const traceLinkHtml = resultId != null
+        ? `<a class="b-trace-link" href="/evals/${runIdEncoded}/trace/${resultId}">trace</a>`
+        : "";
+
+      return `
+      <div class="b-card ${esc(cardScore)}"${cardOpacity}>
+        <div class="b-score-group">
+          <div class="b-score ${esc(cardScore)}">${esc(scoreLabelCap)}</div>
+        </div>
+        <div class="b-name">${esc(p.scenarioName)} &mdash; ${esc(phaseLabel)} ${fixtureLabel}</div>
+        <div class="b-tags"><span class="b-type-tag">${esc(phaseLabel.toUpperCase())}</span></div>
+        ${graderRowHtml}
+        ${criteriaHtml}
+        ${p.agentOutput ? `
+        <details>
+          <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);margin-top:8px;user-select:none">
+            View full output
+          </summary>
+          <pre style="font-size:11px;line-height:1.4;max-height:400px;overflow:auto;background:var(--surface-2);padding:12px;border-radius:6px;margin-top:6px;white-space:pre-wrap;word-break:break-word;color:var(--text)">${formatPhaseOutput(p.agentOutput)}</pre>
+        </details>` : ""}
+        ${metaLine ? `<div class="b-mismatch" style="color:var(--text-dim);font-weight:400">${metaLine}</div>` : ""}
+        ${traceLinkHtml}
+      </div>`;
+    }).join("");
+
+    sections.push(`
+  <div class="section" id="team-phase-${esc(agentKey)}">
+    <details open>
+    <summary class="section-title">
+      <div class="agent-dot" style="background:${color}"></div>
+      <span class="agent-name">${esc(agentLabel)}</span>
+      <span class="agent-role">${esc(role)} &middot; Phase Results &middot; ${passCount}/${totalNonFixture} pass</span>
+      <span class="section-badge" style="background:var(--surface-3);color:var(--text-muted);border-color:var(--border)">team pipeline</span>
+      <span class="chevron"></span>
+    </summary>
+    <div class="b-grid">
+      ${cards}
+    </div>
+    </details>
+  </div>`);
+  }
+
+  return sections.join("\n");
+}
+
+/**
+ * Build a b-criteria bullet list from a phase's agent_output JSON.
+ * Extraction logic is agent-specific:
+ *   Bird:  business_context excerpt, N business rules, N acceptance criteria
+ *   MJ:    executive_summary excerpt, N options evaluated, recommended approach
+ *   Kobe:  Verdict (green SHIP / red otherwise), one_liner, critical_findings as red bullets
+ *   Shaq:  what_was_built excerpt, N files changed
+ *   All:   Confidence N%
+ *   Fixture: muted text label
+ */
+function phaseFindingHtml(agentKey: string, rawOutput: string, isFixture: boolean): string {
+  if (isFixture) {
+    return `<ul class="b-criteria"><li class="met" style="opacity:0.6"><span class="b-crit-dot met"></span> Human fixture phase</li></ul>`;
+  }
+  if (!rawOutput) return "";
+
+  let parsed: Record<string, unknown>;
+  try {
+    const o = JSON.parse(rawOutput);
+    if (!o || typeof o !== "object" || Array.isArray(o)) return "";
+    parsed = o as Record<string, unknown>;
+  } catch {
+    return "";
+  }
+
+  const items: string[] = [];
+
+  if (agentKey === "bird") {
+    // business_context excerpt
+    if (typeof parsed.business_context === "string" && parsed.business_context) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> ${esc(truncate(parsed.business_context, 120))}</li>`);
+    }
+    // N business rules
+    if (Array.isArray(parsed.business_rules)) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> ${parsed.business_rules.length} business rule${parsed.business_rules.length !== 1 ? "s" : ""}</li>`);
+    }
+    // N acceptance criteria
+    if (Array.isArray(parsed.acceptance_criteria)) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> ${parsed.acceptance_criteria.length} acceptance criteri${parsed.acceptance_criteria.length !== 1 ? "a" : "on"}</li>`);
+    }
+    // escalations as red bullets
+    if (Array.isArray(parsed.escalations) && parsed.escalations.length > 0) {
+      for (const f of parsed.escalations) {
+        items.push(`<li class="missed"><span class="b-crit-dot missed"></span> ${esc(findingText(f))}</li>`);
+      }
+    }
+  } else if (agentKey === "mj") {
+    // executive_summary excerpt
+    if (typeof parsed.executive_summary === "string" && parsed.executive_summary) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> ${esc(truncate(parsed.executive_summary, 120))}</li>`);
+    }
+    // N options evaluated
+    if (Array.isArray(parsed.options_evaluated)) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> ${parsed.options_evaluated.length} option${parsed.options_evaluated.length !== 1 ? "s" : ""} evaluated</li>`);
+    }
+    // recommended approach
+    const recommended = parsed.recommended_approach ?? parsed.recommendation;
+    if (typeof recommended === "string" && recommended) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> Recommended: ${esc(truncate(recommended, 100))}</li>`);
+    }
+  } else if (agentKey === "kobe") {
+    // Verdict: green if SHIP, red otherwise
+    const verdict = typeof parsed.verdict === "string" ? parsed.verdict : "";
+    if (verdict) {
+      const isShip = verdict.toUpperCase() === "SHIP";
+      const cls = isShip ? "met" : "missed";
+      items.push(`<li class="${cls}"><span class="b-crit-dot ${cls}"></span> Verdict: ${esc(verdict)}</li>`);
+    }
+    // one_liner
+    if (typeof parsed.one_liner === "string" && parsed.one_liner) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> ${esc(truncate(parsed.one_liner, 120))}</li>`);
+    }
+    // critical_findings as individual red bullets
+    if (Array.isArray(parsed.critical_findings) && parsed.critical_findings.length > 0) {
+      for (const f of parsed.critical_findings) {
+        items.push(`<li class="missed"><span class="b-crit-dot missed"></span> ${esc(findingText(f))}</li>`);
+      }
+    }
+  } else if (agentKey === "shaq") {
+    // what_was_built excerpt
+    if (typeof parsed.what_was_built === "string" && parsed.what_was_built) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> ${esc(truncate(parsed.what_was_built, 120))}</li>`);
+    } else {
+      // implementation_summary.what_was_built
+      const impl = parsed.implementation_summary;
+      if (impl && typeof impl === "object") {
+        const implObj = impl as Record<string, unknown>;
+        if (typeof implObj.what_was_built === "string" && implObj.what_was_built) {
+          items.push(`<li class="met"><span class="b-crit-dot met"></span> ${esc(truncate(implObj.what_was_built, 120))}</li>`);
+        }
+        if (Array.isArray(implObj.files_changed)) {
+          items.push(`<li class="met"><span class="b-crit-dot met"></span> ${implObj.files_changed.length} file${implObj.files_changed.length !== 1 ? "s" : ""} changed</li>`);
+        }
+      }
+    }
+    // top-level files_changed
+    if (Array.isArray(parsed.files_changed)) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> ${parsed.files_changed.length} file${parsed.files_changed.length !== 1 ? "s" : ""} changed</li>`);
+    }
+  } else {
+    // Generic: try to show a brief summary from common fields
+    const summary = parsed.executive_summary ?? parsed.summary ?? parsed.what_was_built ?? parsed.business_context;
+    if (typeof summary === "string" && summary) {
+      items.push(`<li class="met"><span class="b-crit-dot met"></span> ${esc(truncate(summary, 120))}</li>`);
+    }
+  }
+
+  // Universal: Confidence N% (check top-level confidence field)
+  const conf = parsed.confidence;
+  if (conf != null) {
+    let confNum: number | null = null;
+    if (typeof conf === "number") {
+      confNum = conf;
+    } else if (typeof conf === "object" && conf !== null) {
+      const confObj = conf as Record<string, unknown>;
+      if (typeof confObj.level === "number") confNum = confObj.level;
+    }
+    if (confNum != null) {
+      const confCls = confNum >= 75 ? "met" : confNum >= 50 ? "met" : "missed";
+      items.push(`<li class="${confCls}"><span class="b-crit-dot ${confCls}"></span> Confidence: ${confNum}%</li>`);
+    }
+  }
+
+  if (items.length === 0) return "";
+  return `<ul class="b-criteria">${items.join("")}</ul>`;
 }
 
 // ── Bug 7: Flaky Scenarios section ──────────────────────────────────────────

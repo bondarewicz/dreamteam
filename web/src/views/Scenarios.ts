@@ -53,6 +53,26 @@ export type ParsedScenario = {
   scoring_rubric: string;
 };
 
+export type Phase = {
+  phaseNum: number;
+  agent: string;
+  prompt: string;
+  expectedBehavior: string;
+  failureModes: string;
+  scoringRubric: string;
+  graders: Grader[];
+  referenceOutput: string;
+  humanDecision?: string;
+};
+
+export type ParsedTeamScenario = ParsedScenario & {
+  isTeam: true;
+  phases: Phase[];
+  pipelineExpectedBehavior: string;
+  pipelineFailureModes: string;
+  pipelineScoringRubric: string;
+};
+
 export type ValidationIssue = {
   level: "error" | "warn";
   message: string;
@@ -76,7 +96,7 @@ function typeClass(type: string): string {
   return first.toLowerCase().replace(/\s+/g, "-");
 }
 
-export const KNOWN_AGENTS = ["bird", "kobe", "magic", "mj", "pippen", "shaq"] as const;
+export const KNOWN_AGENTS = ["bird", "coachk", "kobe", "magic", "mj", "pippen", "shaq", "team"] as const;
 export type KnownAgent = typeof KNOWN_AGENTS[number];
 
 export function ScenariosListPage(
@@ -1346,5 +1366,242 @@ export function ScenarioGenerateFragment(
 
       </form>
     </div>
+  `;
+}
+
+// ── Team Scenario Edit Page ──────────────────────────────────────────────────
+
+/**
+ * TeamScenarioEditPage — view for editing a team scenario draft.
+ * Uses <details>/<summary> for collapsible phases.
+ * Each phase shows: agent label, prompt textarea, expected_behavior textarea, graders list.
+ * Human phases show fixture text with a read-only indicator.
+ * Pipeline section at bottom for pipeline_expected_behavior, pipeline_failure_modes,
+ * pipeline_scoring_rubric textareas.
+ * Form posts to the save route; form fields use phase_N_ prefix.
+ */
+export function TeamScenarioEditPage(
+  agent: string,
+  draftId: string,
+  parsed: ParsedTeamScenario,
+  issues: ValidationIssue[],
+  savedFlash = false,
+  dryRunDone = false
+): string {
+  let flashHtml = "";
+  if (savedFlash) {
+    flashHtml = `<div class="sc-validation-box sc-validation-ok" id="validation-result"><div class="sc-issue ok"><span class="sc-issue-icon">&#10003;</span><span>Team scenario saved successfully.</span></div></div>`;
+  } else if (issues.length > 0) {
+    const hasErrors = issues.some(i => i.level === "error");
+    flashHtml = `<div class="sc-validation-box ${hasErrors ? "sc-validation-has-errors" : "sc-validation-has-warnings"}" id="validation-result">${issues.map(renderIssue).join("")}</div>`;
+  } else {
+    flashHtml = `<div id="validation-result"></div>`;
+  }
+
+  const phasesHtml = parsed.phases.map(phase => {
+    const pn = phase.phaseNum;
+    const isHuman = phase.agent === "human";
+    const gradersChips = phase.graders.length > 0
+      ? phase.graders.map(g => `<span class="sc-current-grader-chip">${esc(g.type)}</span>`).join(" ")
+      : `<span style="color:var(--text-muted);font-size:12px">No phase graders defined</span>`;
+
+    const promptField = isHuman
+      ? `
+        <div class="sc-field-group">
+          <label class="sc-field-label">
+            Human Decision Fixture
+            <span class="sc-field-hint">Read-only — fixture injected automatically during eval</span>
+          </label>
+          <textarea
+            name="phase_${pn}_prompt"
+            class="sc-textarea sc-textarea-mono"
+            rows="4"
+            readonly
+            style="opacity:0.7;cursor:not-allowed"
+          >${esc(phase.prompt)}</textarea>
+        </div>`
+      : `
+        <div class="sc-field-group">
+          <label class="sc-field-label">
+            Prompt
+            <span class="sc-field-hint sc-required">Required — verbatim input to ${esc(phase.agent)}</span>
+          </label>
+          <textarea name="phase_${pn}_prompt" class="sc-textarea sc-textarea-mono sc-textarea-tall" rows="8">${esc(phase.prompt)}</textarea>
+        </div>`;
+
+    const expectedBehaviorField = !isHuman ? `
+      <div class="sc-field-group">
+        <label class="sc-field-label">Expected Behavior</label>
+        <textarea name="phase_${pn}_expected_behavior" class="sc-textarea" rows="5">${esc(phase.expectedBehavior)}</textarea>
+      </div>` : "";
+
+    const gradersSection = !isHuman ? `
+      <div class="sc-field-group">
+        <label class="sc-field-label">
+          Phase Graders
+          <span class="sc-field-hint">Machine-checkable assertions for this phase</span>
+        </label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 0">${gradersChips}</div>
+        <div id="grader-preview-panel-phase-${pn}"></div>
+        <button
+          type="button"
+          class="sc-btn-secondary"
+          style="margin-top:6px;font-size:12px"
+          hx-post="/api/scenarios/${esc(agent)}/drafts/${esc(draftId)}/generate-graders?phase=${pn}"
+          hx-include="#scenario-form"
+          hx-target="#grader-preview-panel-phase-${pn}"
+          hx-swap="innerHTML"
+        >
+          Generate Graders for Phase ${pn} (${esc(phase.agent)})
+        </button>
+      </div>` : "";
+
+    const agentBadgeStyle = isHuman
+      ? `style="color:var(--text-muted);background:rgba(125,133,144,0.15);border:1px solid rgba(125,133,144,0.3);padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700"`
+      : `class="agent-badge ${esc(phase.agent)}"`;
+
+    return `
+      <details class="sc-phase-details" open>
+        <summary class="sc-phase-summary">
+          <span style="font-weight:600;font-size:13px">Phase ${pn}</span>
+          <span ${agentBadgeStyle}>${esc(phase.agent)}</span>
+          ${isHuman ? `<span style="color:var(--text-muted);font-size:11px;margin-left:4px">(fixture)</span>` : ""}
+        </summary>
+        <div class="sc-phase-body">
+          <input type="hidden" name="phase_${pn}_agent" value="${esc(phase.agent)}">
+          ${promptField}
+          ${expectedBehaviorField}
+          ${gradersSection}
+        </div>
+      </details>
+    `;
+  }).join("\n");
+
+  const promoteHtml = dryRunDone ? `
+    <div class="sc-promote-form">
+      <div class="sc-promote-header">
+        <span class="sc-promote-title">Dry run complete — ready to promote</span>
+        <span class="sc-promote-hint">This will write the team scenario to evals/team/.</span>
+      </div>
+      <form method="POST" action="/api/scenarios/${esc(agent)}/drafts/${esc(draftId)}/promote" style="display:inline">
+        <button type="submit" class="sc-btn-promote">Promote to Production</button>
+      </form>
+    </div>
+  ` : "";
+
+  return `
+    <div class="page-title">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <a href="/scenarios?agent=${esc(agent)}" style="color:${agentColor(agent)};text-decoration:none;font-size:13px;font-weight:600">&#8592; ${esc(agent)}</a>
+        <span style="color:var(--border)">/</span>
+        <span class="sc-draft-badge">team draft</span>
+        <h1 style="margin:0;font-family:var(--mono);font-size:16px">${esc(draftId)}</h1>
+      </div>
+      <p>Edit team scenario phases. Phases execute sequentially; human phases inject fixture text.</p>
+    </div>
+
+    ${promoteHtml}
+
+    <form
+      id="scenario-form"
+      method="POST"
+      action="/api/scenarios/${esc(agent)}/drafts/${esc(draftId)}"
+    >
+      <!-- Hidden flag to indicate this is a team scenario -->
+      <input type="hidden" name="is_team" value="1">
+      <input type="hidden" name="phase_count" value="${parsed.phases.length}">
+
+      <div class="sc-edit-layout">
+
+        <!-- Title -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-title">Title</label>
+          <input id="f-title" name="title" type="text" class="sc-text-input" value="${esc(parsed.title)}">
+        </div>
+
+        <!-- Overview -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-overview">Overview</label>
+          <textarea id="f-overview" name="overview" class="sc-textarea" rows="3">${esc(parsed.overview)}</textarea>
+        </div>
+
+        <!-- Category -->
+        <div class="sc-field-group sc-field-narrow">
+          <label class="sc-field-label" for="f-category">Category</label>
+          <select id="f-category" name="category" class="sc-select">
+            ${KNOWN_CATEGORIES.map(cat => `<option value="${esc(cat)}"${parsed.category === cat ? " selected" : ""}>${esc(cat)}</option>`).join("")}
+          </select>
+        </div>
+
+        <!-- Phases -->
+        <div class="sc-field-group">
+          <label class="sc-field-label">
+            Phases
+            <span class="sc-field-hint">${parsed.phases.length} phase${parsed.phases.length !== 1 ? "s" : ""} — click to expand/collapse</span>
+          </label>
+          <div class="sc-phases-list">
+            ${phasesHtml}
+          </div>
+        </div>
+
+        <!-- Pipeline: Expected Behavior -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-pipeline-expected">
+            Pipeline Expected Behavior
+            <span class="sc-field-hint">What the full team pipeline should achieve</span>
+          </label>
+          <textarea id="f-pipeline-expected" name="pipeline_expected_behavior" class="sc-textarea" rows="8">${esc(parsed.pipelineExpectedBehavior)}</textarea>
+        </div>
+
+        <!-- Pipeline: Failure Modes -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-pipeline-failure">Pipeline Failure Modes</label>
+          <textarea id="f-pipeline-failure" name="pipeline_failure_modes" class="sc-textarea" rows="6">${esc(parsed.pipelineFailureModes)}</textarea>
+        </div>
+
+        <!-- Pipeline: Scoring Rubric -->
+        <div class="sc-field-group">
+          <label class="sc-field-label" for="f-pipeline-rubric">
+            Pipeline Scoring Rubric
+            <span class="sc-field-hint">Should include pass:, partial:, fail: sub-sections</span>
+          </label>
+          <textarea id="f-pipeline-rubric" name="pipeline_scoring_rubric" class="sc-textarea sc-textarea-mono" rows="10">${esc(parsed.pipelineScoringRubric)}</textarea>
+        </div>
+
+        <!-- Actions -->
+        <div class="sc-actions">
+          <button type="submit" class="sc-btn-primary">Save</button>
+          <button
+            id="dry-run-btn"
+            type="button"
+            class="sc-btn-run"
+            hx-post="/api/scenarios/${esc(agent)}/drafts/${esc(draftId)}/dry-run"
+            hx-include="#scenario-form"
+            hx-target="#dry-run-error"
+            hx-swap="innerHTML"
+          >
+            Dry Run
+          </button>
+          <a href="/scenarios?agent=${esc(agent)}" class="sc-btn-ghost">Cancel</a>
+        </div>
+
+        <!-- Feedback area -->
+        <div class="sc-feedback-area">
+          ${flashHtml}
+          <span id="dry-run-error" class="sc-dry-run-error"></span>
+        </div>
+
+      </div>
+    </form>
+
+    <style>
+      .sc-phase-details { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; background: var(--surface); overflow: hidden; }
+      .sc-phase-summary { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; list-style: none; background: var(--surface-3); user-select: none; }
+      .sc-phase-summary::-webkit-details-marker { display: none; }
+      .sc-phase-summary::before { content: "\\25B6"; font-size: 10px; color: var(--text-muted); transition: transform 0.15s; display: inline-block; }
+      details[open] .sc-phase-summary::before { transform: rotate(90deg); }
+      .sc-phase-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+      .sc-phases-list { display: flex; flex-direction: column; gap: 0; }
+    </style>
   `;
 }
