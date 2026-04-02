@@ -32,6 +32,7 @@ function buildArgs(opts: {
   scenarios: string[];
   trials: number;
   parallel: number;
+  timeoutPerPhase?: number;
 }): string[] {
   const args: string[] = [];
 
@@ -47,6 +48,10 @@ function buildArgs(opts: {
   }
   args.push("--trials", String(opts.trials));
   args.push("--parallel", String(opts.parallel));
+
+  if (opts.timeoutPerPhase && opts.timeoutPerPhase > 0) {
+    args.push("--timeout-per-phase", String(opts.timeoutPerPhase));
+  }
 
   return args;
 }
@@ -79,6 +84,7 @@ export async function startEvalRun(opts: {
   scenarios: string[];
   trials: number;
   parallel: number;
+  timeoutPerPhase?: number;
 }): Promise<string> {
   if (activeRun && !activeRun.done) {
     throw new Error("A run is already in progress");

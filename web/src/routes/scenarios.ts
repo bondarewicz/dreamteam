@@ -25,6 +25,7 @@ import {
   ScenariosListPage,
   ScenarioEditPage,
   DraftEditPage,
+  TeamScenarioEditPage,
   ScenarioNewPage,
   ScenarioGenerateFragment,
   ValidationResultFragment,
@@ -34,6 +35,8 @@ import {
   KNOWN_CATEGORIES,
   KNOWN_AGENTS,
   type ParsedScenario,
+  type ParsedTeamScenario,
+  type Phase,
   type Grader,
   type ValidationIssue,
   type ScenarioListItem,
@@ -274,7 +277,197 @@ function parseGraders(content: string): Grader[] {
   return graders;
 }
 
+/**
+ * Parse a team scenario file into a ParsedTeamScenario.
+ * Detects phases by scanning for phase_N_agent fields (N = 1, 2, ...).
+ * Extracts per-phase and pipeline-level fields.
+ */
+export function parseTeamScenario(content: string): ParsedTeamScenario {
+  const base: ParsedScenario = {
+    title: extractTitle(content),
+    overview: extractOverview(content),
+    category: extractLine(content, "category"),
+    graders: parseGraders(content),
+    prompt: "",
+    reference_output: "",
+    expected_behavior: "",
+    failure_modes: "",
+    scoring_rubric: "",
+  };
+
+  const phases: Phase[] = [];
+  let phaseNum = 1;
+  while (true) {
+    const agentRe = new RegExp(`^phase_${phaseNum}_agent:\\s*(\\S+)`, "m");
+    const agentMatch = agentRe.exec(content);
+    if (!agentMatch) break;
+    const phaseAgent = agentMatch[1].trim();
+
+    function extractPhaseBlock(field: string): string {
+      const key = `phase_${phaseNum}_${field}`;
+      const startRe = new RegExp(`^${key}:\\s*\\|?\\s*\\n`, "m");
+      const startMatch = startRe.exec(content);
+      if (!startMatch) return "";
+      const after = content.slice(startMatch.index + startMatch[0].length);
+      // Stop at next phase_N_ field or pipeline_ field
+      const nextRe = /\n(?:phase_\d+_[a-zA-Z]|pipeline_[a-zA-Z])/;
+      const nextMatch = nextRe.exec(after);
+      const block = nextMatch ? after.slice(0, nextMatch.index) : after;
+      return dedentBlock(block.replace(/\n$/, ""));
+    }
+
+    function extractPhaseGraders(): Grader[] {
+      const key = `phase_${phaseNum}_graders`;
+      // Check for empty
+      const emptyRe = new RegExp(`^${key}:\\s*\\[\\s*\\]`, "m");
+      if (emptyRe.test(content)) return [];
+      const startRe = new RegExp(`^${key}:\\s*\\n`, "m");
+      const startMatch = startRe.exec(content);
+      if (!startMatch) return [];
+      const after = content.slice(startMatch.index + startMatch[0].length);
+      const nextRe = /\n(?:phase_\d+_[a-zA-Z]|pipeline_[a-zA-Z])/;
+      const nextMatch = nextRe.exec(after);
+      const block = nextMatch ? after.slice(0, nextMatch.index) : after;
+      if (!block.trim()) return [];
+      // Parse graders from the block — reuse existing parseGraders logic inline
+      const fakeContent = `graders:\n${block}`;
+      return parseGraders(fakeContent);
+    }
+
+    const phasePrompt = extractPhaseBlock("prompt");
+    const phase: Phase = {
+      phaseNum,
+      agent: phaseAgent,
+      prompt: phasePrompt,
+      expectedBehavior: extractPhaseBlock("expected_behavior"),
+      failureModes: extractPhaseBlock("failure_modes"),
+      scoringRubric: extractPhaseBlock("scoring_rubric"),
+      graders: extractPhaseGraders(),
+      referenceOutput: extractPhaseBlock("reference_output"),
+    };
+    if (phaseAgent === "human") {
+      phase.humanDecision = phasePrompt;
+    }
+    phases.push(phase);
+    phaseNum++;
+  }
+
+  return {
+    ...base,
+    isTeam: true,
+    phases,
+    pipelineExpectedBehavior: extractBlock(content, "pipeline_expected_behavior"),
+    pipelineFailureModes: extractBlock(content, "pipeline_failure_modes"),
+    pipelineScoringRubric: extractBlock(content, "pipeline_scoring_rubric"),
+  };
+}
+
+/**
+ * Serialize a ParsedTeamScenario back to the canonical team scenario file format.
+ * Preserves phase structure and pipeline-level fields.
+ */
+export function serializeTeamScenario(p: ParsedTeamScenario): string {
+  const parts: string[] = [];
+
+  parts.push(`# ${p.title}`);
+  parts.push("");
+  parts.push("## Overview");
+  parts.push("");
+  if (p.overview.trim()) {
+    parts.push(p.overview.trim());
+    parts.push("");
+  }
+  parts.push("---");
+  parts.push("");
+  parts.push(`category: ${p.category}`);
+  parts.push("");
+
+  // Top-level graders (pipeline-level graders)
+  if (p.graders.length === 0) {
+    parts.push("graders: []");
+  } else {
+    parts.push("graders:");
+    parts.push(p.graders.map(serializeGrader).join("\n"));
+  }
+  parts.push("");
+  parts.push("---");
+  parts.push("");
+
+  // Phases
+  for (const phase of p.phases) {
+    const pn = phase.phaseNum;
+    const sectionLabels: Record<string, string> = {
+      1: "Phase 1: Parallel Analysis",
+      4: "Phase 4: Human Decision (Fixture)",
+    };
+    const sectionLabel = sectionLabels[pn] ?? `Phase ${pn}`;
+    parts.push(`## ${sectionLabel}`);
+    parts.push("");
+    parts.push(`phase_${pn}_agent: ${phase.agent}`);
+    parts.push("");
+    if (phase.prompt.trim()) {
+      parts.push(`phase_${pn}_prompt: |`);
+      parts.push(indentBlock(phase.prompt.trim()));
+      parts.push("");
+    }
+    if (phase.expectedBehavior.trim()) {
+      parts.push(`phase_${pn}_expected_behavior: |`);
+      parts.push(indentBlock(phase.expectedBehavior.trim()));
+      parts.push("");
+    }
+    if (phase.failureModes.trim()) {
+      parts.push(`phase_${pn}_failure_modes: |`);
+      parts.push(indentBlock(phase.failureModes.trim()));
+      parts.push("");
+    }
+    if (phase.scoringRubric.trim()) {
+      parts.push(`phase_${pn}_scoring_rubric: |`);
+      parts.push(indentBlock(phase.scoringRubric.trim()));
+      parts.push("");
+    }
+    if (phase.graders.length === 0) {
+      parts.push(`phase_${pn}_graders: []`);
+    } else {
+      parts.push(`phase_${pn}_graders:`);
+      parts.push(phase.graders.map(serializeGrader).join("\n"));
+    }
+    parts.push("");
+    if (phase.referenceOutput.trim()) {
+      parts.push(`phase_${pn}_reference_output: |`);
+      parts.push(indentBlock(phase.referenceOutput.trim()));
+      parts.push("");
+    }
+    parts.push("---");
+    parts.push("");
+  }
+
+  // Pipeline-level fields
+  parts.push("## Pipeline-Level Fields");
+  parts.push("");
+  if (p.pipelineExpectedBehavior.trim()) {
+    parts.push("pipeline_expected_behavior: |");
+    parts.push(indentBlock(p.pipelineExpectedBehavior.trim()));
+    parts.push("");
+  }
+  if (p.pipelineFailureModes.trim()) {
+    parts.push("pipeline_failure_modes: |");
+    parts.push(indentBlock(p.pipelineFailureModes.trim()));
+    parts.push("");
+  }
+  if (p.pipelineScoringRubric.trim()) {
+    parts.push("pipeline_scoring_rubric: |");
+    parts.push(indentBlock(p.pipelineScoringRubric.trim()));
+    parts.push("");
+  }
+
+  return parts.join("\n").replace(/\r\n/g, "\n").replace(/\n+$/, "\n");
+}
+
 export function parseScenario(content: string): ParsedScenario {
+  // Detect team scenarios by presence of phase_1_agent field
+  if (/^phase_1_agent:\s*\S/m.test(content)) {
+    return parseTeamScenario(content);
+  }
   return {
     title: extractTitle(content),
     overview: extractOverview(content),
@@ -654,9 +847,18 @@ export function scenarioEditHandler(req: Request, params: Record<string, string>
     return html(Layout("Not Found", `<div class="empty-state">Scenario not found: ${esc(agent)}/${esc(scenarioId)}</div>`), 404);
   }
 
-  const parsed = parseScenario(content);
   const url = new URL(req.url);
   const savedFlash = url.searchParams.get("saved") === "1";
+
+  // Detect team scenarios — route to TeamScenarioEditPage
+  if (/^phase_1_agent:\s*\S/m.test(content)) {
+    const parsed = parseTeamScenario(content);
+    const issues: ValidationIssue[] = [];
+    const body = TeamScenarioEditPage(agent, scenarioId, parsed, issues, savedFlash, false);
+    return html(maybeLayout(req, `${scenarioId} — ${agent} (team)`, body, "/scenarios"));
+  }
+
+  const parsed = parseScenario(content);
   // Show existing issues on load; suppress on fresh save to avoid confusion
   const issues = savedFlash ? [] : validateScenario(parsed);
   const body = ScenarioEditPage(agent, scenarioId, parsed, issues, savedFlash);
@@ -823,12 +1025,25 @@ export function draftEditHandler(req: Request, params: Record<string, string>): 
     return html(Layout("Not Found", `<div class="empty-state">Draft not found: ${esc(agent)}/drafts/${esc(draftId)}</div>`), 404);
   }
 
-  const parsed = parseScenario(content);
   const url = new URL(req.url);
   const savedFlash = url.searchParams.get("saved") === "1";
   const errorParam = url.searchParams.get("error") ?? "";
   const dryRunDone = hasDryRunResult(agent, draftId);
 
+  // Detect team scenarios — route to TeamScenarioEditPage
+  if (/^phase_1_agent:\s*\S/m.test(content)) {
+    const parsed = parseTeamScenario(content);
+    const issues: ValidationIssue[] = savedFlash && !errorParam ? [] : [];
+    if (errorParam === "nodryrun") {
+      issues.push({ level: "error", message: "Promotion blocked: a dry run must be completed first." });
+    } else if (errorParam === "conflict") {
+      issues.push({ level: "error", message: "Promotion failed: scenario number conflict — try again." });
+    }
+    const body = TeamScenarioEditPage(agent, draftId, parsed, issues, savedFlash && !errorParam, dryRunDone);
+    return html(maybeLayout(req, `${draftId} — ${agent} (team draft)`, body, "/scenarios"));
+  }
+
+  const parsed = parseScenario(content);
   // Build issues, possibly adding a promote-blocked error
   let issues = savedFlash && !errorParam ? [] : validateScenario(parsed, true);
   if (errorParam === "placeholder") {
@@ -858,6 +1073,70 @@ export async function draftSaveHandler(req: Request, params: Record<string, stri
   mkdirSync(draftsDir, { recursive: true });
 
   const formParams = await parseFormBody(req);
+
+  // Team scenario save: form will have is_team=1 and phase_count
+  const isTeam = formParams.get("is_team") === "1";
+  if (isTeam) {
+    // Read current file to get team structure, then update from form
+    let existingContent = "";
+    try {
+      existingContent = readFileSync(draftPath(agent, draftId), "utf-8");
+    } catch { /* new file */ }
+    const existingParsed = existingContent ? parseTeamScenario(existingContent) : null;
+    const phaseCount = parseInt(formParams.get("phase_count") ?? "0", 10);
+
+    // Build updated phases from form
+    const updatedPhases: Phase[] = [];
+    for (let pn = 1; pn <= phaseCount; pn++) {
+      const phaseAgent = formParams.get(`phase_${pn}_agent`) ?? (existingParsed?.phases[pn - 1]?.agent ?? "unknown");
+      const isHuman = phaseAgent === "human";
+      updatedPhases.push({
+        phaseNum: pn,
+        agent: phaseAgent,
+        prompt: formParams.get(`phase_${pn}_prompt`) ?? (existingParsed?.phases[pn - 1]?.prompt ?? ""),
+        expectedBehavior: formParams.get(`phase_${pn}_expected_behavior`) ?? (existingParsed?.phases[pn - 1]?.expectedBehavior ?? ""),
+        failureModes: existingParsed?.phases[pn - 1]?.failureModes ?? "",
+        scoringRubric: existingParsed?.phases[pn - 1]?.scoringRubric ?? "",
+        graders: existingParsed?.phases[pn - 1]?.graders ?? [],
+        referenceOutput: existingParsed?.phases[pn - 1]?.referenceOutput ?? "",
+        humanDecision: isHuman ? (formParams.get(`phase_${pn}_prompt`) ?? "") : undefined,
+      });
+    }
+
+    const teamParsed: ParsedTeamScenario = {
+      title: formParams.get("title") ?? (existingParsed?.title ?? ""),
+      overview: formParams.get("overview") ?? (existingParsed?.overview ?? ""),
+      category: formParams.get("category") ?? (existingParsed?.category ?? "draft"),
+      graders: existingParsed?.graders ?? [],
+      prompt: "",
+      reference_output: "",
+      expected_behavior: "",
+      failure_modes: "",
+      scoring_rubric: "",
+      isTeam: true,
+      phases: updatedPhases,
+      pipelineExpectedBehavior: formParams.get("pipeline_expected_behavior") ?? (existingParsed?.pipelineExpectedBehavior ?? ""),
+      pipelineFailureModes: formParams.get("pipeline_failure_modes") ?? (existingParsed?.pipelineFailureModes ?? ""),
+      pipelineScoringRubric: formParams.get("pipeline_scoring_rubric") ?? (existingParsed?.pipelineScoringRubric ?? ""),
+    };
+
+    const serialized = serializeTeamScenario(teamParsed);
+    try {
+      writeFileSync(draftPath(agent, draftId), serialized, "utf-8");
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const dryRunDone = hasDryRunResult(agent, draftId);
+      const errorIssues: ValidationIssue[] = [{ level: "error", message: `Failed to write file: ${errMsg}` }];
+      const body = TeamScenarioEditPage(agent, draftId, teamParsed, errorIssues, false, dryRunDone);
+      return html(maybeLayout(req, `${draftId} — ${agent} (team draft)`, body, "/scenarios"), 500);
+    }
+
+    return new Response(null, {
+      status: 302,
+      headers: { Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?saved=1` },
+    });
+  }
+
   const parsed = parsedFromForm(formParams);
   const issues = validateScenario(parsed, true);
   const hasErrors = issues.some(i => i.level === "error");
@@ -922,13 +1201,34 @@ export async function draftValidateHandler(req: Request, params: Record<string, 
   return html(ValidationResultFragment(issues, suggestedTitle));
 }
 
-/** POST /api/scenarios/:agent/drafts/:draftId/generate-graders — htmx fragment */
+/** POST /api/scenarios/:agent/drafts/:draftId/generate-graders — htmx fragment
+ *
+ * For team scenarios, accepts query param ?phase=N to generate graders for a specific phase.
+ * Extracts phase_N_expected_behavior and phase_N_scoring_rubric from the form data,
+ * and calls generateGraders with phase_N_agent as the target agent.
+ */
 export async function draftGenerateGradersHandler(req: Request, params: Record<string, string>): Promise<Response> {
   const { agent, draftId } = params;
   if (!agent || !draftId) return html("Bad Request", 400);
   if (!isPathSafe(agent, draftId)) return html("Bad Request", 400);
 
+  const url = new URL(req.url);
+  const phaseParam = url.searchParams.get("phase");
   const formParams = await parseFormBody(req);
+
+  if (phaseParam !== null) {
+    // Team scenario: generate graders for a specific phase
+    const pn = parseInt(phaseParam, 10);
+    if (isNaN(pn) || pn < 1) return html("Bad Request — invalid phase param", 400);
+
+    const phaseAgent = formParams.get(`phase_${pn}_agent`) ?? agent;
+    const expectedBehavior = formParams.get(`phase_${pn}_expected_behavior`) ?? "";
+    const scoringRubric = formParams.get(`phase_${pn}_scoring_rubric`) ?? "";
+
+    const generated = generateGraders(expectedBehavior, scoringRubric, phaseAgent);
+    return html(GraderPreviewFragment(generated));
+  }
+
   const expectedBehavior = formParams.get("expected_behavior") ?? "";
   const scoringRubric = formParams.get("scoring_rubric") ?? "";
 
@@ -949,6 +1249,66 @@ export async function draftDryRunHandler(req: Request, params: Record<string, st
   }
 
   const formParams = await parseFormBody(req);
+  const isTeam = formParams.get("is_team") === "1";
+
+  // ── Team scenario dry run ─────────────────────────────────────────────────
+  if (isTeam) {
+    // Read the draft from disk (team form doesn't carry all phase data back faithfully)
+    let content: string;
+    try {
+      content = readFileSync(draftPath(agent, draftId), "utf-8");
+    } catch {
+      return html(`<span class="sc-dry-run-error">Draft not found — save the draft first.</span>`);
+    }
+
+    const tempScenarioId = `scenario-_draft-temp-${draftId}`;
+    const tempPath = path.join(EVALS_DIR, "team", `${tempScenarioId}.md`);
+    const draftsDir = path.join(EVALS_DIR, "team", "drafts");
+    mkdirSync(draftsDir, { recursive: true });
+
+    try {
+      writeFileSync(tempPath, content, "utf-8");
+      await startEvalRun({
+        agents: ["team"],
+        scenarios: [`team/${tempScenarioId}`],
+        trials: 1,
+        parallel: 1,
+        timeoutPerPhase: 600,
+      });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      try {
+        const { unlinkSync } = await import("node:fs");
+        unlinkSync(tempPath);
+      } catch { /* ignore */ }
+      return html(`<span class="sc-dry-run-error">Failed to start team dry run: ${esc(errMsg)}</span>`);
+    }
+
+    const activeForCleanup = getActiveRun();
+    if (activeForCleanup?.proc) {
+      (async () => {
+        try { await activeForCleanup.proc.exited; } catch { /* ignore */ }
+        try {
+          const { unlinkSync } = await import("node:fs");
+          unlinkSync(tempPath);
+        } catch { /* ignore */ }
+      })();
+    }
+
+    const isHtmx = req.headers.get("HX-Request") === "true";
+    if (isHtmx) {
+      return new Response(null, {
+        status: 200,
+        headers: { "HX-Redirect": "/evals/live" },
+      });
+    }
+    return new Response(null, {
+      status: 302,
+      headers: { Location: "/evals/live" },
+    });
+  }
+
+  // ── Standard (non-team) dry run ───────────────────────────────────────────
   const parsed = parsedFromForm(formParams);
   const issues = validateScenario(parsed, true);
   const hasErrors = issues.some(i => i.level === "error");
@@ -1042,6 +1402,96 @@ export async function draftPromoteHandler(req: Request, params: Record<string, s
     return html("Draft not found", 404);
   }
 
+  // Detect team scenario
+  const isTeamScenario = /^phase_1_agent:\s*\S/m.test(content);
+
+  if (isTeamScenario) {
+    // Team scenario promote: validate phases have prompt + expected_behavior
+    const teamParsed = parseTeamScenario(content);
+
+    // Validate all phases have prompt + expected_behavior
+    const missingPhases: number[] = [];
+    for (const phase of teamParsed.phases) {
+      if (phase.agent !== "human" && (!phase.prompt.trim() || !phase.expectedBehavior.trim())) {
+        missingPhases.push(phase.phaseNum);
+      }
+    }
+    if (missingPhases.length > 0) {
+      return html(
+        `Promotion blocked: phases ${missingPhases.join(", ")} are missing prompt or expected_behavior.`,
+        400
+      );
+    }
+
+    // BR-3: Promotion only after a completed dry run
+    if (!hasDryRunResult(agent, draftId)) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=nodryrun`,
+        },
+      });
+    }
+
+    // Compute next scenario number in evals/team/
+    const teamDir = path.join(EVALS_DIR, "team");
+    mkdirSync(teamDir, { recursive: true });
+
+    const titleLine = extractTitle(content);
+    const nameMatch = /—\s+(?:Draft\s+—\s+)?(.+?)(?:\s+\((.+?)\))?\s*$/.exec(titleLine);
+    const namePart = nameMatch ? nameMatch[1].trim() : (teamParsed.title || draftId);
+    const slug = slugify(namePart);
+
+    let newScenarioId: string | undefined;
+    let newPath: string | undefined;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const nextNum = computeNextScenarioNumber(teamDir);
+      const paddedNum = String(nextNum).padStart(2, "0");
+      newScenarioId = `scenario-${paddedNum}-${slug}`;
+      newPath = path.join(teamDir, `${newScenarioId}.md`);
+
+      const updatedTitle = teamParsed.title
+        .replace(/—\s*Draft\s*—/, `— Scenario ${paddedNum} —`)
+        .replace(/\s+/g, " ")
+        .trim();
+      const updatedParsed: ParsedTeamScenario = { ...teamParsed, title: updatedTitle };
+      const serialized = serializeTeamScenario(updatedParsed);
+
+      try {
+        writeFileSync(newPath, serialized, { flag: "wx" });
+        break;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "EEXIST" && attempt < 2) continue;
+        if (code === "EEXIST") {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=conflict`,
+            },
+          });
+        }
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return html(`Promotion failed: ${esc(errMsg)}`, 500);
+      }
+    }
+
+    // Delete draft after promotion
+    try {
+      const { unlinkSync } = await import("node:fs");
+      unlinkSync(draftPath(agent, draftId));
+    } catch { /* non-fatal */ }
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `/scenarios/team/${encodeURIComponent(newScenarioId!)}?saved=1`,
+      },
+    });
+  }
+
+  // ── Standard (non-team) promote ───────────────────────────────────────────
   const parsed = parseScenario(content);
 
   // BR-7: Blocked if placeholder text remains

@@ -109,6 +109,25 @@ export const AGENT_SCHEMAS: Record<string, AgentSchemaField[]> = {
     { path: "confidence.level", type: "number" },
     { path: "escalations", type: "array" },
   ],
+  coachk: [
+    { path: "orchestration_decision", type: "object" },
+    { path: "orchestration_decision.action", type: "string", description: "orchestration action" },
+    { path: "orchestration_decision.target_agent", type: "string", description: "target agent" },
+    { path: "orchestration_decision.rationale", type: "string", description: "rationale" },
+    { path: "context_curation", type: "object" },
+    { path: "context_curation.included", type: "array", description: "included context" },
+    { path: "context_curation.excluded", type: "array", description: "excluded context" },
+    { path: "context_curation.rationale", type: "string", description: "curation rationale" },
+    { path: "checkpoint_analysis", type: "object" },
+    { path: "checkpoint_analysis.summary", type: "string", description: "checkpoint summary" },
+    { path: "checkpoint_analysis.agent_findings", type: "array", description: "agent findings" },
+    { path: "checkpoint_analysis.trade_offs", type: "array", description: "trade-offs" },
+    { path: "checkpoint_analysis.recommendation", type: "string", description: "recommendation" },
+    { path: "confidence", type: "object" },
+    { path: "confidence.level", type: "number" },
+    { path: "confidence.high_confidence_areas", type: "array", description: "high confidence areas" },
+    { path: "confidence.low_confidence_areas", type: "array", description: "low confidence areas" },
+  ],
 };
 
 // Agents that output JSON — derived from AGENT_SCHEMAS to stay in sync automatically.

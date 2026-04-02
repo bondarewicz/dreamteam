@@ -234,6 +234,78 @@ export function migrate(db: Database) {
         );
         totalResults++;
 
+        // Insert per-phase rows for team results
+        if (baseR.agent === "team") {
+          const teamOutput = raw?.agent_output ?? null;
+          if (teamOutput) {
+            try {
+              const parsed = JSON.parse(teamOutput);
+              let phaseList: unknown[] | null = null;
+              if (Array.isArray(parsed)) {
+                phaseList = parsed;
+              } else if (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).phases)) {
+                phaseList = (parsed as Record<string, unknown>).phases as unknown[];
+              }
+              if (phaseList) {
+                for (const phase of phaseList) {
+                  if (!phase || typeof phase !== "object") continue;
+                  const p = phase as Record<string, unknown>;
+                  const isFixture = Boolean(p.is_fixture);
+                  if (isFixture) continue;
+                  const phaseAgent = typeof p.agent === "string" ? p.agent : null;
+                  if (!phaseAgent) continue;
+                  const phaseNum = typeof p.phase_num === "number" ? p.phase_num : null;
+                  if (phaseNum == null) continue;
+                  const phaseTrace = Array.isArray(p.trace) ? p.trace : [];
+                  if (phaseTrace.length === 0) continue;
+
+                  // Derive score from phase grader_results
+                  let phaseScore = "pass";
+                  if (Array.isArray(p.grader_results) && p.grader_results.length > 0) {
+                    const allPass = (p.grader_results as Array<{ passed: boolean }>).every(g => g.passed);
+                    phaseScore = allPass && !p.grader_override ? "pass" : "fail";
+                  } else if (typeof p.score === "string") {
+                    phaseScore = p.score;
+                  }
+
+                  const phaseScenarioId = `${baseR.scenario_id}--phase-${phaseNum}`;
+                  const phaseScenarioName = `${baseR.scenario_name ?? baseR.scenario_id} — Phase ${phaseNum} (${phaseAgent})`;
+                  const phaseGraderResults = Array.isArray(p.grader_results) ? JSON.stringify(p.grader_results) : null;
+
+                  insertResult.run(
+                    run.run_id,
+                    phaseAgent,
+                    phaseScenarioId,
+                    trialIndex,
+                    phaseScore,
+                    null, // confidence_stated
+                    null, // justification
+                    null, // observations
+                    phaseGraderResults,
+                    p.grader_override ? 1 : 0,
+                    typeof p.duration_ms === "number" ? p.duration_ms : null,
+                    typeof p.tokens_used === "number" ? p.tokens_used : null,
+                    typeof p.input_tokens === "number" ? p.input_tokens : null,
+                    typeof p.output_tokens === "number" ? p.output_tokens : null,
+                    typeof p.cost_usd === "number" ? p.cost_usd : null,
+                    null, // agent_output_excerpt
+                    null, // failure_reason
+                    JSON.stringify(phaseTrace),
+                    typeof p.agent_output === "string" ? p.agent_output : null,
+                    phaseScenarioName,
+                    "team-phase",
+                    baseR.category ?? null
+                  );
+                  // NOTE: per-phase rows are NOT accumulated in agentStats to avoid
+                  // polluting individual agent pass rates
+                }
+              }
+            } catch {
+              // skip malformed team output
+            }
+          }
+        }
+
         // Accumulate agent stats (trial 0 = primary score)
         if (trialIndex === 0) {
           if (!agentStats[baseR.agent]) {

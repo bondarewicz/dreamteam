@@ -7,7 +7,8 @@
 /** Canonical agent color map. Shared between Dashboard and EvalRun views. */
 export const AGENT_COLORS: Record<string, string> = {
   bird: "#3fb950", mj: "#58a6ff", shaq: "#bc8cff",
-  kobe: "#f85149", pippen: "#39d2c0", magic: "#d29922"
+  kobe: "#f85149", pippen: "#39d2c0", magic: "#d29922",
+  team: "#e8912d", coachk: "#a371f7"
 };
 
 /** Fallback color for unknown agents */

@@ -45,7 +45,7 @@ export function NewEvalRunPage(
   const scenarioGroupsHtml = scenarioGroups.map(group => {
     const checkboxes = group.scenarios.map(scenId => `
       <label class="scenario-checkbox-label">
-        <input type="checkbox" name="scenarios" value="${group.agent}/${scenId}" class="scenario-cb agent-${group.agent}">
+        <input type="checkbox" name="scenarios" value="${group.agent}/${scenId}" class="scenario-cb agent-${group.agent}" onchange="onScenarioToggle(this)">
         <span class="scenario-name">${scenId}</span>
       </label>
     `).join("");
@@ -168,7 +168,6 @@ export function NewEvalRunPage(
         const agentBoxes = document.querySelectorAll('input[name="agents"]');
         agentBoxes.forEach(b => {
           b.checked = checkbox.checked;
-          b.disabled = checkbox.checked;
         });
         // Always keep all scenario groups visible
         const groups = document.querySelectorAll('.scenario-group');
@@ -221,6 +220,27 @@ export function NewEvalRunPage(
       function toggleSelectAll(selectAllCb, agent) {
         const scenarioCbs = document.querySelectorAll('input.agent-' + agent + '[name="scenarios"]');
         scenarioCbs.forEach(cb => { cb.checked = selectAllCb.checked; });
+        // Sync parent agent checkbox when select-all changes
+        const agentCb = document.querySelector('input[name="agents"][value="' + agent + '"]');
+        if (agentCb) {
+          agentCb.checked = selectAllCb.checked;
+          onAgentToggle(agentCb);
+        }
+      }
+
+      function onScenarioToggle(cb) {
+        const agent = cb.className.match(/agent-(\S+)/)?.[1];
+        if (!agent) return;
+        const agentCb = document.querySelector('input[name="agents"][value="' + agent + '"]');
+        if (!agentCb) return;
+
+        // If any scenario for this agent is checked, ensure agent is checked
+        const agentScenarios = document.querySelectorAll('.scenario-cb.agent-' + agent);
+        const anyChecked = Array.from(agentScenarios).some(s => s.checked);
+        agentCb.checked = anyChecked;
+
+        // Trigger agent toggle to show/hide group
+        onAgentToggle(agentCb);
       }
     </script>
   `;
