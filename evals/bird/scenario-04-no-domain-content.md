@@ -11,6 +11,9 @@ category: capability
 graders:
   - type: json_valid
   - type: json_field
+    path: "escalations"
+    min_items: 1
+  - type: json_field
     path: "escalations[*].type"
     equals: "out_of_scope"
   - type: json_field
