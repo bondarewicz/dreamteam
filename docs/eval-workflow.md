@@ -228,6 +228,6 @@ The draft edit page shows a 7-step workflow stepper at the top indicating your c
 - Trace data: embedded in raw results as `trace` array, viewable via web app
 - Web app (single source of truth): `http://localhost:3000` (run with `bun web/index.ts`)
 - Web app DB: `data/dreamteam.db` (populated by migration)
-- Eval script: `scripts/eval-run.sh`
-- DB migration trigger: `scripts/eval-report.sh generate`
-- Grader implementations: `scripts/eval-graders.sh`
+- Eval CLI: `evals/src/cli.ts` (run with `bun evals/src/cli.ts`)
+- DB migration trigger: `bun web/src/migrate.ts`
+- Grader implementations: `evals/src/graders.ts`

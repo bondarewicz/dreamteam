@@ -105,16 +105,16 @@ Replace Bird's free-form markdown output with a JSON-only contract. This elimina
 ## Implementation plan
 
 1. Update `agents/bird.md` — replace Output Schema and Output Format sections with JSON-only contract + stop conditions
-2. Add `json_field` grader type to `scripts/eval-graders.sh` — validates JSON fields by path, type, range, count
+2. Add `json_field` grader type to `evals/src/graders.ts` — validates JSON fields by path, type, range, count
 3. Rewrite Bird scenario graders to use `json_field`
-4. Run Bird evals with 3 trials to validate: `bash scripts/eval-run.sh --agent bird --trials 3`
+4. Run Bird evals with 3 trials to validate: `bun evals/src/cli.ts --agent bird --trials 3`
 
 ## Validation protocol
 
 Every agent spec change MUST be validated via evals with `--trials 3` before shipping:
 
 ```bash
-bash scripts/eval-run.sh --agent <name> --trials 3
+bun evals/src/cli.ts --agent <name> --trials 3
 ```
 
 ### Why 3 trials

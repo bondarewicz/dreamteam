@@ -1,6 +1,6 @@
 /**
  * SSE manager for live eval runs.
- * Handles spawning eval-run.sh and streaming stdout/stderr to connected clients.
+ * Handles spawning evals/src/cli.ts and streaming stdout/stderr to connected clients.
  */
 import path from "path";
 import { getDb } from "./db.ts";
@@ -93,13 +93,12 @@ export async function startEvalRun(opts: {
   const runId = `live-${Date.now()}`;
   const scriptArgs = buildArgs(opts);
 
-  console.log(`[SSE] Starting eval run: bash scripts/eval-run.sh ${scriptArgs.join(" ")}`);
+  console.log(`[SSE] Starting eval run: bun evals/src/cli.ts ${scriptArgs.join(" ")}`);
 
-  const proc = Bun.spawn(["bash", "scripts/eval-run.sh", ...scriptArgs], {
+  const proc = Bun.spawn(["bun", "evals/src/cli.ts", ...scriptArgs], {
     cwd: repoRoot,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, PYTHONUNBUFFERED: "1" },
   });
 
   const run: RunState = {

@@ -75,7 +75,7 @@ The 4-phase pipeline is sequential by design: graders must run after agent outpu
 
 ### Option 1: Hybrid (Keep Runner, Use Braintrust for Scoring/Reporting)
 
-Keep `eval-run.sh` for Phase 1 (agent execution). After raw outputs are captured, push them into Braintrust as logged experiments and use Braintrust's scorers + UI for phases 2-4.
+Keep `evals/src/cli.ts` for Phase 1 (agent execution). After raw outputs are captured, push them into Braintrust as logged experiments and use Braintrust's scorers + UI for phases 2-4.
 
 **Pros:**
 - Keep full CLI agent capabilities
@@ -105,7 +105,7 @@ Rewrite all agent definitions as API-based prompt chains. Each agent becomes a B
 
 ### Option 3: Instrumentation (Recommended)
 
-Use Braintrust's logging SDK to instrument the existing `eval-run.sh` pipeline. The runner stays unchanged, but results are also pushed to Braintrust for visualization and comparison.
+Use Braintrust's logging SDK to instrument the existing `evals/src/cli.ts` pipeline. The runner stays unchanged, but results are also pushed to Braintrust for visualization and comparison.
 
 **Pros:**
 - Lightest lift — no changes to agent definitions, graders, or scoring

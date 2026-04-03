@@ -1,0 +1,283 @@
+{
+  "handoff_brief": {
+    "recipient": "Shaq",
+    "task_context": "Migrate the eval infrastructure from 4 shell scripts with embedded Python (~87KB total: scripts/eval-run.sh, scripts/eval-graders.sh, scripts/eval-report.sh, scripts/eval-export-workbench.sh) to a TypeScript/Bun module system in evals/src/. The eval pipeline is the team's quality gate — it runs scenarios against AI agents, applies deterministic graders, scores via LLM rubric, and assembles results into JSON consumed by the web dashboard. There are 100+ scenarios across 7+ agents. Behavioral parity is critical: the web dashboard must not break, grader results must be identical, and the final JSON schema must not change.",
+    "domain_rules": [
+      {
+        "rule": "The pipeline executes 4 phases in strict order: Agents > Graders > Scoring > Assembly. No phase may start before its predecessor completes.",
+        "testable_assertion": "Given phase='all', graders complete before scoring starts, scoring completes before assembly starts."
+      },
+      {
+        "rule": "Grader Override: if ANY deterministic grader fails, final score is forced to 'fail' regardless of LLM rubric score. Set grader_override=true in the scored result.",
+        "testable_assertion": "Given a scenario where any grader returns passed=false, then final score='fail' and grader_override=true."
+      },
+      {
+        "rule": "Score is a closed enum of exactly 3 values: 'pass', 'partial', 'fail'. No normalization — 'Pass' (capitalized) is invalid, not silently lowercased.",
+        "testable_assertion": "Given rubric returns 'Pass', treat as unknown/invalid (do NOT normalize to 'pass')."
+      },
+      {
+        "rule": "All 8 grader types must be supported: json_valid, contains, not_contains, regex, section_present, field_count, length_bounds, json_field.",
+        "testable_assertion": "Given scenarios using each grader type, results match the Python implementation exactly."
+      },
+      {
+        "rule": "contains/not_contains graders normalize text: lowercase + collapse underscores/hyphens/spaces to single space before comparison.",
+        "testable_assertion": "Given contains with values=['business rules'] applied to 'Business_Rules', grader passes."
+      },
+      {
+        "rule": "json_field grader supports dot-path with [*] wildcard for array expansion and all check modes (type_check, min, max, contains, equals).",
+        "testable_assertion": "Given path='business_rules.[*].invariant' and type_check='boolean', each array element's invariant field is validated as boolean."
+      },
+      {
+        "rule": "JSON extraction uses a 3-tier strategy: (1) direct JSON.parse, (2) strip markdown fences then parse, (3) brace-depth scan for first complete JSON object.",
+        "testable_assertion": "Given output with JSON inside ```json fences, extraction succeeds via strategy 2."
+      },
+      {
+        "rule": "Trial 0 uses base filename '{agent}-{scenario_id}.json'. Trials 1+ use suffix '-t{N}.json'.",
+        "testable_assertion": "Given --trials 3, files are: base.json, base-t1.json, base-t2.json."
+      },
+      {
+        "rule": "pass@k = true if at least 1 of k trials scored 'pass'. flaky = true if not all trial scores are identical.",
+        "testable_assertion": "Given 3 trials with scores [fail, pass, fail], pass@3=true, flaky=true."
+      },
+      {
+        "rule": "Team scenarios execute phases sequentially. Human fixture phases (phase_N_agent='human') use the prompt text as output — no LLM call.",
+        "testable_assertion": "Given team scenario with phase 2 as human, phase 2 output = phase 2 prompt text, no claude CLI invocation."
+      },
+      {
+        "rule": "NDJSON parsing: skip blank lines and non-JSON lines. Agent output comes from the LAST event with type='result', from its result field.",
+        "testable_assertion": "Given NDJSON with multiple result events, agent_output is extracted from the final one."
+      },
+      {
+        "rule": "Resume: when --resume DIR is passed, skip scenarios whose raw output file already exists on disk.",
+        "testable_assertion": "Given existing raw output for scenario-01, only scenario-02+ are executed."
+      },
+      {
+        "rule": "Baseline detection: is_complete_baseline=true only when scenarios_run >= 100 AND scenarios_run >= 0.8 * ALL_SCENARIOS_TOTAL.",
+        "testable_assertion": "Given 15 scenarios run out of 120 total, is_complete_baseline=false."
+      },
+      {
+        "rule": "Scoring retries once on JSON parse failure. On total failure (both attempts), default to score='fail'.",
+        "testable_assertion": "Given invalid JSON on first LLM response and valid on retry, second response is used."
+      },
+      {
+        "rule": "Timeouts: individual scenario=300s, team scenario=600s, overridable via --timeout-per-phase.",
+        "testable_assertion": "Given no override, individual agent call times out at 300s."
+      },
+      {
+        "rule": "calibration_gap = avg_confidence - weighted_score, where weights are pass=100, partial=50, fail=0.",
+        "testable_assertion": "Given 2 pass (confidence 80,90) and 1 fail (confidence 70), calibration_gap = 80 - 66.7 = 13.3."
+      },
+      {
+        "rule": "Scenario type derived from title: 'edge' in title -> edge-case, 'adversarial'/'attack' -> adversarial, 'regression' -> regression, default -> happy-path.",
+        "testable_assertion": "Given title '(Edge Case) Something', scenario_type='edge-case'."
+      },
+      {
+        "rule": "Graders block in scenario file: only match top-level 'graders:' line (no leading whitespace). Indented occurrences inside prompts must be ignored.",
+        "testable_assertion": "Given 'graders:' indented inside a prompt block, it is NOT parsed as the graders section."
+      },
+      {
+        "rule": "Phase 4 (report) triggers DB migration via web/src/migrate.ts. Migration failure is non-fatal — run still succeeds and JSON is written.",
+        "testable_assertion": "Given migration script fails, final JSON is still written and exit code is 0."
+      }
+    ],
+    "architecture_guidance": [
+      {
+        "decision": "Create evals/src/ directory with flat module system, one file per component",
+        "implementation_note": "Files: types.ts, json-extract.ts, scenario-parser.ts, graders.ts, discovery.ts, concurrency.ts, claude-adapter.ts, agent-runner.ts, scorer.ts, assembler.ts, pipeline.ts, cli.ts, report.ts, workbench-export.ts. Tests in evals/src/__tests__/*.test.ts."
+      },
+      {
+        "decision": "Dependency Injection via ClaudeAdapter interface for testability",
+        "implementation_note": "Define a ClaudeAdapter interface wrapping Bun.spawn. Production code injects real adapter; tests inject a mock that returns canned NDJSON. This is the only external I/O boundary that needs DI."
+      },
+      {
+        "decision": "Pure Core / Impure Shell pattern",
+        "implementation_note": "json-extract, scenario-parser, graders, and assembler are pure functions — zero I/O, fully unit-testable. agent-runner and scorer are impure (subprocess + filesystem). Keep the boundary explicit."
+      },
+      {
+        "decision": "Registry pattern for graders",
+        "implementation_note": "Map<string, GraderFn> where GraderFn = (grader: GraderDef, output: string) => GraderResult. Each of 8 types is a registered function. Easy to test individually."
+      },
+      {
+        "decision": "Promise.all + concurrency limiter for parallel execution",
+        "implementation_note": "Use a simple semaphore/limiter (no external deps). Default concurrency = 10, overridable via --parallel N. Native to Bun, simpler than worker threads. Bottleneck is I/O (claude CLI calls), not CPU."
+      },
+      {
+        "decision": "Implementation order: inside-out, pure modules first",
+        "implementation_note": "1.types 2.json-extract+tests 3.scenario-parser+tests 4.graders+tests 5.discovery+tests 6.concurrency 7.claude-adapter 8.agent-runner+tests 9.scorer+tests 10.assembler+tests 11.pipeline+tests 12.cli 13.report+workbench-export 14.Update web/src/sse.ts if needed."
+      },
+      {
+        "decision": "Use bun:test, not jest or vitest",
+        "implementation_note": "Bun has a built-in test runner. No external test dependencies needed. Import from 'bun:test'."
+      },
+      {
+        "decision": "Zero external dependencies",
+        "implementation_note": "Bun provides everything needed: subprocess (Bun.spawn), filesystem (Bun.file), test runner (bun:test). Do not add npm packages."
+      },
+      {
+        "decision": "Do NOT change scenario file format or final result JSON schema",
+        "implementation_note": "120+ scenario .md files exist. The web dashboard (web/src/) consumes the final JSON. Both are frozen interfaces. The migration is an internal refactor — external contracts must not change."
+      },
+      {
+        "decision": "Test scenario parser against REAL scenario files on disk",
+        "implementation_note": "Do not rely solely on synthetic test fixtures. Parse actual evals/*/scenario-*.md files to catch edge cases in the markdown format."
+      }
+    ],
+    "acceptance_criteria": [
+      {
+        "criterion": "Scenario discovery matches Python",
+        "given": "Scenarios exist in evals/{agent}/scenario-*.md",
+        "when": "TS runner discovers scenarios with same filters (--agent, comma-separated, qualified agent/scenario-id)",
+        "then": "Identical scenario set discovered as Python implementation"
+      },
+      {
+        "criterion": "All 8 grader types produce identical results",
+        "given": "Scenario with graders of each type applied to known output",
+        "when": "Each grader executes",
+        "then": "Same pass/fail and detail messages as Python for all 8 types"
+      },
+      {
+        "criterion": "JSON extraction 3-tier strategy works",
+        "given": "Agent output contains JSON in markdown fences",
+        "when": "extractJson called",
+        "then": "JSON extracted correctly via fence-stripping (strategy 2)"
+      },
+      {
+        "criterion": "json_field [*] wildcard works",
+        "given": "json_field with path 'business_rules.[*].invariant' type_check='boolean'",
+        "when": "Applied to output with array of objects",
+        "then": "Each element's invariant field validated as boolean"
+      },
+      {
+        "criterion": "Grader override forces fail",
+        "given": "Any grader fails for a scenario",
+        "when": "LLM scorer returns 'pass'",
+        "then": "Final score forced to 'fail', grader_override=true in result"
+      },
+      {
+        "criterion": "Multi-trial execution correct",
+        "given": "--trials 3",
+        "when": "Scenario executes",
+        "then": "3 agent calls made, trial 0 = base filename, trials 1-2 = -t1/-t2 suffix, pass@k and flaky computed"
+      },
+      {
+        "criterion": "Resume skips existing work",
+        "given": "Previous raw output directory with some results",
+        "when": "--resume DIR",
+        "then": "Only missing scenarios executed, existing outputs untouched"
+      },
+      {
+        "criterion": "Team scenario phases execute correctly",
+        "given": "Team scenario with 3 phases (agent, human, agent)",
+        "when": "Pipeline runs",
+        "then": "Phase 1: LLM call, Phase 2: fixture (prompt as output), Phase 3: LLM call. Sequential. Per-phase graders applied."
+      },
+      {
+        "criterion": "Baseline detection accurate",
+        "given": "Filtered run with fewer scenarios than threshold",
+        "when": "Assembly computes is_complete_baseline",
+        "then": "is_complete_baseline=false"
+      },
+      {
+        "criterion": "Final JSON schema identical",
+        "given": "All 4 phases complete",
+        "when": "Final JSON written to evals/results/{run-datetime}.json",
+        "then": "Schema matches Python output exactly: run_id, date, is_complete_baseline, scenarios_total, scenarios_run, summary, results, agent_summaries, meta"
+      },
+      {
+        "criterion": "NDJSON parsing correct",
+        "given": "claude CLI produces NDJSON stream",
+        "when": "Parsed by agent-runner",
+        "then": "Blank/non-JSON lines skipped, agent_output extracted from last result event"
+      },
+      {
+        "criterion": "contains normalization matches Python",
+        "given": "contains with values=['business rules'] case_sensitive=false",
+        "when": "Applied to text 'Business_Rules'",
+        "then": "Grader passes (underscores normalized to spaces, case folded)"
+      },
+      {
+        "criterion": "Scoring retry works",
+        "given": "LLM returns invalid JSON on first attempt",
+        "when": "Retry fires",
+        "then": "Valid second attempt is used; total failure defaults to score='fail'"
+      },
+      {
+        "criterion": "Dry run lists without executing",
+        "given": "--dry-run flag",
+        "when": "Scenarios discovered",
+        "then": "Listed with RUN/SKIP status, zero agent calls, zero files created"
+      },
+      {
+        "criterion": "Graders are independently testable",
+        "given": "Grader module imported in unit test",
+        "when": "Tests run with bun:test",
+        "then": "All grader behaviors verified without LLM calls or subprocess"
+      }
+    ],
+    "terminology_alignment": [
+      {
+        "domain_term": "Scenario",
+        "technical_term": "scenario-*.md file",
+        "definition": "A markdown test case file containing prompt, expected_behavior, failure_modes, scoring_rubric, optional graders, and metadata."
+      },
+      {
+        "domain_term": "Grader Override",
+        "technical_term": "grader_override boolean flag",
+        "definition": "When any deterministic grader fails, this flag is set to true and final score is forced to 'fail' regardless of LLM rubric result."
+      },
+      {
+        "domain_term": "Raw Output",
+        "technical_term": "evals/results/raw/{run-datetime}/*.json",
+        "definition": "Phase 1 artifact: JSON containing agent_output, trace, tokens, cost, duration, metadata."
+      },
+      {
+        "domain_term": "Scored Result",
+        "technical_term": "evals/results/raw/{run-datetime}/scored/*.json",
+        "definition": "Phase 3 artifact: JSON with final score, grader results, rubric details, trial data."
+      },
+      {
+        "domain_term": "Final Result",
+        "technical_term": "evals/results/{run-datetime}.json",
+        "definition": "Phase 4 artifact: single JSON file with full run report consumed by web dashboard."
+      },
+      {
+        "domain_term": "Human Fixture",
+        "technical_term": "phase_N_agent='human' in team scenario",
+        "definition": "A team scenario phase where no LLM is called; the prompt text becomes the phase output directly."
+      },
+      {
+        "domain_term": "Baseline Run",
+        "technical_term": "is_complete_baseline boolean",
+        "definition": "True when scenarios_run >= 100 AND >= 80% of total available scenarios."
+      },
+      {
+        "domain_term": "Calibration Gap",
+        "technical_term": "calibration_gap float",
+        "definition": "avg_confidence - weighted_score (pass=100, partial=50, fail=0). Positive = overconfident."
+      }
+    ],
+    "contradictions_resolved": [],
+    "open_questions": []
+  },
+  "escalations": [],
+  "confidence": {
+    "level": 90,
+    "high_confidence_areas": [
+      "All 8 grader types and their exact behavior — verified against source code",
+      "Pipeline phase ordering — confirmed in eval-run.sh",
+      "Trial naming convention — confirmed in eval-run.sh",
+      "Scenario file format and discovery — confirmed by glob of 100+ files",
+      "Architecture and implementation order — MJ's design is sound and consistent with Bird's analysis"
+    ],
+    "low_confidence_areas": [
+      "Exact normalization regex in Python contains/not_contains — should be verified character-by-character when implementing",
+      "json_field [*] wildcard edge cases on non-array values — need to port Python logic carefully",
+      "web/src/sse.ts integration — may need updates if it currently shells out to eval scripts"
+    ],
+    "assumptions": [
+      "Bun runtime is already available in the project environment",
+      "The web dashboard consumes only the final JSON file, not intermediate artifacts",
+      "No other scripts or CI pipelines depend on the shell script interfaces directly"
+    ]
+  }
+}

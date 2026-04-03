@@ -29,7 +29,7 @@ Consolidated from all docs. Source file noted for context.
 - [x] Recording removed entirely from team.md — RECORDING flag, cast.sh, all recording infrastructure stripped *(2026-03-31)*
 
 ### P1 — Team Eval Execution (Stream C) — DONE
-- [x] WI-4: eval-run.sh team support — parse_team_scenario, run_team_scenario, score_team_scenario_all_trials, dispatch routing, --timeout-per-phase with TimeoutExpired handling *(2026-04-02)*
+- [x] WI-4: Team eval support in TypeScript CLI — parse_team_scenario, run_team_scenario, score_team_scenario_all_trials, dispatch routing, --timeout-per-phase with TimeoutExpired handling *(2026-04-02)*
 - [x] WI-5: Add 'team' + 'coachk' to KNOWN_AGENTS in Scenarios.ts *(2026-04-02)*
 - [x] WI-6: Team scenario parser — parseTeamScenario/serializeTeamScenario in scenarios.ts, Phase/ParsedTeamScenario types *(2026-04-02)*
 

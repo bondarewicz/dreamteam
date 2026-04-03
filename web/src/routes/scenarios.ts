@@ -185,7 +185,7 @@ function extractBlock(content: string, name: string): string {
 }
 
 /**
- * Extract the prompt using its specific terminators (matches eval-run.sh).
+ * Extract the prompt using its specific terminators (matches evals/src/cli.ts).
  */
 function extractPrompt(content: string): string {
   const startRe = /^prompt:\s*\|?\s*\n/m;
@@ -1337,7 +1337,7 @@ export async function draftDryRunHandler(req: Request, params: Record<string, st
   // Record a hash of eval-relevant fields at dry-run time so promote can detect post-dry-run edits.
   recordDryRunHash(agent, draftId);
 
-  // Create a temp production path so eval-run.sh can discover it
+  // Create a temp production path so evals/src/cli.ts can discover it
   // Temp file format: scenario-_draft-temp-{draftId}.md
   const tempScenarioId = `scenario-_draft-temp-${draftId}`;
   const tempPath = path.join(EVALS_DIR, agent, `${tempScenarioId}.md`);

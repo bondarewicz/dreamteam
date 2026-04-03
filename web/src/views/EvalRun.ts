@@ -369,7 +369,7 @@ export function EvalRunPage(
   `;
 }
 
-// The 3 fixed scenario type slots shown in the chip dots (matches eval-report.sh convention)
+// The 3 fixed scenario type slots shown in the chip dots (matches evals/src/cli.ts convention)
 const CHIP_SCENARIO_TYPES = ["happy-path", "edge-case", "escalation"] as const;
 
 function scoreOrd(score: string): number {
@@ -795,7 +795,7 @@ function buildAgentSections(
       scenarioMap.get(r.scenario_id)!.push(r);
     }
 
-    // Sort scenarios by scenario_id (natural/alphabetical order, matching eval-report.sh)
+    // Sort scenarios by scenario_id (natural/alphabetical order, matching evals/src/cli.ts)
     const sortedScenarios = Array.from(scenarioMap.entries()).sort(([aId], [bId]) =>
       aId.localeCompare(bId)
     );
@@ -1789,7 +1789,7 @@ function buildRegressionDetectionSection(
 
   if (previousBaselineResults.length > 0) {
     // Build prev results lookup: agent::scenario_id -> canonical score (trial_index=0 only)
-    // This matches eval-report.sh which uses r.get('score') — the stored top-level score per result entry
+    // This matches evals/src/cli.ts which uses r.get('score') — the stored top-level score per result entry
     const prevScores = new Map<string, string>();
     for (const r of previousBaselineResults) {
       if (r.trial_index !== 0) continue; // only use canonical trial
@@ -1798,7 +1798,7 @@ function buildRegressionDetectionSection(
     }
 
     // Find current canonical scores per agent::scenario (trial_index=0 only, all scenarios)
-    // Matches eval-report.sh: current_results_map[key] = r.get('score') where results has one entry per scenario
+    // Matches evals/src/cli.ts: current_results_map[key] = r.get('score') where results has one entry per scenario
     const currScores = new Map<string, { score: string; agent: string; scenarioId: string }>();
     for (const r of results) {
       if (r.trial_index !== 0) continue; // only use canonical trial
