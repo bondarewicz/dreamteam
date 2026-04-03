@@ -278,6 +278,14 @@ function parseGraders(content: string): Grader[] {
 }
 
 /**
+ * ## headings that are structural document sections, not phase section headers.
+ * Must stay in sync with the headings emitted by serializeTeamScenario (e.g. "## Overview",
+ * "## Pipeline-Level Fields") so the parser correctly skips them when scanning for the
+ * phase-specific heading that precedes each phase_N_agent field.
+ */
+const STRUCTURAL_HEADINGS = new Set(["Overview", "Pipeline-Level Fields"]);
+
+/**
  * Parse a team scenario file into a ParsedTeamScenario.
  * Detects phases by scanning for phase_N_agent fields (N = 1, 2, ...).
  * Extracts per-phase and pipeline-level fields.
@@ -297,6 +305,9 @@ export function parseTeamScenario(content: string): ParsedTeamScenario {
 
   const phases: Phase[] = [];
   let phaseNum = 1;
+  // Tracks the end position of the previous phase's agent field so that header
+  // scanning is bounded to the current phase's slice only (prevents header bleed).
+  let prevPhaseEnd = 0;
   while (true) {
     const agentRe = new RegExp(`^phase_${phaseNum}_agent:\\s*(\\S+)`, "m");
     const agentMatch = agentRe.exec(content);
@@ -334,10 +345,26 @@ export function parseTeamScenario(content: string): ParsedTeamScenario {
       return parseGraders(fakeContent);
     }
 
+    // Extract the ## heading that precedes phase_N_agent (scan backwards from agent field).
+    // Scan only from prevPhaseEnd to prevent header bleed: when Phase N has a heading
+    // but Phase N+1 does not, Phase N+1 must NOT inherit Phase N's heading.
+    const agentFieldIndex = agentMatch.index;
+    const contentBeforeAgent = content.slice(prevPhaseEnd, agentFieldIndex);
+    const allHeadingsBefore = [...contentBeforeAgent.matchAll(/^## (.+)$/gm)];
+    const lastNonStructuralHeading = allHeadingsBefore.reverse().find(
+      m => !STRUCTURAL_HEADINGS.has(m[1].trim())
+    );
+    const sectionHeader = lastNonStructuralHeading ? lastNonStructuralHeading[1].trim() : undefined;
+
+    // Advance prevPhaseEnd past the current agent field so the next iteration
+    // scans only its own slice of content.
+    prevPhaseEnd = agentFieldIndex + agentMatch[0].length;
+
     const phasePrompt = extractPhaseBlock("prompt");
     const phase: Phase = {
       phaseNum,
       agent: phaseAgent,
+      ...(sectionHeader !== undefined ? { sectionHeader } : {}),
       prompt: phasePrompt,
       expectedBehavior: extractPhaseBlock("expected_behavior"),
       failureModes: extractPhaseBlock("failure_modes"),
@@ -396,11 +423,7 @@ export function serializeTeamScenario(p: ParsedTeamScenario): string {
   // Phases
   for (const phase of p.phases) {
     const pn = phase.phaseNum;
-    const sectionLabels: Record<string, string> = {
-      1: "Phase 1: Parallel Analysis",
-      4: "Phase 4: Human Decision (Fixture)",
-    };
-    const sectionLabel = sectionLabels[pn] ?? `Phase ${pn}`;
+    const sectionLabel = phase.sectionHeader ?? `Phase ${pn}`;
     parts.push(`## ${sectionLabel}`);
     parts.push("");
     parts.push(`phase_${pn}_agent: ${phase.agent}`);
