@@ -374,13 +374,9 @@ describe("AC-7: Real scenario round-trip", () => {
   // web/src/__tests__ → web/src → web → worktree root
   const WORKTREE_ROOT = path.join(import.meta.dir, "../../..");
   const teamScenario01 = path.join(WORKTREE_ROOT, "evals/team/scenario-01-automapper-removal.md");
+  const scenarioMissing = !fs.existsSync(teamScenario01);
 
-  test("scenario-01-automapper-removal.md round-trips all phase headers unchanged", () => {
-    if (!fs.existsSync(teamScenario01)) {
-      console.log("  SKIP: evals/team/scenario-01-automapper-removal.md not found");
-      return;
-    }
-
+  test.skipIf(scenarioMissing)("scenario-01-automapper-removal.md round-trips all phase headers unchanged", () => {
     const original = fs.readFileSync(teamScenario01, "utf-8");
     const parsed = parseTeamScenario(original);
     const serialized = serializeTeamScenario(parsed);
@@ -392,24 +388,14 @@ describe("AC-7: Real scenario round-trip", () => {
     }
   });
 
-  test("scenario-01 phase 1 sectionHeader captured correctly", () => {
-    if (!fs.existsSync(teamScenario01)) {
-      console.log("  SKIP: evals/team/scenario-01-automapper-removal.md not found");
-      return;
-    }
-
+  test.skipIf(scenarioMissing)("scenario-01 phase 1 sectionHeader captured correctly", () => {
     const content = fs.readFileSync(teamScenario01, "utf-8");
     const { phases } = parseTeamScenario(content);
     // The heading in the file is: ## Phase 1: Parallel Analysis — Bird + MJ + Kobe
     expect(phases[0].sectionHeader).toBe("Phase 1: Parallel Analysis — Bird + MJ + Kobe");
   });
 
-  test("scenario-01 serialized output contains all original ## Phase headings", () => {
-    if (!fs.existsSync(teamScenario01)) {
-      console.log("  SKIP: evals/team/scenario-01-automapper-removal.md not found");
-      return;
-    }
-
+  test.skipIf(scenarioMissing)("scenario-01 serialized output contains all original ## Phase headings", () => {
     const original = fs.readFileSync(teamScenario01, "utf-8");
     const parsed = parseTeamScenario(original);
     const serialized = serializeTeamScenario(parsed);

@@ -364,7 +364,7 @@ export function parseTeamScenario(content: string): ParsedTeamScenario {
     const phase: Phase = {
       phaseNum,
       agent: phaseAgent,
-      ...(sectionHeader !== undefined ? { sectionHeader } : {}),
+      sectionHeader,
       prompt: phasePrompt,
       expectedBehavior: extractPhaseBlock("expected_behavior"),
       failureModes: extractPhaseBlock("failure_modes"),
@@ -1116,6 +1116,9 @@ export async function draftSaveHandler(req: Request, params: Record<string, stri
       updatedPhases.push({
         phaseNum: pn,
         agent: phaseAgent,
+        ...(existingParsed?.phases[pn - 1]?.sectionHeader !== undefined
+          ? { sectionHeader: existingParsed.phases[pn - 1].sectionHeader }
+          : {}),
         prompt: formParams.get(`phase_${pn}_prompt`) ?? (existingParsed?.phases[pn - 1]?.prompt ?? ""),
         expectedBehavior: formParams.get(`phase_${pn}_expected_behavior`) ?? (existingParsed?.phases[pn - 1]?.expectedBehavior ?? ""),
         failureModes: existingParsed?.phases[pn - 1]?.failureModes ?? "",
