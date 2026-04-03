@@ -114,8 +114,30 @@ function dryRunHashSidecarPath(agent: string, draftId: string): string {
  * Compute a hash of only the eval-relevant fields of a parsed scenario.
  * Changes to category, title, overview, and reference_output do NOT affect
  * eval execution or scoring and should NOT invalidate a dry run.
+ *
+ * For team scenarios (isTeam: true), all phase-level eval fields and pipeline-level
+ * fields are included in the hash since top-level prompt/expected_behavior etc. are
+ * empty strings for team scenarios.
  */
-function evalContentHash(parsed: ParsedScenario): string {
+function evalContentHash(parsed: ParsedScenario | ParsedTeamScenario): string {
+  if ("isTeam" in parsed && parsed.isTeam) {
+    const parts: string[] = [
+      parsed.pipelineExpectedBehavior,
+      parsed.pipelineFailureModes,
+      parsed.pipelineScoringRubric,
+    ];
+    for (const phase of parsed.phases) {
+      parts.push(
+        phase.agent,
+        phase.prompt,
+        phase.expectedBehavior,
+        phase.failureModes,
+        phase.scoringRubric,
+        JSON.stringify(phase.graders),
+      );
+    }
+    return String(Bun.hash(parts.join("\x00")));
+  }
   const content = [
     parsed.prompt,
     parsed.expected_behavior,
@@ -129,11 +151,13 @@ function evalContentHash(parsed: ParsedScenario): string {
 /**
  * Record a hash of the eval-relevant draft fields as the dry-run baseline.
  * Called after successfully saving the draft and before starting the eval.
+ * Detects team scenarios and uses parseTeamScenario for accurate phase-level hashing.
  */
 function recordDryRunHash(agent: string, draftId: string): void {
   try {
     const content = readFileSync(draftPath(agent, draftId), "utf-8");
-    const parsed = parseScenario(content);
+    const isTeamScenario = /^phase_1_agent:\s*\S/m.test(content);
+    const parsed = isTeamScenario ? parseTeamScenario(content) : parseScenario(content);
     writeFileSync(dryRunHashSidecarPath(agent, draftId), evalContentHash(parsed), "utf-8");
   } catch { /* non-fatal */ }
 }
@@ -142,12 +166,14 @@ function recordDryRunHash(agent: string, draftId: string): void {
  * Check if the eval-relevant fields of the draft have changed since the last dry run.
  * Returns true (allow promotion) only if a sidecar exists AND the eval content hash matches.
  * Non-eval changes (category, title, overview, reference_output) do NOT invalidate the hash.
+ * Detects team scenarios and uses parseTeamScenario for accurate phase-level hashing.
  */
 function isDryRunFresh(agent: string, draftId: string): boolean {
   try {
     const recorded = readFileSync(dryRunHashSidecarPath(agent, draftId), "utf-8").trim();
     const content = readFileSync(draftPath(agent, draftId), "utf-8");
-    const parsed = parseScenario(content);
+    const isTeamScenario = /^phase_1_agent:\s*\S/m.test(content);
+    const parsed = isTeamScenario ? parseTeamScenario(content) : parseScenario(content);
     return evalContentHash(parsed) === recorded;
   } catch {
     return false;
@@ -1266,6 +1292,10 @@ export async function draftDryRunHandler(req: Request, params: Record<string, st
     const draftsDir = path.join(EVALS_DIR, "team", "drafts");
     mkdirSync(draftsDir, { recursive: true });
 
+    // Record the eval-relevant content hash BEFORE starting the run so promote
+    // can detect post-dry-run edits (AC-1, BR-1). Must mirror individual handler ordering.
+    recordDryRunHash(agent, draftId);
+
     try {
       writeFileSync(tempPath, content, "utf-8");
       await startEvalRun({
@@ -1429,6 +1459,16 @@ export async function draftPromoteHandler(req: Request, params: Record<string, s
         status: 302,
         headers: {
           Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=nodryrun`,
+        },
+      });
+    }
+
+    // BR-2: Promotion blocked if eval-relevant fields were edited after the last dry run (AC-3)
+    if (!isDryRunFresh(agent, draftId)) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=stalerun`,
         },
       });
     }
