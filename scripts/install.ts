@@ -9,7 +9,7 @@
 import path from "path";
 import fs from "fs";
 
-const SCRIPT_DIR = path.dirname(path.resolve(import.meta.path));
+const SCRIPT_DIR = path.dirname(new URL(import.meta.url).pathname);
 const REPO_DIR = path.resolve(SCRIPT_DIR, "..");
 const CLAUDE_DIR = path.join(process.env.HOME ?? "~", ".claude");
 const AGENTS_SRC = path.join(REPO_DIR, "agents");

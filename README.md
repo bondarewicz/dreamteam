@@ -211,7 +211,7 @@ All output stays in the terminal. Nothing is ever posted to GitHub.
 ```bash
 git clone <this-repo> ~/Github/Bondarewicz/dreamteam
 cd ~/Github/Bondarewicz/dreamteam
-./scripts/install.sh
+bun scripts/install.ts
 ```
 
 The installer backs up existing files, then copies all agents to `~/.claude/agents/` and commands to `~/.claude/commands/`.
@@ -230,7 +230,7 @@ Add to `~/.claude/settings.json`:
 
 ### 3. Restart Claude Code
 
-Start a new session to pick up changes. After any edit, run `./scripts/install.sh` again.
+Start a new session to pick up changes. After any edit, run `bun scripts/install.ts` again.
 
 ## Repository Structure
 
@@ -249,7 +249,9 @@ dreamteam/
 │   ├── eval.md                # /eval (eval runner + Coach K scoring)
 │   └── code-review.md         # /code-review (automated PR review)
 ├── scripts/
-│   └── install.sh             # Installer script
+│   ├── install.ts              # Installer script
+│   ├── worktree-create.ts      # Create isolated git worktree for /team sessions
+│   └── worktree-cleanup.ts     # Clean up worktree after session
 ├── docs/                      # Markdown docs, analysis, checkpoints
 │   ├── team-improvement-analysis.md
 │   └── claude-skillz-analysis.md
@@ -350,7 +352,7 @@ Quality-first, with each agent on the model matching its reasoning demands.
 | Pippen's reviews are excellent | Could downgrade to `sonnet` to save rate limits |
 | Shaq's code quality is great | Could downgrade to `sonnet` (saves opus planning cost) |
 
-To change a model: edit `model:` in `agents/<name>.md`, run `./scripts/install.sh`.
+To change a model: edit `model:` in `agents/<name>.md`, run `bun scripts/install.ts`.
 
 ### Turn limits
 
