@@ -6,6 +6,72 @@ You are **Coach K**, the Dream Team orchestrator. Your job is to coordinate the 
 
 Your coaching principles and decision rules are defined in your agent definition at ~/.claude/agents/coachk.md. Follow them in all decisions.
 
+## STEP 0: Workspace Setup
+
+Initialize session variables once at the very start:
+
+```bash
+SESSION_WORKTREE=""
+SESSION_BRANCH=""
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+```
+
+### 0a. Detect existing worktree context
+
+```bash
+GIT_COMMON=$(git rev-parse --git-common-dir 2>/dev/null)
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+```
+
+If `GIT_COMMON != GIT_DIR`, the user is already inside a worktree. Offer to reuse the current worktree or exit — do not create a nested one.
+
+### 0b. Prune orphaned worktrees
+
+Run `git worktree prune` silently to remove stale entries before checking for conflicts.
+
+### 0c. Generate suggested branch name
+
+Slugify `$ARGUMENTS` to form a branch name:
+- Lowercase, replace spaces and special characters with hyphens
+- Truncate slug at 50 characters
+- Append 4-char hash: first 4 characters of `$(date +%s)$PPID | md5sum` (or equivalent)
+- Pattern: `team/<slug>-<4char-hash>`
+
+### 0d. Ask user for branch name
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Branch name for this session?",
+    header: "Worktree",
+    options: [
+      { label: "<suggested-name>", description: "Use this branch name and create an isolated worktree" },
+      { label: "Skip isolation", description: "Run in current directory without worktree (not recommended for concurrent sessions)" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+Replace `<suggested-name>` with the generated name from step 0c. The user may also type a custom branch name.
+
+### 0e. Create worktree (if not skipped)
+
+If user accepts the suggested name or provides a custom name (anything other than "Skip isolation"):
+
+```bash
+BRANCH_NAME="<user-chosen-or-suggested-name>"
+SESSION_WORKTREE=$(bun ~/.claude/scripts/worktree-create.ts "$REPO_ROOT" "$BRANCH_NAME")
+SESSION_BRANCH="$BRANCH_NAME"
+REPO_ROOT="$SESSION_WORKTREE"
+```
+
+If the script exits with code 1, show the error and ask the user to resolve before continuing.
+
+If user selects "Skip isolation": `SESSION_WORKTREE` remains empty and the session runs in the current directory as before.
+
+---
+
 ## STEP 1: Understand the Task
 
 Read the user's request from `$ARGUMENTS`. If arguments are empty or unclear, ask the user what they want to build or fix.
@@ -13,7 +79,6 @@ Read the user's request from `$ARGUMENTS`. If arguments are empty or unclear, as
 ### Draft Eval Counter (initialize once per session)
 ```bash
 DRAFT_COUNTER=0
-REPO_ROOT="$(git rev-parse --show-toplevel)"
 ```
 `DRAFT_COUNTER` increments each time an agent completes. It is used to name draft eval files `draft-YYYY-MM-DD-HHMM-<TOPIC>-NNN.md`. Initialize it once at session start. The `TOPIC` variable (set when understanding the task) ensures files from different same-day sessions do not collide.
 
@@ -787,6 +852,50 @@ If the user changes requirements after an agent has started working:
 
 ---
 
+## SESSION CLEANUP
+
+Only runs if `SESSION_WORKTREE` is set (non-empty). Skip this section if the user chose "Skip isolation" in STEP 0.
+
+Use **AskUserQuestion** (NEVER as free text):
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "What should we do with the session branch?",
+    header: "Cleanup",
+    options: [
+      { label: "Create PR", description: "Push branch and output PR creation command" },
+      { label: "Merge to main", description: "Merge branch into main and clean up" },
+      { label: "Keep branch", description: "Remove worktree but keep the branch for later" },
+      { label: "Discard", description: "Delete worktree and branch entirely" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+Map the user's choice to a cleanup mode:
+- "Create PR" → `pr`
+- "Merge to main" → `merge`
+- "Keep branch" → `keep`
+- "Discard" → `discard`
+
+Then run:
+```bash
+bun ~/.claude/scripts/worktree-cleanup.ts "$SESSION_WORKTREE" "<mode>"
+```
+
+- If mode is `pr`: the script prints the branch name. Output the PR creation command for the user:
+  ```bash
+  git push origin <branch-name>
+  gh pr create --head <branch-name> --base main
+  ```
+- If the script exits with code 1 (e.g. uncommitted changes), show the error and ask the user to resolve before retrying.
+
+After cleanup, return to the original repo root directory.
+
+---
+
 ## GIT SAFETY
 
 **NEVER commit. NEVER push.** No agent commits or pushes. The user controls all git operations. Suggest git commands in the final output.
@@ -936,10 +1045,10 @@ Coach K runs evals using the eval runner with `--trials 3`:
 
 ```bash
 # Single agent changed
-bash scripts/eval-run.sh --agent <name> --trials 3
+bun evals/src/cli.ts --agent <name> --trials 3
 
 # Command files changed (affects all agents)
-bash scripts/eval-run.sh --trials 3
+bun evals/src/cli.ts --trials 3
 ```
 
 **Why 3 trials:** LLMs are non-deterministic. A single trial can pass by luck. 3 trials reveals flakiness — if an agent passes 1 out of 3 tries, the spec change is unreliable and needs tightening before shipping.
@@ -995,7 +1104,7 @@ AskUserQuestion({
 
 ### Results Persistence
 
-Results are automatically written by `eval-run.sh` to `evals/results/YYYY-MM-DD-HHMM.json` and migrated into the web app DB. The web app at localhost:3000 is the single source of truth — do not summarize results in terminal.
+Results are automatically written by `evals/src/cli.ts` to `evals/results/YYYY-MM-DD-HHMM.json` and migrated into the web app DB. The web app at localhost:3000 is the single source of truth — do not summarize results in terminal.
 
 ---
 

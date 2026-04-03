@@ -249,13 +249,13 @@ dreamteam/
 │   ├── eval.md                # /eval (eval runner + Coach K scoring)
 │   └── code-review.md         # /code-review (automated PR review)
 ├── scripts/
-│   ├── install.sh             # Installer script
-│   ├── eval-report.sh         # Eval HTML report generator
-│   └── eval-export-workbench.sh  # Export scenarios to Anthropic Workbench CSV
+│   └── install.sh             # Installer script
 ├── docs/                      # Markdown docs, analysis, checkpoints
 │   ├── team-improvement-analysis.md
 │   └── claude-skillz-analysis.md
-├── evals/                     # Eval scenarios and results
+├── evals/                     # Eval scenarios, results, and TypeScript runner
+│   ├── src/                   # TypeScript eval infrastructure
+│   │   └── cli.ts             # Eval CLI entry point (bun evals/src/cli.ts)
 │   ├── <agent>/scenario-*.md  # 20-25 scenarios per agent (125 total)
 │   └── results/*.json         # Eval run results (append-only)
 ├── reports/
@@ -276,7 +276,6 @@ The `web/` directory contains a lightweight Bun server that serves eval results 
 **Prerequisites:**
 - [Bun](https://bun.sh) — `curl -fsSL https://bun.sh/install | bash`
 - [SQLite](https://www.sqlite.org/download.html) — included on macOS; on Linux install via `apt install sqlite3` or `brew install sqlite`
-- [Python 3](https://www.python.org/downloads/) — used by eval scripts (stdlib only, no external deps)
 
 ### Start the server
 
@@ -316,13 +315,13 @@ Eval scenarios can be exported to [Anthropic Workbench](https://platform.claude.
 
 ```bash
 # Export a single agent's scenarios to CSV
-scripts/eval-export-workbench.sh bird
+bun evals/src/workbench-export.ts bird
 
 # Export all agents (one CSV per agent)
-scripts/eval-export-workbench.sh --all
+bun evals/src/workbench-export.ts --all
 
 # Include scoring rubric as a grading prompt column
-scripts/eval-export-workbench.sh bird --with-rubric
+bun evals/src/workbench-export.ts bird --with-rubric
 ```
 
 Output: `evals/<agent>/workbench-import.csv`

@@ -2,11 +2,11 @@
 description: Dream Team eval runner — run agent evaluation scenarios, auto-score with Coach K, and open the web app for human review
 ---
 
-You are the **Dream Team Eval Runner**. Your job is to call `scripts/eval-run.sh` which handles the full pipeline deterministically, then open the web app at localhost:3000 for human review.
+You are the **Dream Team Eval Runner**. Your job is to call `bun evals/src/cli.ts` which handles the full pipeline deterministically, then open the web app at localhost:3000 for human review.
 
 ## HOW IT WORKS
 
-The eval pipeline is a **script**, not an in-context orchestration. The script (`scripts/eval-run.sh`) handles:
+The eval pipeline is a **TypeScript CLI**, not an in-context orchestration. The CLI (`evals/src/cli.ts`) handles:
 
 1. **Agent runs** — spawns `claude -p --agent <name>` for each scenario (parallel)
 2. **Grader runs** — deterministic code checks, zero LLM calls (instant)
@@ -14,30 +14,30 @@ The eval pipeline is a **script**, not an in-context orchestration. The script (
 4. **Result assembly** — writes final JSON + migrates results to web app DB
 
 You (Claude Code) are a **thin wrapper** that:
-- Translates `/eval` arguments into `eval-run.sh` flags
-- Runs the script
+- Translates `/eval` arguments into `cli.ts` flags
+- Runs the CLI
 - Opens localhost:3000
 - Handles human review (questions, score overrides)
 
 ## ARGUMENT TRANSLATION
 
-| User invocation | Script command |
+| User invocation | CLI command |
 |----------------|----------------|
-| `/eval` | `bash scripts/eval-run.sh --parallel 10` |
-| `/eval <agent>` | `bash scripts/eval-run.sh --agent <agent> --parallel 10` |
-| `/eval --report` | Skip script, just migrate and open web app (see below) |
-| `/eval --resume` | `bash scripts/eval-run.sh --resume evals/results/raw/<latest-dir> --phase score` |
+| `/eval` | `bun evals/src/cli.ts --parallel 10` |
+| `/eval <agent>` | `bun evals/src/cli.ts --agent <agent> --parallel 10` |
+| `/eval --report` | Skip CLI: run `bun web/src/migrate.ts`, then open web app (see below) |
+| `/eval --resume` | `bun evals/src/cli.ts --resume evals/results/raw/<latest-dir> --phase score` |
 
 ## EXECUTION
 
-### Step 1: Run the script
+### Step 1: Run the CLI
 
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-bash "${REPO_ROOT}/scripts/eval-run.sh" <translated-flags>
+bun "${REPO_ROOT}/evals/src/cli.ts" <translated-flags>
 ```
 
-Run this with `timeout: 600000` (10 minutes) since 120 agent calls take time. Show the user the script output as it streams.
+Run this with `timeout: 600000` (10 minutes) since 120 agent calls take time. Show the user the CLI output as it streams.
 
 If the script exits non-zero, show the error and ask the user using **AskUserQuestion** (NEVER as free text):
 
@@ -82,10 +82,11 @@ The web app is now open. Wait for the user to:
 
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-bash "${REPO_ROOT}/scripts/eval-report.sh" generate
+bun "${REPO_ROOT}/web/src/migrate.ts"
+open "http://localhost:3000"
 ```
 
-This migrates all JSON results into the DB and opens localhost:3000.
+This migrates all JSON results into the DB and opens localhost:3000. Do NOT call `evals/src/cli.ts` here — `--phase report` is not a valid CLI phase.
 
 ## RESUME MODE
 
@@ -94,14 +95,14 @@ If the user says "resume" or there are raw outputs without a matching result fil
 ```bash
 # Find the most recent raw output directory
 LATEST_RAW=$(ls -dt evals/results/raw/*/ 2>/dev/null | head -1)
-bash scripts/eval-run.sh --resume "$LATEST_RAW" --phase score --parallel 10
+bun evals/src/cli.ts --resume "$LATEST_RAW" --phase score --parallel 10
 ```
 
 This re-scores from saved raw outputs without re-running agents.
 
 ## DOMAIN RULES
 
-1. **Never orchestrate agent calls in-context** — always delegate to the script
+1. **Never orchestrate agent calls in-context** — always delegate to the CLI
 2. **Never fabricate scores** — every score comes from the script's LLM scoring calls
 3. **Append-only** — never modify existing result files
 4. **The web app at localhost:3000 is the single source of truth** — no terminal summaries

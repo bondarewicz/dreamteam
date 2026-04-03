@@ -36,7 +36,7 @@ scoring_rubric:    How to grade the output (pass / partial / fail criteria)
 4. Score using the scoring_rubric: pass / partial / fail.
 5. Record the result with a brief note on what the agent got right or wrong.
 
-Use `scripts/eval-run.sh` for automated runs (see `--help`), or run manually for human review.
+Use `bun evals/src/cli.ts` for automated runs (see `--help`), or run manually for human review.
 
 ## Scoring
 
@@ -83,22 +83,22 @@ Scenarios that test behaviors not described in the agent definition are not vali
 
 ## Workbench Export
 
-The `scripts/eval-export-workbench.sh` script exports eval scenarios into a CSV that can be imported directly into Anthropic Workbench for batch evaluation.
+`evals/src/workbench-export.ts` exports eval scenarios into a CSV that can be imported directly into Anthropic Workbench for batch evaluation.
 
 ### End-to-End Workflow
 
-**Step 1 — Run the export script**
+**Step 1 — Run the export**
 
 ```bash
 # Export a single agent
-scripts/eval-export-workbench.sh bird
+bun evals/src/workbench-export.ts bird
 
 # Export all agents (one CSV per agent)
-scripts/eval-export-workbench.sh --all
+bun evals/src/workbench-export.ts --all
 
 # Include scoring rubric as a second column
-scripts/eval-export-workbench.sh bird --with-rubric
-scripts/eval-export-workbench.sh --all --with-rubric
+bun evals/src/workbench-export.ts bird --with-rubric
+bun evals/src/workbench-export.ts --all --with-rubric
 ```
 
 Output files are written to `evals/<agent>/workbench-import.csv`.
@@ -133,7 +133,7 @@ When you export with `--with-rubric`, the CSV contains a second column `scoring_
 
 ### CSV Format
 
-The exported CSV follows RFC 4180 escaping (produced by Python's `csv.writer`), which correctly handles prompts that contain quotes, commas, and newlines.
+The exported CSV follows RFC 4180 escaping (implemented in `evals/src/workbench-export.ts`), which correctly handles prompts that contain quotes, commas, and newlines.
 
 | Column            | Always present | Description                                  |
 |-------------------|----------------|----------------------------------------------|
