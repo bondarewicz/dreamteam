@@ -56,6 +56,8 @@ export type ParsedScenario = {
 export type Phase = {
   phaseNum: number;
   agent: string;
+  /** The ## heading that precedes this phase in the scenario file, e.g. "Phase 1: Bird — Domain Analysis". Undefined for programmatically created phases. */
+  sectionHeader?: string;
   prompt: string;
   expectedBehavior: string;
   failureModes: string;
