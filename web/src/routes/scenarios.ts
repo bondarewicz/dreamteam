@@ -114,8 +114,30 @@ function dryRunHashSidecarPath(agent: string, draftId: string): string {
  * Compute a hash of only the eval-relevant fields of a parsed scenario.
  * Changes to category, title, overview, and reference_output do NOT affect
  * eval execution or scoring and should NOT invalidate a dry run.
+ *
+ * For team scenarios (isTeam: true), all phase-level eval fields and pipeline-level
+ * fields are included in the hash since top-level prompt/expected_behavior etc. are
+ * empty strings for team scenarios.
  */
-function evalContentHash(parsed: ParsedScenario): string {
+function evalContentHash(parsed: ParsedScenario | ParsedTeamScenario): string {
+  if ("isTeam" in parsed && parsed.isTeam) {
+    const parts: string[] = [
+      parsed.pipelineExpectedBehavior,
+      parsed.pipelineFailureModes,
+      parsed.pipelineScoringRubric,
+    ];
+    for (const phase of parsed.phases) {
+      parts.push(
+        phase.agent,
+        phase.prompt,
+        phase.expectedBehavior,
+        phase.failureModes,
+        phase.scoringRubric,
+        JSON.stringify(phase.graders),
+      );
+    }
+    return String(Bun.hash(parts.join("\x00")));
+  }
   const content = [
     parsed.prompt,
     parsed.expected_behavior,
@@ -129,11 +151,13 @@ function evalContentHash(parsed: ParsedScenario): string {
 /**
  * Record a hash of the eval-relevant draft fields as the dry-run baseline.
  * Called after successfully saving the draft and before starting the eval.
+ * Detects team scenarios and uses parseTeamScenario for accurate phase-level hashing.
  */
 function recordDryRunHash(agent: string, draftId: string): void {
   try {
     const content = readFileSync(draftPath(agent, draftId), "utf-8");
-    const parsed = parseScenario(content);
+    const isTeamScenario = /^phase_1_agent:\s*\S/m.test(content);
+    const parsed = isTeamScenario ? parseTeamScenario(content) : parseScenario(content);
     writeFileSync(dryRunHashSidecarPath(agent, draftId), evalContentHash(parsed), "utf-8");
   } catch { /* non-fatal */ }
 }
@@ -142,12 +166,14 @@ function recordDryRunHash(agent: string, draftId: string): void {
  * Check if the eval-relevant fields of the draft have changed since the last dry run.
  * Returns true (allow promotion) only if a sidecar exists AND the eval content hash matches.
  * Non-eval changes (category, title, overview, reference_output) do NOT invalidate the hash.
+ * Detects team scenarios and uses parseTeamScenario for accurate phase-level hashing.
  */
 function isDryRunFresh(agent: string, draftId: string): boolean {
   try {
     const recorded = readFileSync(dryRunHashSidecarPath(agent, draftId), "utf-8").trim();
     const content = readFileSync(draftPath(agent, draftId), "utf-8");
-    const parsed = parseScenario(content);
+    const isTeamScenario = /^phase_1_agent:\s*\S/m.test(content);
+    const parsed = isTeamScenario ? parseTeamScenario(content) : parseScenario(content);
     return evalContentHash(parsed) === recorded;
   } catch {
     return false;
@@ -278,6 +304,14 @@ function parseGraders(content: string): Grader[] {
 }
 
 /**
+ * ## headings that are structural document sections, not phase section headers.
+ * Must stay in sync with the headings emitted by serializeTeamScenario (e.g. "## Overview",
+ * "## Pipeline-Level Fields") so the parser correctly skips them when scanning for the
+ * phase-specific heading that precedes each phase_N_agent field.
+ */
+const STRUCTURAL_HEADINGS = new Set(["Overview", "Pipeline-Level Fields"]);
+
+/**
  * Parse a team scenario file into a ParsedTeamScenario.
  * Detects phases by scanning for phase_N_agent fields (N = 1, 2, ...).
  * Extracts per-phase and pipeline-level fields.
@@ -297,6 +331,9 @@ export function parseTeamScenario(content: string): ParsedTeamScenario {
 
   const phases: Phase[] = [];
   let phaseNum = 1;
+  // Tracks the end position of the previous phase's agent field so that header
+  // scanning is bounded to the current phase's slice only (prevents header bleed).
+  let prevPhaseEnd = 0;
   while (true) {
     const agentRe = new RegExp(`^phase_${phaseNum}_agent:\\s*(\\S+)`, "m");
     const agentMatch = agentRe.exec(content);
@@ -334,10 +371,26 @@ export function parseTeamScenario(content: string): ParsedTeamScenario {
       return parseGraders(fakeContent);
     }
 
+    // Extract the ## heading that precedes phase_N_agent (scan backwards from agent field).
+    // Scan only from prevPhaseEnd to prevent header bleed: when Phase N has a heading
+    // but Phase N+1 does not, Phase N+1 must NOT inherit Phase N's heading.
+    const agentFieldIndex = agentMatch.index;
+    const contentBeforeAgent = content.slice(prevPhaseEnd, agentFieldIndex);
+    const allHeadingsBefore = [...contentBeforeAgent.matchAll(/^## (.+)$/gm)];
+    const lastNonStructuralHeading = allHeadingsBefore.reverse().find(
+      m => !STRUCTURAL_HEADINGS.has(m[1].trim())
+    );
+    const sectionHeader = lastNonStructuralHeading ? lastNonStructuralHeading[1].trim() : undefined;
+
+    // Advance prevPhaseEnd past the current agent field so the next iteration
+    // scans only its own slice of content.
+    prevPhaseEnd = agentFieldIndex + agentMatch[0].length;
+
     const phasePrompt = extractPhaseBlock("prompt");
     const phase: Phase = {
       phaseNum,
       agent: phaseAgent,
+      sectionHeader,
       prompt: phasePrompt,
       expectedBehavior: extractPhaseBlock("expected_behavior"),
       failureModes: extractPhaseBlock("failure_modes"),
@@ -396,11 +449,7 @@ export function serializeTeamScenario(p: ParsedTeamScenario): string {
   // Phases
   for (const phase of p.phases) {
     const pn = phase.phaseNum;
-    const sectionLabels: Record<string, string> = {
-      1: "Phase 1: Parallel Analysis",
-      4: "Phase 4: Human Decision (Fixture)",
-    };
-    const sectionLabel = sectionLabels[pn] ?? `Phase ${pn}`;
+    const sectionLabel = phase.sectionHeader ?? `Phase ${pn}`;
     parts.push(`## ${sectionLabel}`);
     parts.push("");
     parts.push(`phase_${pn}_agent: ${phase.agent}`);
@@ -1093,6 +1142,9 @@ export async function draftSaveHandler(req: Request, params: Record<string, stri
       updatedPhases.push({
         phaseNum: pn,
         agent: phaseAgent,
+        ...(existingParsed?.phases[pn - 1]?.sectionHeader !== undefined
+          ? { sectionHeader: existingParsed.phases[pn - 1].sectionHeader }
+          : {}),
         prompt: formParams.get(`phase_${pn}_prompt`) ?? (existingParsed?.phases[pn - 1]?.prompt ?? ""),
         expectedBehavior: formParams.get(`phase_${pn}_expected_behavior`) ?? (existingParsed?.phases[pn - 1]?.expectedBehavior ?? ""),
         failureModes: existingParsed?.phases[pn - 1]?.failureModes ?? "",
@@ -1266,6 +1318,10 @@ export async function draftDryRunHandler(req: Request, params: Record<string, st
     const draftsDir = path.join(EVALS_DIR, "team", "drafts");
     mkdirSync(draftsDir, { recursive: true });
 
+    // Record the eval-relevant content hash BEFORE starting the run so promote
+    // can detect post-dry-run edits (AC-1, BR-1). Must mirror individual handler ordering.
+    recordDryRunHash(agent, draftId);
+
     try {
       writeFileSync(tempPath, content, "utf-8");
       await startEvalRun({
@@ -1429,6 +1485,16 @@ export async function draftPromoteHandler(req: Request, params: Record<string, s
         status: 302,
         headers: {
           Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=nodryrun`,
+        },
+      });
+    }
+
+    // BR-2: Promotion blocked if eval-relevant fields were edited after the last dry run (AC-3)
+    if (!isDryRunFresh(agent, draftId)) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `/scenarios/${encodeURIComponent(agent)}/drafts/${encodeURIComponent(draftId)}?error=stalerun`,
         },
       });
     }
