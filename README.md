@@ -458,4 +458,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Disclaimer
 
-Agent names and jersey numbers are used affectionately as a framing device. This project is not affiliated with, endorsed by, or sponsored by the NBA, USA Basketball, the named players or their estates, or Coach Mike Krzyzewski.
+Agent names and jersey numbers are used affectionately as a framing device. This project is not affiliated with, endorsed by, or sponsored by the NBA, USA Basketball, the named players or their estates, Chuck Daly's estate, or Coach Mike Krzyzewski.
