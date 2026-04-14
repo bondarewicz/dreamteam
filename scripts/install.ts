@@ -122,6 +122,43 @@ fs.mkdirSync(path.join(REPO_DIR, "reports", "retros"), { recursive: true });
 fs.mkdirSync(path.join(REPO_DIR, "reports", "evals"), { recursive: true });
 fs.mkdirSync(path.join(REPO_DIR, "evals", "results"), { recursive: true });
 
+// --- Step 8: Ensure MCP servers are registered in ~/.claude.json ---
+// Tracked source of truth: scripts/mcp-servers.json. We merge (add-if-missing)
+// into the user-scope config; we never overwrite existing entries or remove
+// anything we don't own.
+const mcpSpecPath = path.join(SCRIPT_DIR, "mcp-servers.json");
+const userConfigPath = path.join(process.env.HOME ?? "~", ".claude.json");
+
+if (fs.existsSync(mcpSpecPath) && fs.existsSync(userConfigPath)) {
+  console.log("Ensuring MCP servers...");
+  const spec = JSON.parse(fs.readFileSync(mcpSpecPath, "utf-8"));
+  const desired: Record<string, unknown> = spec.mcpServers ?? {};
+
+  const userConfig = JSON.parse(fs.readFileSync(userConfigPath, "utf-8"));
+  userConfig.mcpServers ??= {};
+
+  let added = 0;
+  let existing = 0;
+  for (const [name, entry] of Object.entries(desired)) {
+    if (userConfig.mcpServers[name]) {
+      console.log(`  = ${name} (already registered)`);
+      existing++;
+    } else {
+      userConfig.mcpServers[name] = entry;
+      console.log(`  + ${name}`);
+      added++;
+    }
+  }
+
+  if (added > 0) {
+    fs.writeFileSync(userConfigPath, JSON.stringify(userConfig, null, 2));
+    console.log(`  ${added} added, ${existing} already present.`);
+  } else {
+    console.log(`  ${existing} already present, nothing to add.`);
+  }
+  console.log("");
+}
+
 // --- Summary ---
 console.log("=== Installation Complete ===");
 console.log("");
