@@ -119,7 +119,8 @@ export function assembleFinalResult(
   scenariosTotal: number,
   allScenariosTotal: number,
   trials: number,
-  repoRoot: string
+  repoRoot: string,
+  model?: string
 ): FinalResult {
   const runId = `eval/run-${runDatetime}`;
   const results = loadScoredResults(scoredDir, runId);
@@ -153,6 +154,7 @@ export function assembleFinalResult(
       trials,
       notes:
         "Preliminary scoring by Coach K. Human review pending via web app at localhost:3000.",
+      ...(model ? { model } : {}),
     },
   };
 }

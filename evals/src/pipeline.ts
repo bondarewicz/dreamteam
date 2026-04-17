@@ -65,7 +65,8 @@ async function phaseAgents(
         trial,
         adapter,
         teamTimeoutMs,
-        options.trials
+        options.trials,
+        options.model
       );
     } else {
       await runAgentScenario(
@@ -76,7 +77,8 @@ async function phaseAgents(
         trial,
         adapter,
         timeoutMs,
-        options.trials
+        options.trials,
+        options.model
       );
     }
   });
@@ -225,7 +227,8 @@ async function phaseAssemble(
   scenariosTotal: number,
   allScenariosTotal: number,
   trials: number,
-  repoRoot: string
+  repoRoot: string,
+  model?: string
 ): Promise<string> {
   const scoredDir = path.join(rawDir, "scored");
   const finalOutput = path.join(resultsDir, `${runDatetime}.json`);
@@ -243,7 +246,8 @@ async function phaseAssemble(
     scenariosTotal,
     allScenariosTotal,
     trials,
-    repoRoot
+    repoRoot,
+    model
   );
 
   fs.writeFileSync(finalOutput, JSON.stringify(final, null, 2), "utf-8");
@@ -307,6 +311,7 @@ export async function runPipeline(
   console.log(`  Phase        : ${options.phase}`);
   console.log(`  Parallel     : ${options.parallel}`);
   console.log(`  Trials       : ${options.trials}`);
+  console.log(`  Model        : ${options.model || "(agent default)"} ${options.model ? "[judge unchanged]" : ""}`);
   console.log(`  Scenarios    : ${total}`);
   console.log();
 
@@ -389,7 +394,8 @@ export async function runPipeline(
       total,
       allScenariosTotal,
       options.trials,
-      options.repoRoot
+      options.repoRoot,
+      options.model
     );
 
     return {

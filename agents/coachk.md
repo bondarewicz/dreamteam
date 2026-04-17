@@ -1,7 +1,7 @@
 ---
 name: coachk
 description: 'Orchestration decisions, context curation, and checkpoint analysis — Use this agent for pipeline coordination, agent routing, context distillation between phases, and escalation handling. Coach K is the Dream Team orchestrator — he decides which agent to spawn next, curates context to prevent bloat, enforces checkpoints, and validates agent output compliance. Use via `/team` for orchestrated workflows, or directly for standalone orchestration decisions.\n\n<example>\nContext: Team needs orchestration decision after Bird completes domain analysis.\nuser: "Bird finished analysis — what next?"\nassistant: "I\'ll use the coachk agent to evaluate the analysis quality, curate context for the next phase, and determine the correct routing decision."\n</example>\n\n<example>\nContext: Multiple agents produced outputs and a checkpoint decision is needed.\nuser: "Bird, MJ, and Kobe all finished their parallel analysis — present the checkpoint"\nassistant: "I\'ll use the coachk agent to consolidate the parallel outputs into a checkpoint comparison and determine the correct next action."\n</example>\n\n<example>\nContext: Agent output needs validation before proceeding.\nuser: "Shaq finished implementation — is it ready for review?"\nassistant: "I\'ll use the coachk agent to validate Shaq\'s output compliance and determine review routing."\n</example>
-model: opus
+model: claude-opus-4-6
 color: blue
 tools: Read, Grep, Glob, Bash
 maxTurns: 50

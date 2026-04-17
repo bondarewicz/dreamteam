@@ -5,6 +5,7 @@ export function Layout(title: string, body: string, activeNav = ""): string {
   const navItems = [
     { href: "/", label: "Dashboard" },
     { href: "/scenarios", label: "Scenarios" },
+    { href: "/admin/models", label: "Admin" },
   ];
   const navLinks = navItems.map(item => {
     const active = activeNav === item.href ? ' style="color:var(--text)"' : "";

@@ -1,15 +1,45 @@
 /**
  * New Eval Run form page — /evals/new
  */
+import { CLAUDE_CODE_ALIASES, type ModelsResult } from "../models-api.ts";
 
 export type ScenarioGroup = {
   agent: string;
   scenarios: string[]; // bare scenario IDs e.g. "scenario-01-foo"
 };
 
+function renderModelSelect(modelsResult: ModelsResult): string {
+  const aliasList: readonly string[] = CLAUDE_CODE_ALIASES;
+  const aliasOptions = aliasList
+    .map((alias) => `<option value="${alias}">${alias}</option>`)
+    .join("");
+  const apiOptions = modelsResult.models
+    .map((m) => {
+      const label = m.displayName && m.displayName !== m.id ? `${m.id} — ${m.displayName}` : m.id;
+      return `<option value="${m.id}">${label}</option>`;
+    })
+    .join("");
+  const sourceLabel = modelsResult.source === "api"
+    ? "Pinned model IDs (Anthropic API)"
+    : "Pinned model IDs (fallback list)";
+  const sourceNote = modelsResult.source === "api"
+    ? ""
+    : `<span style="display:block;color:var(--text-muted);font-size:11px;margin-top:4px">List source: static fallback (ANTHROPIC_API_KEY not set or API unreachable).</span>`;
+
+  return `
+    <select id="model" name="model" class="form-input">
+      <option value="" selected>(use each agent's frontmatter)</option>
+      <optgroup label="Claude Code aliases">${aliasOptions}</optgroup>
+      <optgroup label="${sourceLabel}">${apiOptions}</optgroup>
+    </select>
+    ${sourceNote}
+  `;
+}
+
 export function NewEvalRunPage(
   runInProgress: boolean,
   scenarioGroups: ScenarioGroup[],
+  modelsResult: ModelsResult,
   activeRunId?: string
 ): string {
   if (runInProgress) {
@@ -122,6 +152,14 @@ export function NewEvalRunPage(
             max="20"
           >
         </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="model">
+          Model override
+          <span class="form-hint">(optional — leave on default to use each agent's frontmatter; overrides phase-1 only, judge stays on default)</span>
+        </label>
+        ${renderModelSelect(modelsResult)}
       </div>
 
       <button type="submit" class="btn-primary" style="width:100%;margin-top:8px">

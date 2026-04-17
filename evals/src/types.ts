@@ -167,6 +167,7 @@ export interface FinalResult {
     repo_commit: string;
     trials: number;
     notes: string;
+    model?: string;
   };
 }
 
@@ -188,6 +189,7 @@ export interface PipelineOptions {
   dryRun: boolean;
   timeoutPerPhase: number;
   repoRoot: string;
+  model?: string;
 }
 
 export interface DiscoveredScenario {

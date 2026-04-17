@@ -38,6 +38,42 @@ scoring_rubric:    How to grade the output (pass / partial / fail criteria)
 
 Use `bun evals/src/cli.ts` for automated runs (see `--help`), or run manually for human review.
 
+## Running eval across model versions
+
+The `agents/*.md` `model:` field is the source of truth for which model each agent runs on. The eval CLI spawns `claude -p --agent <name>`, so whatever is in the agent's frontmatter is what gets tested.
+
+**Full sweep (source-of-truth workflow):**
+
+```bash
+# 1. Point every agent at the target version
+#    Edit agents/*.md — 6 agents on `claude-opus-4-6`, magic on `claude-sonnet-4-6`
+bun scripts/install.ts
+
+# 2. Run the full eval with 3 trials
+bun evals/src/cli.ts --trials 3
+
+# 3. Switch to the next version
+#    Edit agents/*.md — 6 agents on `claude-opus-4-7`, magic on `claude-sonnet-4-7`
+bun scripts/install.ts
+
+# 4. Re-run
+bun evals/src/cli.ts --trials 3
+
+# 5. Compare runs at http://localhost:3000
+```
+
+Magic stays on sonnet across the sweep — synthesis is structured writing and doesn't need opus depth. The 4.6→4.7 comparison bumps magic from `claude-sonnet-4-6` to `claude-sonnet-4-7`, and the other 6 agents from `claude-opus-4-6` to `claude-opus-4-7`.
+
+**One-off override (no frontmatter churn):**
+
+```bash
+bun evals/src/cli.ts --trials 3 --model claude-opus-4-7
+```
+
+The `--model <id>` flag appends `--model <id>` to the `claude -p --agent <name>` invocation for phase-1 agent runs. The Coach K scoring calls in phase 3 intentionally do NOT receive `--model` — the judge stays on the user's default model so 4.6 and 4.7 runs share a constant baseline. Valid IDs: anything `claude --model` accepts (full IDs like `claude-opus-4-6`, `claude-opus-4-7`, or aliases like `opus`, `sonnet`, `haiku`).
+
+The selected model is recorded in `meta.model` of the final result JSON, so the web app can distinguish runs.
+
 ## Scoring
 
 Each scenario is scored on a three-point scale:

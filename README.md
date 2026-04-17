@@ -8,12 +8,14 @@ Source of truth for all Claude Code agents and commands. Install once, use every
 
 | Agent | Command | Persona | Role | Model | Max Turns |
 |-------|---------|---------|------|-------|-----------|
-| **bird** | `/bird` | Larry Bird | Domain Authority & Final Arbiter | **opus** | 50 |
-| **mj** | `/mj` | Michael Jordan | Strategic Systems Architect | **opus** | 50 |
-| **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | **opusplan** | 100 |
-| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | **opus** | 50 |
-| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | **opus** | 50 |
-| **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | sonnet | 50 |
+| **bird** | `/bird` | Larry Bird | Domain Authority & Final Arbiter | `claude-opus-4-6` | 50 |
+| **mj** | `/mj` | Michael Jordan | Strategic Systems Architect | `claude-opus-4-6` | 50 |
+| **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | `claude-opus-4-6` | 100 |
+| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | `claude-opus-4-6` | 50 |
+| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | `claude-opus-4-6` | 50 |
+| **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | `claude-sonnet-4-6` | 50 |
+
+All 7 agents (including Coach K) are pinned to specific Claude 4.6 builds instead of floating aliases: 6 on `claude-opus-4-6`, magic on `claude-sonnet-4-6` (synthesis is structured writing, not deep reasoning). Pinning lets us run eval baselines per model version — see [Running eval across model versions](#running-eval-across-model-versions).
 
 ### Agent capabilities
 
@@ -338,21 +340,35 @@ Quality-first, with each agent on the model matching its reasoning demands.
 
 | Model | Agents | Why |
 |-------|--------|-----|
-| **opus** | bird, mj, kobe, pippen | Domain analysis, architecture, quality review, and stability review all require deep reasoning |
-| **opusplan** | shaq | Opus for planning, sonnet for code generation |
-| **sonnet** | magic | Synthesis is structured and doesn't need opus depth |
+| `claude-opus-4-6` | bird, mj, shaq, kobe, pippen, coachk | Domain, architecture, implementation, quality, stability, and orchestration all need deep reasoning |
+| `claude-sonnet-4-6` | magic | Synthesis is structured writing — sonnet depth is enough |
+
+Historical note: shaq previously ran on `opusplan` (plan-mode alias). We pinned every agent to a specific 4.x build so we can run full evals on 4.6 vs 4.7 against an identical config — the only variable between runs is the model version. Magic stays on sonnet across the sweep (4.6 → 4.7 for magic means `claude-sonnet-4-6` → `claude-sonnet-4-7`).
 
 ### Tuning guide
 
 | If you notice... | Try... |
 |-----------------|--------|
-| Magic's synthesis is fine but slow | Downgrade magic to `haiku` |
-| Hitting rate limits on Full Team | Downgrade bird, mj to `sonnet` |
-| Kobe's findings are obvious/shallow | Keep on `opus` — quality is where depth matters most |
-| Pippen's reviews are excellent | Could downgrade to `sonnet` to save rate limits |
-| Shaq's code quality is great | Could downgrade to `sonnet` (saves opus planning cost) |
+| Magic's synthesis is fine but slow | Try a lighter model (`claude-sonnet-4-6` or `claude-haiku-4-5`) |
+| Hitting rate limits on Full Team | Downgrade bird, mj to a sonnet build |
+| Kobe's findings are obvious/shallow | Keep on opus — quality is where depth matters most |
+| Pippen's reviews are excellent | Could downgrade to a sonnet build to save rate limits |
+| Shaq's code quality is great | Could downgrade to a sonnet build |
 
-To change a model: edit `model:` in `agents/<name>.md`, run `bun scripts/install.ts`.
+To change a model permanently: edit `model:` in `agents/<name>.md`, run `bun scripts/install.ts`. To A/B a single run without touching specs, use `bun evals/src/cli.ts --model <id>` (see [Running eval across model versions](#running-eval-across-model-versions)).
+
+### Running eval across model versions
+
+The `agents/*.md` `model:` field is the source of truth. To compare model versions end-to-end:
+
+1. Set every agent's `model:` to the target ID (e.g. `claude-opus-4-6`) — either by editing `agents/*.md` directly or via the web admin at `http://localhost:3000/admin/models`.
+2. `bun scripts/install.ts` — sync the new frontmatter into `~/.claude/`.
+3. `bun scripts/build-site.ts` — mirror the new models into `site/index.html`. CI runs this automatically on deploy, but run locally if you want the preview in sync.
+4. `bun evals/src/cli.ts --trials 3` — eval invokes `claude -p --agent <name>`, picking up the model from the now-installed frontmatter.
+5. Switch `model:` to the next ID (e.g. `claude-opus-4-7`), re-install, re-run.
+6. Compare results at `http://localhost:3000`.
+
+For a quick one-off without editing frontmatter, `bun evals/src/cli.ts --trials 3 --model claude-opus-4-7` overrides the agent's model for that run only. The `--model` flag only affects phase-1 agent runs — the Coach K scoring judge stays on the default so comparisons share a constant baseline.
 
 ### Turn limits
 
@@ -369,12 +385,13 @@ To change a model: edit `model:` in `agents/<name>.md`, run `bun scripts/install
 
 | Agent | Model | Effort Level | Rationale |
 |-------|-------|--------------|-----------|
-| bird  | opus  | high         | Domain analysis benefits from deep reasoning |
-| mj    | opus  | high         | Architecture trade-offs require extended thinking |
-| kobe  | opus  | high         | Code review requires thorough pattern matching |
-| pippen| opus  | high         | Stability review requires thorough integration and operational analysis |
-| shaq  | opusplan | medium    | Implementation is execution-heavy, not reasoning-heavy |
-| magic | sonnet| low          | Synthesis is structured writing, not complex reasoning |
+| bird  | `claude-opus-4-6` | high | Domain analysis benefits from deep reasoning |
+| mj    | `claude-opus-4-6` | high | Architecture trade-offs require extended thinking |
+| kobe  | `claude-opus-4-6` | high | Code review requires thorough pattern matching |
+| pippen| `claude-opus-4-6` | high | Stability review requires thorough integration and operational analysis |
+| shaq  | `claude-opus-4-6` | high | Pinned to match the eval baseline (previously `opusplan`) |
+| magic | `claude-sonnet-4-6` | low | Synthesis is structured writing, not complex reasoning |
+| coachk| `claude-opus-4-6` | high | Orchestration + context curation needs reasoning depth |
 
 > **Warning:** Do NOT set `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1`. Adaptive thinking is active by default and allows the model to dynamically scale its thinking budget. Disabling it removes a meaningful quality lever with no compensating benefit.
 
