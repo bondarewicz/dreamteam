@@ -7,8 +7,15 @@
  * same string that is stored in agent frontmatter (`model:`), accepted by
  * `claude --model`, and rendered in docs/site. No transformation is applied.
  *
- * On missing/invalid `ANTHROPIC_API_KEY` or any network error, falls back to
- * a curated static list so the UI keeps working offline.
+ * On missing/invalid `DREAMTEAM_MODELS_API_KEY` or any network error, falls
+ * back to a curated static list so the UI keeps working offline.
+ *
+ * Why a bespoke env var and not `ANTHROPIC_API_KEY`: Claude Code CLI treats
+ * `ANTHROPIC_API_KEY` as "bill this request to the API, not the subscription."
+ * Setting it in `.env` (which Bun auto-loads, and Bun.spawn passes to child
+ * procs) makes every `claude -p --agent <name>` spawn — eval runs, team runs —
+ * charge against API credits instead of the Claude Code subscription. Using a
+ * distinct name keeps the /v1/models lookup isolated from CLI billing.
  */
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -63,13 +70,13 @@ export async function getAvailableModels(opts?: { forceRefresh?: boolean }): Pro
     return cache;
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.DREAMTEAM_MODELS_API_KEY;
   if (!apiKey || apiKey.trim().length === 0) {
     cache = {
       fetchedAt: now,
       source: "fallback",
       models: FALLBACK_MODEL_IDS.map((id) => ({ id, displayName: id, createdAt: "" })),
-      error: "ANTHROPIC_API_KEY is not set — using static fallback list",
+      error: "DREAMTEAM_MODELS_API_KEY is not set — using static fallback list",
     };
     return cache;
   }
