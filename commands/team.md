@@ -404,9 +404,9 @@ PR: [number or branch]
 
 | Agent | Model | Role              |
 |-------|-------|-------------------|
-| bird  | opus  | Domain review     |
-| mj    | opus  | Architecture review |
-| kobe  | opus  | Quality/risk review |
+| bird  | claude-opus-4-6 | Domain review |
+| mj    | claude-opus-4-6 | Architecture review |
+| kobe  | claude-opus-4-6 | Quality/risk review |
 
 Output: LOCAL ONLY (docs/PR-<number>-review.md)
 Tip: Run /usage to check rate limit impact.
@@ -957,14 +957,14 @@ Always include this at the end of the final output so the user can see what ran:
 Workflow: [Quick Fix / Full Team]
 Task: [one-line description]
 
-| Agent   | Model     | Role                        |
-|---------|-----------|-----------------------------|
-| bird    | opus      | Domain analysis             |
-| mj      | opus      | Architecture design         |
-| magic   | sonnet    | Context curation + synthesis |
-| shaq    | opusplan  | Implementation              |
-| kobe    | opus      | Quality review              |
-| pippen  | opus      | Stability review            |
+| Agent   | Model             | Role                        |
+|---------|-------------------|-----------------------------|
+| bird    | claude-opus-4-6   | Domain analysis             |
+| mj      | claude-opus-4-6   | Architecture design         |
+| magic   | claude-sonnet-4-6 | Context curation + synthesis |
+| shaq    | claude-opus-4-6   | Implementation              |
+| kobe    | claude-opus-4-6   | Quality review              |
+| pippen  | claude-opus-4-6   | Stability review            |
 
 Tip: Run /usage to check rate limit impact.
 ```

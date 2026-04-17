@@ -8,6 +8,9 @@
  *   --scenario PAT       Run only scenarios matching glob pattern or comma-separated "agent/id"
  *   --phase PHASE        Phase: agents|graders|score|all (default: all)
  *   --trials N           Run each scenario N times (default: 1)
+ *   --model ID           Override the model for agent runs (e.g. claude-opus-4-6, claude-opus-4-7).
+ *                        Does NOT affect Coach K scoring calls — the judge stays on the default model
+ *                        so 4.6 vs 4.7 runs are compared against a constant baseline.
  *   --dry-run            Show what would run without executing
  *   --timeout-per-phase  Timeout in seconds per phase (default: 300 individual, 600 team)
  */
@@ -28,6 +31,7 @@ function parseArgs(argv: string[]): PipelineOptions & { help: boolean } {
     dryRun: false,
     timeoutPerPhase: 0,
     repoRoot: "",
+    model: "",
     help: false,
   };
 
@@ -50,6 +54,9 @@ function parseArgs(argv: string[]): PipelineOptions & { help: boolean } {
         break;
       case "--trials":
         opts.trials = Math.max(1, parseInt(argv[++i] ?? "1", 10));
+        break;
+      case "--model":
+        opts.model = argv[++i] ?? "";
         break;
       case "--dry-run":
         opts.dryRun = true;
@@ -84,6 +91,7 @@ function printHelp() {
   --scenario PAT        Run only scenarios matching glob pattern or agent/scenario-id
   --phase PHASE         agents|graders|score|all (default: all)
   --trials N            Run each scenario N times (default: 1)
+  --model ID            Override model for agent runs (e.g. claude-opus-4-6). Judge stays on default.
   --dry-run             Show what would run without executing
   --timeout-per-phase N Timeout in seconds per phase (default: 300/600)`);
 }

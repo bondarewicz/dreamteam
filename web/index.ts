@@ -32,6 +32,7 @@ import {
   draftDryRunHandler,
   draftPromoteHandler,
 } from "./src/routes/scenarios.ts";
+import { adminModelsHandler, adminModelsSaveHandler } from "./src/routes/admin.ts";
 import { serveStatic } from "./src/routes/static.ts";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -58,6 +59,10 @@ router.get("/evals/:runId/results", evalResultsFragment);
 router.get("/evals/:runId/trace/:resultId", traceHandler);
 router.post("/api/eval-runs", startEvalRunHandler);
 router.get("/api/eval-runs/live", evalRunsSSEHandler);
+
+// Admin — agent model/version editor
+router.get("/admin/models", adminModelsHandler);
+router.post("/admin/models", adminModelsSaveHandler);
 
 // Scenario browser and editor
 router.get("/scenarios", scenariosListHandler);

@@ -12,6 +12,7 @@ import { DashboardPage } from "../views/Dashboard.ts";
 import { EvalRunPage, ResultsTableFragment } from "../views/EvalRun.ts";
 import { TraceViewerPage } from "../views/TraceViewer.ts";
 import { NewEvalRunPage, type ScenarioGroup } from "../views/NewEvalRun.ts";
+import { getAvailableModels } from "../models-api.ts";
 import { EvalRunLivePage } from "../views/EvalRunLive.ts";
 import { startEvalRun, getActiveRun, createSSEResponse } from "../sse.ts";
 import path from "path";
@@ -145,11 +146,17 @@ function loadScenarioGroups(): ScenarioGroup[] {
 }
 
 /** GET /evals/new — New eval run config form */
-export function newEvalRunHandler(req: Request, _params: Record<string, string>): Response {
+export async function newEvalRunHandler(req: Request, _params: Record<string, string>): Promise<Response> {
   const activeRun = getActiveRun();
   const runInProgress = activeRun != null && !activeRun.done;
   const scenarioGroups = loadScenarioGroups();
-  const body = NewEvalRunPage(runInProgress, scenarioGroups, runInProgress ? activeRun!.runId : undefined);
+  const modelsResult = await getAvailableModels();
+  const body = NewEvalRunPage(
+    runInProgress,
+    scenarioGroups,
+    modelsResult,
+    runInProgress ? activeRun!.runId : undefined,
+  );
   return html(maybeLayout(req, "New Eval Run", body, "/evals/new"));
 }
 
@@ -159,6 +166,7 @@ export async function startEvalRunHandler(req: Request, _params: Record<string, 
   let scenarios: string[] = [];
   let trials = 3;
   let parallel = 5;
+  let model = "";
 
   try {
     const contentType = req.headers.get("content-type") ?? "";
@@ -169,6 +177,7 @@ export async function startEvalRunHandler(req: Request, _params: Record<string, 
       scenarios = params.getAll("scenarios");
       trials = parseInt(params.get("trials") ?? "3", 10) || 3;
       parallel = parseInt(params.get("parallel") ?? "5", 10) || 5;
+      model = (params.get("model") ?? "").trim();
     } else if (contentType.includes("application/json")) {
       const body = await req.json() as Record<string, unknown>;
       agents = Array.isArray(body.agents) ? body.agents as string[] : [];
@@ -180,6 +189,7 @@ export async function startEvalRunHandler(req: Request, _params: Record<string, 
       }
       trials = typeof body.trials === "number" ? body.trials : 3;
       parallel = typeof body.parallel === "number" ? body.parallel : 5;
+      model = typeof body.model === "string" ? body.model.trim() : "";
     }
   } catch (err) {
     console.error("Error parsing request body:", err);
@@ -190,7 +200,7 @@ export async function startEvalRunHandler(req: Request, _params: Record<string, 
   }
 
   try {
-    const runId = await startEvalRun({ agents, scenarios, trials, parallel });
+    const runId = await startEvalRun({ agents, scenarios, trials, parallel, model });
     // Redirect to live progress page (works for both form submit and JSON)
     const accept = req.headers.get("accept") ?? "";
     if (accept.includes("application/json")) {

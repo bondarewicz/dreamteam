@@ -82,7 +82,8 @@ export async function runSingleAgentCall(
   scenarioId: string,
   prompt: string,
   adapter: ClaudeAdapter,
-  timeoutMs: number
+  timeoutMs: number,
+  model?: string
 ): Promise<Omit<RawOutput, "phases" | "pipeline_fields">> {
   const timestamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   const startMs = Date.now();
@@ -96,20 +97,21 @@ export async function runSingleAgentCall(
   let errorNote = "";
 
   try {
-    const { stdout, exitCode } = await adapter.run(
-      [
-        "-p",
-        "--agent",
-        agent,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--append-system-prompt",
-        EVAL_MODE_APPEND,
-      ],
-      prompt,
-      timeoutMs
-    );
+    const args = [
+      "-p",
+      "--agent",
+      agent,
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--append-system-prompt",
+      EVAL_MODE_APPEND,
+    ];
+    if (model) {
+      args.push("--model", model);
+    }
+
+    const { stdout, exitCode } = await adapter.run(args, prompt, timeoutMs);
 
     if (exitCode !== 0) {
       errorNote = `claude exited non-zero (exit ${exitCode})`;
@@ -167,7 +169,8 @@ export async function runAgentScenario(
   trial: number,
   adapter: ClaudeAdapter,
   timeoutMs: number,
-  trials: number
+  trials: number,
+  model?: string
 ): Promise<string> {
   const rawOutput =
     trial === 0
@@ -189,7 +192,7 @@ export async function runAgentScenario(
     console.error(`  WARN: empty prompt extracted for ${agent}/${scenarioId}`);
   }
 
-  const record = await runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs);
+  const record = await runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs, model);
 
   fs.writeFileSync(rawOutput, JSON.stringify(record, null, 2), "utf-8");
   console.log(`  Done: ${agent}/${scenarioId}${label} (${record.duration_ms}ms)`);
@@ -224,7 +227,8 @@ export async function runTeamScenario(
   trial: number,
   adapter: ClaudeAdapter,
   timeoutMs: number,
-  trials: number
+  trials: number,
+  model?: string
 ): Promise<string> {
   const rawOutput =
     trial === 0
@@ -280,7 +284,8 @@ export async function runTeamScenario(
         `${scenarioId}/phase-${pn}`,
         phPrompt,
         adapter,
-        timeoutMs
+        timeoutMs,
+        model
       );
       totalInputTokens += record.input_tokens;
       totalOutputTokens += record.output_tokens;

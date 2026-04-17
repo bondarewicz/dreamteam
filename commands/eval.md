@@ -25,8 +25,12 @@ You (Claude Code) are a **thin wrapper** that:
 |----------------|----------------|
 | `/eval` | `bun evals/src/cli.ts --parallel 10` |
 | `/eval <agent>` | `bun evals/src/cli.ts --agent <agent> --parallel 10` |
+| `/eval --model <id>` | `bun evals/src/cli.ts --parallel 10 --model <id>` (combine with any other flags) |
+| `/eval --trials N` | `bun evals/src/cli.ts --parallel 10 --trials N` (combine with any other flags) |
 | `/eval --report` | Skip CLI: run `bun web/src/migrate.ts`, then open web app (see below) |
 | `/eval --resume` | `bun evals/src/cli.ts --resume evals/results/raw/<latest-dir> --phase score` |
+
+**Model override semantics.** `--model` is passed through to `claude -p --agent <name> --model <id>` for phase-1 agent runs only. The Coach K scoring calls in phase 3 intentionally do NOT receive `--model`, so the judge stays on the user's default model and 4.6 vs 4.7 runs share a constant baseline. Valid IDs include `claude-opus-4-6` and `claude-opus-4-7`; aliases like `opus` or `sonnet` also work (whatever `claude --model` accepts).
 
 ## EXECUTION
 
