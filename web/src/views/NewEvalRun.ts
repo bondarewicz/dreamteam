@@ -24,7 +24,7 @@ function renderModelSelect(modelsResult: ModelsResult): string {
     : "Pinned model IDs (fallback list)";
   const sourceNote = modelsResult.source === "api"
     ? ""
-    : `<span style="display:block;color:var(--text-muted);font-size:11px;margin-top:4px">List source: static fallback (ANTHROPIC_API_KEY not set or API unreachable).</span>`;
+    : `<span style="display:block;color:var(--text-muted);font-size:11px;margin-top:4px">List source: static fallback (DREAMTEAM_MODELS_API_KEY not set or API unreachable).</span>`;
 
   return `
     <select id="model" name="model" class="form-input">

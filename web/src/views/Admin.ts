@@ -70,7 +70,7 @@ function renderModelsSource(modelsResult: ModelsResult): string {
   }
   return `
     <div class="source-banner source-warn">
-      <strong>Static list:</strong> ${esc(modelsResult.error ?? "using fallback")}. Set <code>ANTHROPIC_API_KEY</code> in <code>.env</code> at repo root for live IDs from the API.
+      <strong>Static list:</strong> ${esc(modelsResult.error ?? "using fallback")}. Set <code>DREAMTEAM_MODELS_API_KEY</code> in <code>.env</code> at repo root for live IDs from the API. (Do NOT use <code>ANTHROPIC_API_KEY</code> — that name makes <code>claude</code> CLI bill against API credits instead of your subscription.)
     </div>
   `;
 }
