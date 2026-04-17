@@ -35,10 +35,11 @@ function readAgentModel(agent: string): string {
 }
 
 function rewriteModelForAgent(html: string, agent: string, model: string): { html: string; changed: boolean; current: string } {
-  // Match the agent's <h3 class="codename">agent</h3> then the next <dt>Model</dt><dd>...</dd>.
+  // Match the agent's <h3 class="codename">agent</h3> then the next <dt>Model</dt> ... <dd>...</dd>.
   // Lazy match with [\s\S] so we can span multiple lines but stop at the FIRST dd after the h3.
+  // `\s*` between </dt> and <dd> handles both inline and multi-line formatting.
   const re = new RegExp(
-    `(<h3 class="codename">${agent}</h3>[\\s\\S]*?<dt>Model</dt><dd>)([^<]*)(</dd>)`,
+    `(<h3 class="codename">${agent}</h3>[\\s\\S]*?<dt>Model</dt>\\s*<dd>)([^<]*)(</dd>)`,
     "m",
   );
   const match = html.match(re);
