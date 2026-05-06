@@ -926,13 +926,47 @@ After EVERY agent completes — in ALL workflows (Quick Fix, Full Team, PR Revie
 - No ` ``` ` anywhere in the output
 - `json.loads(output)` succeeds with zero pre-processing
 
-## RETROSPECTIVE (MANDATORY)
+## MEMORY HARVEST (OPTIONAL — ZERO ARTIFACTS BY DEFAULT)
 
-After every Dream Team session:
+After Magic's synthesis, before Final Output, run ONE harvest question.
 
-1. **Save checkpoint** — if not already saved in Phase 2, save all agent outputs to `docs/checkpoint-<topic>.md` for recovery
-2. **Magic produces the retro** as part of synthesis — the synthesis output IS the retrospective record
-3. This is non-negotiable. Every session must leave a paper trail for future sessions to build on.
+**Goal:** capture confirmation signals (non-obvious calls the user accepted) and reusable patterns from the session — without creating any file artifacts unless the user explicitly opts in. Replaces the prior retro flow, which produced documents nobody read.
+
+### How
+
+1. **Save checkpoint first** — if not already saved in Phase 2, save all agent outputs to `docs/checkpoint-<topic>.md`. This is the recovery record and is independent of harvest.
+2. **Identify up to 3 candidates from the session's routing trail.** Look for:
+   - **Confirmations** — judgment calls (Coach K's, an agent's, a routing pivot) the user accepted without pushback. The signal is *absence of correction* on a non-obvious choice that had alternatives.
+   - **Patterns** — something that worked unexpectedly well, or a tradeoff the team navigated cleanly, that would generalize to future sessions.
+   - Pivots the user explicitly demanded are corrections — already implicit in conversation. Do NOT re-surface them here.
+3. **Ask via AskUserQuestion (multiSelect):**
+
+   ```
+   AskUserQuestion({
+     questions: [{
+       question: "Capture any non-obvious calls from this session as memory?",
+       header: "Memory Harvest",
+       options: [
+         { label: "<short title>", description: "<one-line + why memory-worthy + which agent/decision>" },
+         // ... up to 3 candidates
+         { label: "None — skip", description: "Nothing memory-worthy this session" }
+       ],
+       multiSelect: true
+     }]
+   })
+   ```
+
+   If no candidates surface, present the question with "None" as the only real option — silence is a valid harvest result.
+4. **Act on the result:**
+   - User picks "None" (or only "None") → produce zero artifacts. Done.
+   - For each candidate selected → write a memory file to `~/.claude/projects/<project>/memory/` with frontmatter (`name`, `description`, `type: feedback | project`) and add a one-line index entry to `MEMORY.md`.
+
+### Hard rules
+
+- **No file artifacts unless the user explicitly selects.** This is the load-bearing constraint that distinguishes harvest from the removed retro flow.
+- **Skippable by design.** "None" is a first-class option, not a friction path.
+- **One question, one turn.** Do not chase, do not re-prompt, do not produce a markdown summary of the harvest.
+- **Checkpoint saving is unchanged and separate.** `docs/checkpoint-<topic>.md` continues to be saved per existing rules.
 
 ---
 
@@ -1008,7 +1042,7 @@ When an agent escalates (messages with "ESCALATION:"), Coach K MUST:
    ```
    This eliminates ambiguity from replies like "the first one" or "yeah that one."
 3. **Respond promptly** — the escalating agent is BLOCKED until you respond
-4. **Track escalations** — note them for Magic's metrics in the retro.
+4. **Track escalations** — note them for Magic's metrics in the synthesis.
 5. **NEVER ignore an escalation** — an agent that escalated instead of guessing is doing the right thing. Reward this behavior by responding quickly.
 
 ## COACHING PRINCIPLES
