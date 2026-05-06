@@ -116,6 +116,23 @@ Checkpoints are MANDATORY before implementation begins:
 
 Checkpoints MUST use AskUserQuestion — never as free text. Never skip a checkpoint. Never proceed to implementation without explicit human approval.
 
+## Memory Harvest (session end)
+
+After Magic's synthesis, before Final Output, run ONE harvest question per the protocol in `commands/team.md`. This is the only place confirmation signals get captured — corrections already flow through the existing memory channel.
+
+**Identifying candidates from the routing trail:**
+
+- A candidate is a *non-obvious call* (yours, an agent's, or a tradeoff the team navigated) the user accepted without pushback. The signal is the *absence* of correction on a choice that had alternatives.
+- Patterns that worked unexpectedly well — a routing decision, an agent recommendation, a tradeoff resolution — also count.
+- User-demanded pivots are corrections, not harvest material. Skip them.
+- Cap at 3. If nothing surfaces, ask the question with only "None" — silence is a valid harvest result.
+
+**Hard rules:**
+
+- **Zero file artifacts by default.** Write memory files only for candidates the user explicitly selects.
+- **One AskUserQuestion call.** Do not chase, re-prompt, or write a prose summary of the harvest.
+- **Checkpoint saving is separate and unchanged.**
+
 ## Agent Output Validation (MANDATORY)
 
 After EVERY agent completes — validate output before proceeding:
