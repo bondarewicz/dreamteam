@@ -36,6 +36,7 @@ Coach K (the orchestrator) runs on `claude-opus-4-7`. All agents are pinned to s
 | `/magic` | Synthesize perspectives into docs/ADRs |
 | `/team` | Task too big for one agent — full pipeline |
 | `/team` + Miro | Visual architecture & DDD on a board |
+| `/REDACTED` | Build a Brandolini-style REDACTED on a Miro board |
 | `/code-review` | Automated PR review (local-only output) |
 
 ## /team — Coach K Orchestration
@@ -126,6 +127,45 @@ claude mcp authenticate miro
 ```
 
 Bird + MJ read the board and produce domain + architecture analysis; Coach K writes back REDACTED flowcharts, service decomposition diagrams, sequence diagrams, and document cards. See the [demo board](https://miro.com/app/board/<BOARD_ID>/).
+
+## /REDACTED — Domain Modeling on Miro
+
+Builds a [Brandolini](https://leanpub.com/introducing_REDACTED)-style REDACTED directly on a Miro board, using the canonical colour notation and build order. Requires the Miro MCP (see above).
+
+**Variants:** `as-is` (current system), `to-be` (target design), or `both` (side-by-side frames).
+
+```bash
+/REDACTED as-is checkout flow                    # AS-IS REDACTED
+/REDACTED to-be unified order pipeline           # TO-BE REDACTED
+/REDACTED both payment refactor                  # Both, in adjacent frames
+/REDACTED                                        # Prompts for variant + scope
+/REDACTED --recipe                               # Print the notation reference, no board
+```
+
+Returns the board URL plus a one-paragraph summary (pivotal events, bounded contexts, hot spots). If `docs/eventstorms/` exists, the summary is also saved there as a `<slug>-<variant>.md` file — Miro URLs rot, a checked-in summary survives. Full notation, colour overrides, and build recipe live in `commands/REDACTED.md`.
+
+## Context7 Integration
+
+The Dream Team integrates with [Context7](https://context7.com) via MCP. Agents (especially Shaq and MJ) fetch up-to-date, version-specific library docs before writing code — preventing hallucinated APIs and outdated patterns from training data.
+
+**Setup:**
+
+```bash
+claude mcp add --transport http context7 https://mcp.context7.com/mcp \
+  --header "CONTEXT7_API_KEY: <your-key>" \
+  -s user
+claude mcp list   # should show: context7 ... ✓ Connected
+```
+
+Get a key at https://context7.com. The key is stored in `~/.claude.json` (User scope) — never commit it to the repo. Restart Claude Code after adding so the new tools register.
+
+**Example:**
+
+```
+Use Context7 to fetch current Drizzle ORM schema syntax, then add a users table to db/schema.ts.
+```
+
+Agents call `mcp__context7__resolve-library-id` → `mcp__context7__get-library-docs` before writing. See `docs/context7-integration.md` for per-agent benefit assessment and tool-config changes.
 
 ## Built-in Tension (by design)
 
