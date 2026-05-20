@@ -98,7 +98,7 @@ function typeClass(type: string): string {
   return first.toLowerCase().replace(/\s+/g, "-");
 }
 
-export const KNOWN_AGENTS = ["bird", "coachk", "kobe", "magic", "mj", "pippen", "shaq", "team"] as const;
+export const KNOWN_AGENTS = ["bird", "coachk", "drexler", "kobe", "magic", "mj", "pippen", "shaq", "team"] as const;
 export type KnownAgent = typeof KNOWN_AGENTS[number];
 
 export function ScenariosListPage(
