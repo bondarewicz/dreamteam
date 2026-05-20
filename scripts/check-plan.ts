@@ -12,11 +12,18 @@ import path from "path";
 
 function hasSpec(dir: string): boolean {
   try {
-    // docs/spec-*.md (Coach K writes these in STEP 1b)
     const docsDir = path.join(dir, "docs");
     if (fs.existsSync(docsDir)) {
-      if (fs.readdirSync(docsDir).some((f) => f.startsWith("spec-") && f.endsWith(".md")))
-        return true;
+      for (const entry of fs.readdirSync(docsDir, { withFileTypes: true })) {
+        // SDD final spec — Magic writes docs/spec-<topic>.md at Phase 5
+        if (entry.isFile() && entry.name.startsWith("spec-") && entry.name.endsWith(".md"))
+          return true;
+        // SDD intake — Coach K writes docs/spec-<topic>/intake.md at STEP 1b
+        if (entry.isDirectory() && entry.name.startsWith("spec-")) {
+          const intake = path.join(docsDir, entry.name, "intake.md");
+          if (fs.existsSync(intake)) return true;
+        }
+      }
     }
     // Root-level spec-*.md fallback
     if (fs.readdirSync(dir).some((f) => f.startsWith("spec-") && f.endsWith(".md")))

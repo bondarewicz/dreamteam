@@ -82,42 +82,87 @@ DRAFT_COUNTER=0
 ```
 `DRAFT_COUNTER` increments each time an agent completes. It is used to name draft eval files `draft-YYYY-MM-DD-HHMM-<TOPIC>-NNN.md`. Initialize it once at session start. The `TOPIC` variable (set when understanding the task) ensures files from different same-day sessions do not collide.
 
-## STEP 1b: Write Spec Artifact
+## STEP 1b: Intake — Human-Authored Spec Foundation (SDD)
 
-Before choosing a workflow, write a spec document to disk. This is the version-controlled contract for the session — reviewable, linkable from checkpoints, and satisfies the `check-plan` hook.
+Spec-Driven Development (SDD) treats the spec as the contract. The **human is the author of intent**. Each agent contributes their domain artifact to a shared spec directory. Magic synthesises everything into a final consolidated spec at the end of the session.
 
-Derive `TOPIC` from the user's request (slug: lowercase, hyphens, ≤30 chars). Set it once here — it is reused for draft eval filenames throughout the session.
+Derive `TOPIC` from the user's request (slug: lowercase, hyphens, ≤30 chars). Set it once here — it is reused for spec artifacts and draft eval filenames throughout the session.
 
 ```bash
 TOPIC="<slug>"  # e.g. "user-auth-flow", "payment-refund-api"
-SPEC_FILE="${REPO_ROOT}/docs/spec-${TOPIC}.md"
-mkdir -p "${REPO_ROOT}/docs"
+SPEC_DIR="${REPO_ROOT}/docs/spec-${TOPIC}"
+INTAKE_FILE="${SPEC_DIR}/intake.md"
+mkdir -p "$SPEC_DIR"
 ```
 
-Use the **Write** tool to create `$SPEC_FILE` with this template:
+### Detect pre-authored intake
+
+If `$INTAKE_FILE` already exists, the human authored it offline — **skip the draft-and-confirm flow** and use it as-is. Log: "Using human-authored intake at $INTAKE_FILE — skipping draft."
+
+### Draft + confirm (when no intake exists)
+
+**1. Draft the intake** using the Write tool at `$INTAKE_FILE`:
 
 ```markdown
-# Spec: <TOPIC>
+# Intake: <TOPIC>
 Date: <YYYY-MM-DD>
-Status: Draft — acceptance criteria to be filled by Bird
+Author: <user name from git config or "human">
+Status: Draft — awaiting human confirmation
 
 ## Problem Statement
 <1–2 sentences from the user's request — exactly what was asked, no interpretation>
 
-## What We're Building
-<Brief description of the expected solution, if evident from the request>
+## What Success Looks Like
+<Brief description of the expected outcome, if evident from the request>
 
 ## Out of Scope
-<What we are explicitly NOT doing — derived from scope signals in the user's request>
-
-## Acceptance Criteria
-<!-- Bird will populate this section. Leave blank. -->
+<What we are explicitly NOT doing — derived from scope signals in the user's request. If unsure, list candidates to confirm with the human.>
 
 ## Open Questions
-<Unknowns that Bird or MJ must resolve before Shaq can implement>
+<Unknowns that Bird or MJ must resolve before Shaq can implement. These are surfaced for the human at intake — not invented by agents later.>
+
+## Constraints
+<Any deadlines, integration requirements, or tech constraints from the user's request.>
 ```
 
-After Bird completes domain analysis, **update this spec** by replacing the `## Acceptance Criteria` section with Bird's acceptance criteria (Given/When/Then format). The spec becomes the authoritative source of truth that Shaq builds against and Drexler, Kobe, and Pippen verify against.
+**2. Confirm with the human** using the AskUserQuestion tool. This is the **single intake checkpoint** — the human owns intent before any agent starts:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "I drafted the spec intake at docs/spec-<TOPIC>/intake.md. How should we proceed?",
+    header: "Intake",
+    options: [
+      { label: "Looks good — proceed", description: "The drafted intake captures my intent. Continue to agent phases." },
+      { label: "Edit Problem Statement", description: "The Problem Statement needs rewriting before we proceed." },
+      { label: "Edit Out of Scope", description: "I want to add or remove items from Out of Scope before agents start." },
+      { label: "Rewrite from scratch", description: "The draft is off — I'll provide a corrected version." }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+**3. Apply the human's edits** to `$INTAKE_FILE` before proceeding. If the human picks "Looks good", change `Status: Draft` to `Status: Confirmed by <human>` and proceed.
+
+### Why this matters
+
+`intake.md` is the **only artifact the human authors directly**. Every downstream artifact (Bird's domain.md, MJ's architecture.md, etc.) is derived from this intake. If intake is wrong, everything downstream is wrong. Don't skip the checkpoint.
+
+### Artifact map for the session
+
+Each phase produces an artifact in `$SPEC_DIR`:
+
+| File | Author | Phase | Source |
+|------|--------|-------|--------|
+| `intake.md` | Human (via Coach K draft) | STEP 1b | One-liner + AskUserQuestion edits |
+| `domain.md` | Coach K from Bird's JSON | Phase 1 | Bird's acceptance criteria + business rules |
+| `architecture.md` | Coach K from MJ's JSON | Phase 1 | MJ's architecture decisions + NFRs |
+| `operations.md` | Coach K from Pippen's JSON | Phase 4 | Pippen's operational readiness assessment |
+| `scope.md` | Coach K from Drexler's JSON | Phase 4 | Drexler's scope confirmation + what was kept out |
+| `review.md` | Coach K from Kobe's JSON | Phase 4 | Kobe's quality findings + verification status |
+
+At end of session, **Magic reads all artifacts and writes the final `docs/spec-${TOPIC}.md`** as the consolidated spec — single source of truth, human-approvable.
 
 ---
 
@@ -168,7 +213,25 @@ Read the template at `evals/draft-template.md` and use the Write tool to create 
 - `<EXACT prompt Coach K sent to the agent — verbatim, no paraphrasing>` → the verbatim prompt you sent to Bird
 - `<The actual output the agent returned during this session>` → Bird's complete output
 
-### 1c. Human Approval Checkpoint (MANDATORY)
+### 1c. Write Bird's Spec Artifact (Quick Fix — SDD)
+
+Extract Bird's JSON output and write `${SPEC_DIR}/domain.md` using the Write tool:
+```markdown
+# Domain: <TOPIC>
+Author: Bird (Domain Authority)
+Date: <YYYY-MM-DD>
+
+## Acceptance Criteria
+<Bird's acceptance criteria in Given/When/Then or EARS format>
+
+## Business Rules
+<Bird's identified business rules and domain constraints>
+
+## Must-Never-Break Invariants
+<Pull from Bird's output>
+```
+
+### 1d. Human Approval Checkpoint (MANDATORY)
 
 When Bird completes, YOU (Coach K) present Bird's findings to the user:
 - Summarize Bird's key business rules and domain constraints
@@ -291,22 +354,80 @@ DRAFT_FILE="${DRAFT_DIR}/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md"
 # Use Write tool: AgentName=Drexler, prompt=verbatim prompt sent to Drexler, output=Drexler's complete output
 ```
 
-### 4. Magic — Synthesis
+### 3c. Write Kobe + Drexler Spec Artifacts (Quick Fix — SDD)
+
+Extract their JSON outputs and write spec artifacts to `$SPEC_DIR`:
+
+**`${SPEC_DIR}/review.md` from Kobe's output:**
+```markdown
+# Review: <TOPIC>
+Author: Kobe (Quality & Risk Enforcer)
+Date: <YYYY-MM-DD>
+Verdict: <LGTM | SHIP WITH FIXES | BLOCK>
+
+## Critical Findings
+<Severity-classified findings from Kobe's review>
+
+## Important Findings
+<Non-critical but should-fix findings>
+
+## Production Readiness
+<Kobe's safe_to_deploy assessment with rationale>
+```
+
+**`${SPEC_DIR}/scope.md` from Drexler's output:**
+```markdown
+# Scope: <TOPIC>
+Author: Drexler (Deletion-Bias Enforcer)
+Date: <YYYY-MM-DD>
+Verdict: <LEAN | ACCEPTABLE | BLOATED>
+
+## What Was In Scope
+<Confirmed against intake.md>
+
+## What Was Kept Out
+<Matches intake's Out of Scope>
+
+## Deletion Candidates
+<Code that should be removed or simplified>
+
+## Scope Drift
+<Anything built that was not in intake>
+```
+
+### 4. Magic — Spec Synthesis & Session Summary
+
+Magic now plays two roles: synthesise all session outputs AND consolidate all spec artifacts into the final `docs/spec-${TOPIC}.md`.
 
 Use the Task tool with `subagent_type="magic"`:
 ```
-Synthesize all agent outputs into a final summary.
-Include: what was done, decisions made, files changed, and suggested next steps.
-Provide git commands the user should run.
-Include Team Metrics section (escalations, confidence levels, finding attribution).
+You are Magic Johnson, the Context Synthesizer & Team Glue.
+
+YOUR TASK (two outputs):
+
+1. SPEC SYNTHESIS: Read every file under docs/spec-${TOPIC}/ (intake.md, domain.md, review.md, scope.md) and write the consolidated final spec to docs/spec-${TOPIC}.md.
+
+The final spec MUST:
+- Use the human's intake.md as the source of truth for Problem Statement and Out of Scope (these are human-authored — preserve faithfully)
+- Pull Acceptance Criteria from domain.md verbatim where possible
+- Include a "Review Summary" section from review.md (verdicts only, not full findings)
+- Include a "Scope Confirmation" section from scope.md
+- NORMALISE TERMINOLOGY across sections — if Bird says "Customer" and Drexler says "User", pick one and align (note the choice in a brief Terminology section)
+- FLAG CONTRADICTIONS — if domain.md and scope.md disagree on what was built, surface it explicitly in a "Contradictions" section
+
+2. SESSION SUMMARY: Synthesize all agent outputs into a final summary with what was done, decisions made, files changed, suggested next steps, git commands, and Team Metrics.
 
 TASK: [user's request]
 
-BIRD OUTPUT: [paste Bird's full output — Magic needs everything for synthesis]
-SHAQ OUTPUT: [paste Shaq's full output]
-KOBE OUTPUT: [paste Kobe's full output]
-DREXLER OUTPUT: [paste Drexler's full output]
-CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
+ALL AGENT OUTPUTS (for session summary):
+BIRD: [paste Bird's full output]
+SHAQ: [paste Shaq's full output]
+KOBE: [paste Kobe's full output]
+DREXLER: [paste Drexler's full output]
+
+Use the Write tool to create docs/spec-${TOPIC}.md.
+Then return your session summary as raw JSON.
+CRITICAL: Final response must be raw JSON only. First character { last character }. No markdown fences. (The spec file you write to disk is separate from this JSON response.)
 ```
 
 ### 4b. Write Draft Eval for Magic (Quick Fix)
@@ -563,8 +684,56 @@ CRITICAL: Respond with raw JSON only. First character { last character }. No mar
 
 Log completions with individual findings as part of your coordination notes.
 
+### Phase 1 Spec Artifacts: domain.md + architecture.md (Full Team — SDD)
+
+After Bird and MJ complete, extract their JSON outputs into spec artifacts. Each agent owns one file in `$SPEC_DIR`.
+
+**Write `${SPEC_DIR}/domain.md` from Bird's output:**
+```markdown
+# Domain: <TOPIC>
+Author: Bird (Domain Authority)
+Date: <YYYY-MM-DD>
+
+## Acceptance Criteria
+<Bird's acceptance criteria in Given/When/Then or EARS format — one per AC>
+
+## Business Rules
+<Bird's identified business rules and domain constraints>
+
+## Invariants
+<What must never break — pull from Bird's output>
+
+## Edge Cases
+<Bird's identified edge cases and how they should be handled>
+
+## Open Domain Questions
+<Anything Bird flagged as ambiguous or requiring stakeholder input>
+```
+
+**Write `${SPEC_DIR}/architecture.md` from MJ's output:**
+```markdown
+# Architecture: <TOPIC>
+Author: MJ (Strategic Systems Architect)
+Date: <YYYY-MM-DD>
+
+## Architecture Decisions
+<MJ's key decisions with rationale — pattern selection, system boundaries, integration points>
+
+## Component Interactions
+<How the pieces fit together — pull from MJ's output>
+
+## Non-Functional Requirements
+<Performance, scalability, security NFRs MJ identified>
+
+## Trade-offs
+<MJ's documented trade-offs and rejected alternatives>
+
+## Open Architecture Questions
+<Anything MJ flagged as requiring further investigation>
+```
+
 ### Phase 1 Draft Evals: Bird + MJ (Full Team)
-After Bird and MJ complete, write one draft eval per agent. For each agent, read the template at `evals/draft-template.md` and use the Write tool to create the file at the computed path, substituting actual values for all `<...>` placeholders.
+After writing artifacts, also write one draft eval per agent. For each agent, read the template at `evals/draft-template.md` and use the Write tool to create the file at the computed path, substituting actual values for all `<...>` placeholders.
 ```bash
 # Bird draft
 DRAFT_COUNTER=$((DRAFT_COUNTER + 1))
@@ -807,6 +976,75 @@ When done, message Coach K (the lead) with your findings.
 CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
 ```
 
+### Phase 4 Spec Artifacts: operations.md + scope.md + review.md (Full Team — SDD)
+
+After Kobe, Pippen, and Drexler complete, extract their JSON outputs into spec artifacts.
+
+**Write `${SPEC_DIR}/operations.md` from Pippen's output:**
+```markdown
+# Operations: <TOPIC>
+Author: Pippen (Stability, Integration & Defense)
+Date: <YYYY-MM-DD>
+
+## Operational Readiness Criteria
+<Pippen's checklist: logging, metrics, health checks, alerts that must be in place>
+
+## Integration Assessment
+<Pippen's review of how this fits with existing systems>
+
+## Resilience Posture
+<Retry, timeout, circuit breaker, graceful shutdown coverage Pippen confirmed or flagged>
+
+## Rollback Plan
+<Pippen's rollback assessment — is it possible? What does it require?>
+
+## Operational Gaps
+<Anything Pippen identified as blocking production readiness>
+```
+
+**Write `${SPEC_DIR}/scope.md` from Drexler's output:**
+```markdown
+# Scope: <TOPIC>
+Author: Drexler (Deletion-Bias Enforcer)
+Date: <YYYY-MM-DD>
+Verdict: <LEAN | ACCEPTABLE | BLOATED>
+
+## What Was In Scope
+<What the implementation actually delivered — confirmed against intake.md>
+
+## What Was Kept Out
+<Things Drexler verified were correctly excluded — matches intake's Out of Scope>
+
+## What Was Removed or Simplified
+<Drexler's deletion candidates — code reduction recommendations>
+
+## Duplication Findings
+<Any near-duplicates Drexler identified vs existing code>
+
+## Scope Drift
+<Anything built that was not in intake — flagged for human review>
+```
+
+**Write `${SPEC_DIR}/review.md` from Kobe's output:**
+```markdown
+# Review: <TOPIC>
+Author: Kobe (Quality & Risk Enforcer)
+Date: <YYYY-MM-DD>
+Verdict: <LGTM | SHIP WITH FIXES | BLOCK>
+
+## Critical Findings
+<Severity-classified findings from Kobe's review>
+
+## Important Findings
+<Non-critical but should-fix findings>
+
+## Production Readiness
+<Kobe's safe_to_deploy assessment with rationale>
+
+## Verification Status
+<After fix-verify loop completes: which findings were resolved, which remain>
+```
+
 ### Phase 4b: Fix-Verify Loop (MANDATORY)
 
 ### Phase 4 Draft Evals: Kobe + Pippen + Drexler (Full Team)
@@ -894,9 +1132,13 @@ AskUserQuestion({
 
 This loop ensures code quality is enforced, not just identified. Skipping verification is NOT allowed.
 
-### Phase 5: Synthesis (Magic)
+### Phase 5: Spec Synthesis & Session Summary (Magic)
 
-**Only after Kobe and Pippen complete**, spawn Magic.
+**Only after Kobe, Pippen, and Drexler complete** (and the fix-verify loop is done), spawn Magic.
+
+Magic plays two roles in SDD:
+1. **Spec synthesis** — consolidate all artifacts in `$SPEC_DIR` into the final `docs/spec-${TOPIC}.md`
+2. **Session summary** — synthesize all agent outputs into the final session JSON output
 
 #### Spawn Magic:
 ```
@@ -904,9 +1146,66 @@ You are Magic Johnson, the Context Synthesizer & Team Glue.
 Read your full agent definition at ~/.claude/agents/magic.md for detailed instructions.
 Follow the Team Protocol section EXACTLY, especially the Pre-Synthesis Gate.
 
-YOUR TASK (Task #8): Synthesize all Dream Team outputs for [user's request]
+YOUR TASK (Task #8): Produce TWO outputs for [user's request]
 
-IMPORTANT: All prior work is complete. Verify files exist on disk via Glob before synthesizing.
+═══════════════════════════════════════════════════════════════════
+OUTPUT 1: SPEC SYNTHESIS (write to disk via Write tool)
+═══════════════════════════════════════════════════════════════════
+
+Read every file under docs/spec-${TOPIC}/:
+- intake.md (human-authored — source of truth for intent)
+- domain.md (Bird)
+- architecture.md (MJ)
+- operations.md (Pippen)
+- scope.md (Drexler)
+- review.md (Kobe)
+
+Write the consolidated final spec to docs/spec-${TOPIC}.md following this structure:
+
+```markdown
+# Spec: <TOPIC>
+Date: <YYYY-MM-DD>
+Status: Final — pending human sign-off
+
+## Problem Statement
+<From intake.md verbatim — human-authored, do not paraphrase>
+
+## Out of Scope
+<From intake.md verbatim>
+
+## Terminology
+<If different agents used different terms for the same concept, list the chosen canonical term and the variants you normalised. Empty section is fine if no drift detected.>
+
+## Acceptance Criteria
+<From domain.md — preserve Bird's Given/When/Then format>
+
+## Architecture Decisions
+<From architecture.md — MJ's key decisions with rationale>
+
+## Operational Readiness
+<From operations.md — Pippen's checklist>
+
+## Scope Confirmation
+<From scope.md — Drexler's verdict and what was kept out>
+
+## Review Summary
+<From review.md — Kobe's verdict; full findings stay in review.md>
+
+## Contradictions Detected
+<If any artifact disagreed with another, surface it here. Empty section is fine.>
+
+## Artifacts
+<List of files in docs/spec-${TOPIC}/ that feed this spec>
+```
+
+MANDATORY rules for spec synthesis:
+- intake.md is the source of truth for Problem Statement and Out of Scope — never override human intent
+- Normalise terminology across sections (e.g., if Bird says "Customer" and Pippen says "User", pick one canonical term and note the choice in Terminology section)
+- Flag contradictions explicitly — if domain.md says "supports refunds" and scope.md says "refunds out of scope", surface it in Contradictions section, do not silently pick one
+
+═══════════════════════════════════════════════════════════════════
+OUTPUT 2: SESSION SUMMARY (return as JSON)
+═══════════════════════════════════════════════════════════════════
 
 ALL AGENT OUTPUTS (you need the complete picture):
 BIRD: [paste full output]
@@ -920,7 +1219,7 @@ Synthesize following your Team Synthesis format:
 - Executive summary of what was accomplished
 - All agent contributions and key findings
 - Decisions made and their rationale
-- Files created/modified with purpose
+- Files created/modified with purpose (include the spec at docs/spec-${TOPIC}.md)
 - Open items and risks
 - ADR if architectural decisions were made
 - Suggested git commands for the user
@@ -931,10 +1230,10 @@ MANDATORY — Team Metrics section:
 - Confidence levels per agent (from their self-assessments)
 - Finding attribution (which agent caught which issue)
 - Fix-verify loop count (how many rounds before SHIP)
-- Contradictions detected (from your Phase 1b context curation, if applicable)
+- Contradictions detected (from your spec synthesis above)
 
 When done, message Coach K (the lead) with the final synthesis.
-CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
+CRITICAL: Your JSON response must be raw JSON only — first character {, last character }. No markdown fences. The spec file you write to disk via the Write tool is a separate artifact and does not affect your JSON response format.
 ```
 
 ### Phase 5 Draft Eval: Magic Synthesis (Full Team)
@@ -1036,9 +1335,39 @@ After EVERY agent completes — in ALL workflows (Quick Fix, Full Team, PR Revie
 - No ` ``` ` anywhere in the output
 - `json.loads(output)` succeeds with zero pre-processing
 
+## SPEC SIGN-OFF CHECKPOINT (MANDATORY — SDD)
+
+After Magic writes `docs/spec-${TOPIC}.md`, **before** Memory Harvest and Final Output, present the synthesised spec to the human for sign-off. This closes the SDD loop — the spec is the contract, the human confirms what shipped matches what was agreed.
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Magic synthesised the final spec at docs/spec-<TOPIC>.md. Does it match what you wanted built?",
+    header: "Spec Sign-off",
+    options: [
+      { label: "Approve — matches intent", description: "The spec accurately describes what we built. Mark as Final." },
+      { label: "Approve with notes", description: "Mostly right — I'll add notes/corrections directly to the spec file afterwards." },
+      { label: "Reject — scope drift", description: "What we built does not match my intent. Surface the gap so we can decide what to do." },
+      { label: "Reject — spec inaccurate", description: "What we built is fine but the synthesised spec doesn't describe it correctly. Magic should re-synthesise." }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+**Acting on the result:**
+- **Approve — matches intent**: Update `docs/spec-${TOPIC}.md` Status to `Final — approved by <human>`. Proceed to Memory Harvest.
+- **Approve with notes**: Update Status to `Final — approved with notes`. Proceed.
+- **Reject — scope drift**: Surface the gap to the human via free text, then decide jointly (fix the implementation, accept the drift, or revert). Do NOT proceed silently.
+- **Reject — spec inaccurate**: Re-spawn Magic with a focused re-synthesis prompt referencing the human's correction. Do not just edit the spec yourself — Magic owns synthesis.
+
+The spec sign-off is the only place the human confirms "this is what we built". Never skip it.
+
+---
+
 ## MEMORY HARVEST (OPTIONAL — ZERO ARTIFACTS BY DEFAULT)
 
-After Magic's synthesis, before Final Output, run ONE harvest question.
+After spec sign-off, before Final Output, run ONE harvest question.
 
 **Goal:** capture confirmation signals (non-obvious calls the user accepted) and reusable patterns from the session — without creating any file artifacts unless the user explicitly opts in. Replaces the prior retro flow, which produced documents nobody read.
 
