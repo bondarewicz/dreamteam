@@ -159,6 +159,48 @@ if (fs.existsSync(mcpSpecPath) && fs.existsSync(userConfigPath)) {
   console.log("");
 }
 
+// --- Step 9: Merge hooks into ~/.claude/settings.json ---
+// Tracked source of truth: scripts/hooks.json. We merge (add-if-missing) into
+// the user-scope settings; we never overwrite or remove entries we don't own.
+const hooksSpecPath = path.join(SCRIPT_DIR, "hooks.json");
+const userSettingsPath = path.join(CLAUDE_DIR, "settings.json");
+
+if (fs.existsSync(hooksSpecPath)) {
+  console.log("Ensuring hooks...");
+  const hooksSpec = JSON.parse(fs.readFileSync(hooksSpecPath, "utf-8"));
+  const desiredHooks: Record<string, unknown[]> = hooksSpec.hooks ?? {};
+
+  const userSettings = fs.existsSync(userSettingsPath)
+    ? JSON.parse(fs.readFileSync(userSettingsPath, "utf-8"))
+    : {};
+  userSettings.hooks ??= {};
+
+  let hookChanges = 0;
+  for (const [event, entries] of Object.entries(desiredHooks)) {
+    userSettings.hooks[event] ??= [];
+    const existing = userSettings.hooks[event] as unknown[];
+    for (const entry of entries as unknown[]) {
+      const entryStr = JSON.stringify(entry);
+      const alreadyPresent = existing.some((e) => JSON.stringify(e) === entryStr);
+      if (!alreadyPresent) {
+        existing.push(entry);
+        console.log(`  + ${event} hook: ${(entry as Record<string, unknown>).matcher ?? "(no matcher)"}`);
+        hookChanges++;
+      } else {
+        console.log(`  = ${event} hook already present`);
+      }
+    }
+  }
+
+  if (hookChanges > 0) {
+    fs.writeFileSync(userSettingsPath, JSON.stringify(userSettings, null, 2));
+    console.log(`  ${hookChanges} hook(s) added.`);
+  } else {
+    console.log("  All hooks already present.");
+  }
+  console.log("");
+}
+
 // --- Summary ---
 console.log("=== Installation Complete ===");
 console.log("");
@@ -169,6 +211,7 @@ console.log("  shaq    — Primary Code Executor");
 console.log("  kobe    — Quality & Risk Enforcer");
 console.log("  pippen  — Stability, Integration & Defense");
 console.log("  magic   — Context Synthesizer & Team Glue");
+console.log("  drexler — Deletion-Bias Enforcer (scope & maintenance cost)");
 console.log("");
 console.log("Commands:");
 console.log("  /mj           — Architecture design & health diagnostics");
