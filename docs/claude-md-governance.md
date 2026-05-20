@@ -2,7 +2,7 @@
 
 ## Problem
 
-Project-level `CLAUDE.md` files are automatically loaded into context for **all** Claude Code sessions in that directory — including all Dream Team sub-agents (Bird, MJ, Shaq, Kobe, Pippen, Magic). Any team member can commit a `CLAUDE.md` that conflicts with agent instructions, alters agent behavior, or consumes agent context budget — without the agent owner's knowledge or consent.
+Project-level `CLAUDE.md` files are automatically loaded into context for **all** Claude Code sessions in that directory — including all Dream Team sub-agents (Bird, MJ, Shaq, Kobe, Pippen, Magic, Drexler). Any team member can commit a `CLAUDE.md` that conflicts with agent instructions, alters agent behavior, or consumes agent context budget — without the agent owner's knowledge or consent.
 
 ## Risk Summary
 

@@ -4,16 +4,17 @@ Source of truth for all Claude Code agents and commands. Install once, use every
 
 ## What's in the box
 
-**6 agents**, each with a matching `/command`, plus a `/team` orchestrator and `/code-review` for automated PR reviews.
+**7 agents**, each with a matching `/command`, plus a `/team` orchestrator and `/code-review` for automated PR reviews.
 
 | Agent | Command | Persona | Role | Model | Tools |
 |-------|---------|---------|------|-------|-------|
-| **bird** | `/bird` | Larry Bird | Domain Authority & Final Arbiter | `claude-opus-4-7` | Read, Grep, Glob, Bash |
-| **mj** | `/mj` | Michael Jordan | Strategic Systems Architect | `claude-opus-4-7` | + WebFetch, WebSearch |
-| **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | `claude-opus-4-7` | All except Task |
-| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | `claude-opus-4-7` | + Edit |
-| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | `claude-opus-4-7` | Read, Grep, Glob, Bash |
-| **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | `claude-opus-4-7` | + Write, Edit |
+| **bird** | `/bird` | Larry Bird | Domain Authority & Final Arbiter | `claude-opus-4-6` | Read, Grep, Glob, Bash |
+| **mj** | `/mj` | Michael Jordan | Strategic Systems Architect | `claude-opus-4-6` | + WebFetch, WebSearch, Context7, Honeycomb |
+| **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | `claude-sonnet-4-6` | All except Task |
+| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | `claude-opus-4-6` | + Edit |
+| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | `claude-opus-4-6` | Read, Grep, Glob, Bash, Honeycomb |
+| **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | `claude-sonnet-4-6` | + Write, Edit |
+| **drexler** | `/drexler` | Clyde "The Glide" Drexler | Deletion-Bias Enforcer | `claude-sonnet-4-6` | Read, Grep, Glob, Bash |
 
 Coach K (the orchestrator) runs on `claude-opus-4-7`. All agents are pinned to specific model builds rather than floating aliases so eval baselines stay reproducible across versions. Kobe and Magic carry `memory: user` and learn across sessions.
 
@@ -34,6 +35,7 @@ Coach K (the orchestrator) runs on `claude-opus-4-7`. All agents are pinned to s
 | `/kobe` | Code is written, need ruthless quality review |
 | `/pippen` | Verify operational/production readiness |
 | `/magic` | Synthesize perspectives into docs/ADRs |
+| `/drexler` | Scope review — flag duplication, over-engineering, maintenance debt |
 | `/team` | Task too big for one agent — full pipeline |
 | `/team` + Miro | Visual architecture & DDD on a board |
 | `/eventstorming` | Build a Brandolini-style Event Storm on a Miro board |
@@ -43,9 +45,9 @@ Coach K (the orchestrator) runs on `claude-opus-4-7`. All agents are pinned to s
 
 Coach K coordinates the team in three modes:
 
-- **Quick Fix (subagents)** — sequential pipeline for bugs and small features: Bird → Shaq → Kobe → Magic. Coach K curates a focused brief per agent instead of dumping all prior outputs. If Kobe finds issues, Shaq fixes and Kobe re-verifies — no fixes are skipped.
+- **Quick Fix (subagents)** — sequential pipeline for bugs and small features: Bird → Shaq → Kobe + Drexler (parallel) → Magic. Coach K curates a focused brief per agent instead of dumping all prior outputs. If Kobe finds bugs or Drexler finds bloat, Shaq fixes and reviewers re-verify — no fixes are skipped.
 - **PR Review (parallel subagents)** — Bird + MJ + Kobe review the diff in parallel, Coach K synthesizes to `docs/PR-<number>-review.md`. All `gh` commands are READ-ONLY; nothing is posted to GitHub.
-- **Full Team (agent teams)** — 6 independent sessions for new features and complex multi-file work. Phase 1 Bird + MJ analysis (concurrent) → Magic handoff brief → Coach K checkpoint + user approval → Shaq implements → Kobe + Pippen review (parallel) → Magic synthesis. Checkpoints saved to disk so earlier work isn't lost. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; falls back to Quick Fix if disabled.
+- **Full Team (agent teams)** — 7 independent sessions for new features and complex multi-file work. Phase 1 Bird + MJ analysis (concurrent) → Magic handoff brief → Coach K checkpoint + user approval → Shaq implements → Kobe + Pippen + Drexler review (parallel) → Magic synthesis. Checkpoints saved to disk so earlier work isn't lost. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; falls back to Quick Fix if disabled.
 
 **Git safety:** no agent ever commits or pushes. The user controls all git operations.
 
@@ -86,7 +88,7 @@ The `model:` field in each `agents/*.md` is the source of truth. Edit it and run
 
 **Effort note:** Claude Code subagent frontmatter does **not** expose a per-agent thinking/effort dial. Effort is governed globally by adaptive thinking — do **not** set `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1`. To raise or lower an agent's effective effort, choose a heavier/lighter model or tighten the prompt.
 
-**Turn limits:** shaq runs at `maxTurns: 100` (it writes code and iterates); the rest at `50`.
+**Turn limits:** shaq runs at `maxTurns: 100` (it writes code and iterates); drexler at `30` (search-only, no implementation); the rest at `50`.
 
 **Tuning quick reference:**
 
@@ -171,6 +173,7 @@ Agents call `mcp__context7__resolve-library-id` → `mcp__context7__get-library-
 
 - **Bird vs MJ** — correctness vs elegance
 - **Kobe vs Shaq** — quality vs speed
+- **Drexler vs Shaq** — deletion vs addition (maintenance cost watchdog)
 - **Coach K vs everyone** — shipping vs perfection
 
 The tension prevents groupthink.

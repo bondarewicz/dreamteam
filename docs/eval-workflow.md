@@ -6,7 +6,7 @@ A practical guide for diagnosing and improving agent eval scores. Written based 
 
 ## System overview
 
-Each agent (Bird, Kobe, MJ, Shaq, Pippen, Magic) has 20 eval scenarios. Each scenario runs through:
+Each agent (Bird, Kobe, MJ, Shaq, Pippen, Magic, Drexler) has eval scenarios. Each scenario runs through:
 
 1. **Agent call** — the agent produces output
 2. **Deterministic graders** — structural/format checks (field presence, JSON validity, value constraints)

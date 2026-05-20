@@ -189,7 +189,7 @@ Narrate as it runs:
 > SHOW: web app Scenarios Editor — `/scenarios/bird/scenario-01` (has full definition: prompt, expected behavior, failure modes, scoring rubric, graders)
 
 - [ ] **Scenario structure** — walk through each section in the web UI: prompt, expected behavior, failure modes, scoring rubric, grader configs
-- [ ] **"126 scenarios across 6 agents — ~20-25 each"**
+- [ ] **"scenarios across 7 agents"**
 - [ ] **"Each scenario is a realistic task, not a toy example"**
 - [ ] **"Under the hood it's just a markdown file anyone can edit"** — briefly flash the raw `.md` in editor to make the point, then back to web UI
 

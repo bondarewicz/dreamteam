@@ -6,7 +6,7 @@ Source: side-by-side of `ruvnet/ruflo` (cloned at `../ruflo`) vs dreamteam
 
 ## TL;DR
 
-Ruflo is a 6k-commit enterprise orchestration platform (76 plugin agents, 168 commands, 41 skills, custom runtime, MCP server, AgentDB/HNSW, 9 RL algorithms, Raft/BFT consensus). dreamteam is a thin Claude Code harness (7 agents, 10 commands, 3 TS scripts, no runtime). Most of ruflo is overkill for 6 agents. Five pieces are worth stealing.
+Ruflo is a 6k-commit enterprise orchestration platform (76 plugin agents, 168 commands, 41 skills, custom runtime, MCP server, AgentDB/HNSW, 9 RL algorithms, Raft/BFT consensus). dreamteam is a thin Claude Code harness (7 agents, 10 commands, 3 TS scripts, no runtime). Most of ruflo is overkill for 7 agents. Five pieces are worth stealing.
 
 ## Scale comparison
 
@@ -26,7 +26,7 @@ Ruflo is a 6k-commit enterprise orchestration platform (76 plugin agents, 168 co
 - **ruflo**: taxonomy + topology. Agents grouped by function (`consensus/raft-manager.md`, `swarm/mesh-coordinator.md`, `hive-mind/queen.md`). Coordination is *protocol-based*. Learning loop: RETRIEVE→JUDGE→DISTILL→CONSOLIDATE→ROUTE via AgentDB + HNSW + RL.
 - **dreamteam**: personas + scoped tools. Seven NBA identities with tool allowlists, Output Schema, Escalation Protocol, Confidence Assessment, Turn Budget. Coordination is *contract-based* — Coach K validates at checkpoints.
 
-One-liner: **ruflo solves "how do N agents coordinate at scale"**; **dreamteam solves "how do 6 agents stop talking past each other"**. Ruflo is a framework; dreamteam is a config.
+One-liner: **ruflo solves "how do N agents coordinate at scale"**; **dreamteam solves "how do 7 agents stop talking past each other"**. Ruflo is a framework; dreamteam is a config.
 
 ---
 
@@ -78,8 +78,8 @@ Two options:
 
 Ruflo's `stream-chain pipeline <name>` invokes predefined agent sequences. `commands/team.md` is 1,212 lines trying to cover everything in one flow. Split into named presets:
 
-- `/team quick-fix` → Shaq → Kobe (skip Bird/MJ)
-- `/team feature` → Bird → MJ → Shaq → Kobe → Pippen → Magic (current default)
+- `/team quick-fix` → Shaq → Kobe + Drexler (skip Bird/MJ)
+- `/team feature` → Bird → MJ → Shaq → Kobe + Pippen + Drexler → Magic (current default)
 - `/team pr-review` → Kobe + Pippen parallel, Magic synth
 - `/team audit` → Bird + Kobe (security mode) + Pippen
 - `/team debug` → MJ (health diagnostic) → Shaq → Pippen
@@ -107,9 +107,9 @@ Add `/verify <pr-or-file>`: loads the latest Bird acceptance-criteria output fro
 
 ## Explicitly skip
 
-- **Swarm topologies, consensus (Raft/BFT), hive-mind** — 6 agents, not 100. Coach K is sufficient.
+- **Swarm topologies, consensus (Raft/BFT), hive-mind** — 7 agents, not 100. Coach K is sufficient.
 - **AgentDB / HNSW / ReasoningBank / RL / neural** — requires a custom runtime. Claude Code's auto-memory already covers persistence needs.
-- **SPARC as a new framework** — Bird→MJ→Shaq→Kobe→Pippen→Magic flow is already SPARC-shaped (Spec/Arch/Refinement/Completion). Don't rename.
+- **SPARC as a new framework** — Bird→MJ→Shaq→Kobe+Pippen+Drexler→Magic flow is already SPARC-shaped (Spec/Arch/Refinement/Completion). Don't rename.
 - **MCP server / CLI / multi-provider (Claude/GPT/Gemini/Ollama)** — dreamteam's value is being a thin harness. Adding a runtime undoes that.
 - **Embedding bash in agent frontmatter** (ruflo: `hooks: pre: | echo ...`) — Claude Code hooks in `settings.json` are the right place. Matches `feedback_edit_repo_first` philosophy.
 - **Q-learning router / MoE experts** — dreamteam has ~7 routing decisions. A router isn't needed.
