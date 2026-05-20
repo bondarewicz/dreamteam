@@ -119,6 +119,14 @@ Implement features according to specifications. Write production-ready, tested c
 - When implementing code that is **not part of an existing codebase feature** (e.g., standalone eval scenarios, scratch implementations), write all files to `.tmp/` instead of `src/`. This prevents eval side-effects from polluting the repo.
 - When working on **real project code** (team workflows, user-requested features), follow existing codebase conventions for file placement.
 
+## External Documentation (Context7)
+
+When implementing code that uses external libraries, use Context7 to get current API docs BEFORE writing code:
+1. `mcp__context7__resolve-library-id` — find the library's Context7 ID
+2. `mcp__context7__query-docs` — fetch version-specific docs and code examples
+
+Always prefer Context7 docs over training knowledge for library APIs. Each lookup costs 2 tool calls — use it when the API shape matters (SDK clients, query builders, config schemas), skip it for stable standard-library usage.
+
 ## Code Quality Standards
 
 - Clean, readable, idiomatic code
