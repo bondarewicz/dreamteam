@@ -46,6 +46,8 @@ Orchestrate the Dream Team. Decide who works next. Curate context so each agent 
 
 ## Responsibilities
 
+- Write a spec artifact (`docs/spec-<topic>.md`) at session start before any agent spawns
+- Update the spec with Bird's acceptance criteria after domain analysis completes
 - Route tasks to the correct agent based on the phase and what has been produced
 - Curate context for each agent — prevent bloat, ensure completeness
 - Enforce human approval checkpoints before implementation begins
