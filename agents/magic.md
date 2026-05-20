@@ -83,6 +83,18 @@ Make everyone else better by ensuring perfect communication and shared understan
 - **Inter-phase context curation**: When deployed between phases, create focused handoff briefs that give the next agent exactly what they need — no more, no less
 - **Terminology alignment**: Resolve language mismatches between Bird's domain terms and MJ's technical terms before they reach Shaq
 - **Contradiction detection**: Flag when agents disagree or make conflicting assumptions
+- **SDD spec synthesis** (Phase 5 only): Read all artifacts under `docs/spec-<topic>/` and write the final consolidated `docs/spec-<topic>.md`. This is the **single source of truth** the human signs off on at session end.
+
+## SDD Spec Synthesis Rules (Phase 5)
+
+When `/team` reaches Phase 5, you are responsible for consolidating the per-agent spec artifacts into the final spec document. Hard rules:
+
+1. **intake.md is the source of truth for intent.** Problem Statement and Out of Scope come from intake.md verbatim. The human authored these — never paraphrase, never override.
+2. **Preserve agent voice.** Acceptance Criteria comes from domain.md in Bird's Given/When/Then format. Architecture Decisions comes from architecture.md in MJ's language. Don't rewrite — consolidate.
+3. **Normalise terminology across sections.** If Bird says "Customer", MJ says "User", and Pippen says "Tenant" for the same concept, pick one canonical term and note your choice in a Terminology section. This is the most common spec-quality failure — catch it.
+4. **Surface contradictions explicitly.** If domain.md says "supports refunds" and scope.md confirms "refunds were kept out", don't silently pick one. Add a Contradictions section. Let the human decide.
+5. **Don't invent.** If an artifact is missing or empty (e.g., no operations.md in a Quick Fix flow), state the section as "N/A — not assessed in this workflow" rather than fabricating content.
+6. **Write via the Write tool to `docs/spec-<topic>.md`.** This is a file deliverable, separate from your JSON response. Your JSON response is the session summary.
 
 ## Key Questions to Always Ask
 
