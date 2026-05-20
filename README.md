@@ -41,6 +41,17 @@ Coach K (the orchestrator) runs on `claude-opus-4-7`. All agents are pinned to s
 | `/REDACTED` | Build a Brandolini-style REDACTED on a Miro board |
 | `/code-review` | Automated PR review (local-only output) |
 
+## Spec-Driven Development (SDD)
+
+dreamteam is **spec-driven**: the spec is the contract, and every `/team` session produces one at `docs/spec-<topic>.md`. The twist vs. single-author SDD tools (GitHub Spec Kit, AWS Kiro, Cursor Plan Mode): the spec is **multi-authored**.
+
+- **You** author intent in `docs/spec-<topic>/intake.md` — Problem Statement, Out of Scope, constraints. Coach K drafts from your one-liner, you confirm or rewrite via `AskUserQuestion`. If you wrote the intake offline first, dreamteam detects it and skips the draft.
+- **Each agent** writes their own artifact under `docs/spec-<topic>/`: Bird → `domain.md` (acceptance criteria), MJ → `architecture.md` (decisions + NFRs), Pippen → `operations.md` (readiness criteria), Drexler → `scope.md` (what was kept out), Kobe → `review.md` (quality findings).
+- **Magic** synthesises everything into the final `docs/spec-<topic>.md` — normalising terminology across sections (e.g. Bird's "Customer" vs Pippen's "Tenant") and flagging contradictions explicitly rather than silently picking one.
+- **You sign off** on the synthesised spec before the session ends. If it doesn't match intent, you reject and the spec is re-synthesised.
+
+Each artifact preserves the authoring agent's voice, so the spec isn't Coach K's paraphrase of agent output — it's the agents' actual work, stitched together. The hook at `scripts/check-plan.ts` advises (never blocks) when `Edit`/`Write` runs without an `intake.md` present.
+
 ## /team — Coach K Orchestration
 
 Coach K coordinates the team in three modes:
