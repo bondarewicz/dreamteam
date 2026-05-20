@@ -24,7 +24,7 @@
 
 > SHOW: README.md agent table or a slide with the roster
 
-- [ ] **"We built a team of 6 AI specialists — each one does one thing well"**
+- [ ] **"We built a team of 7 AI specialists plus Coach K (the orchestrator) — each specialist does one thing well"**
 
 Go through the roster. Keep it conversational:
 
@@ -155,7 +155,7 @@ Walk through the spec file top to bottom:
 - [ ] **Three modes:**
   - Quick Fix — sequential subagents, fast, lower cost
   - PR Review — 3 agents in parallel, local output only
-  - Full Team — 6 independent sessions via agent teams API
+  - Full Team — 7 independent sessions via agent teams API, spec-driven (you author intake, each agent writes their artifact, Magic synthesises the final spec, you sign it off)
 
 - [ ] **Context curation** — "Coach K doesn't dump all output to the next agent. It curates a focused brief. Only what that agent needs."
 

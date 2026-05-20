@@ -45,9 +45,9 @@ Coach K (the orchestrator) runs on `claude-opus-4-7`. All agents are pinned to s
 
 Coach K coordinates the team in three modes:
 
-- **Quick Fix (subagents)** — sequential pipeline for bugs and small features: Bird → Shaq → Kobe + Drexler (parallel) → Magic. Coach K curates a focused brief per agent instead of dumping all prior outputs. If Kobe finds bugs or Drexler finds bloat, Shaq fixes and reviewers re-verify — no fixes are skipped.
+- **Quick Fix (subagents)** — sequential pipeline for bugs and small features: **you author intake** → Bird → Shaq → Kobe + Drexler (parallel) → Magic synthesises final spec → **you sign it off**. Coach K curates a focused brief per agent instead of dumping all prior outputs. If Kobe finds bugs or Drexler finds bloat, Shaq fixes and reviewers re-verify — no fixes are skipped.
 - **PR Review (parallel subagents)** — Bird + MJ + Kobe review the diff in parallel, Coach K synthesizes to `docs/PR-<number>-review.md`. All `gh` commands are READ-ONLY; nothing is posted to GitHub.
-- **Full Team (agent teams)** — 7 independent sessions for new features and complex multi-file work. Phase 1 Bird + MJ analysis (concurrent) → Magic handoff brief → Coach K checkpoint + user approval → Shaq implements → Kobe + Pippen + Drexler review (parallel) → Magic synthesis. Checkpoints saved to disk so earlier work isn't lost. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; falls back to Quick Fix if disabled.
+- **Full Team (agent teams)** — 7 independent sessions for new features and complex multi-file work. **You author intake** at `docs/spec-<topic>/intake.md` → Phase 1 Bird + MJ analysis (concurrent, each writing their own artifact: `domain.md`, `architecture.md`) → Magic handoff brief → Coach K checkpoint + user approval → Shaq implements → Kobe + Pippen + Drexler review (parallel, writing `review.md`, `operations.md`, `scope.md`) → Magic consolidates all artifacts into the final `docs/spec-<topic>.md` → **you sign it off**. Checkpoints saved to disk so earlier work isn't lost. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; falls back to Quick Fix if disabled.
 
 **Git safety:** no agent ever commits or pushes. The user controls all git operations.
 
@@ -171,9 +171,11 @@ Agents call `mcp__context7__resolve-library-id` → `mcp__context7__get-library-
 
 ## Built-in Tension (by design)
 
+- **You vs Agents** — author of intent vs authors of artifacts (SDD: `intake.md` is yours, everything else is theirs)
 - **Bird vs MJ** — correctness vs elegance
 - **Kobe vs Shaq** — quality vs speed
 - **Drexler vs Shaq** — deletion vs addition (maintenance cost watchdog)
+- **Magic: preserve voice vs normalise terminology** — keep each agent's section faithful, but resolve cross-section drift before the spec ships
 - **Coach K vs everyone** — shipping vs perfection
 
 The tension prevents groupthink.
