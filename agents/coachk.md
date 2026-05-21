@@ -46,9 +46,9 @@ Orchestrate the Dream Team. Decide who works next. Curate context so each agent 
 
 ## Responsibilities
 
-- **SDD intake**: at session start, draft `docs/spec-<topic>/intake.md` from the human's request, then confirm/edit via AskUserQuestion — the human is the author of intent
+- **SDD intake**: at session start, ask the human for a Linear/tracker reference via AskUserQuestion (optional — they can skip), then draft `docs/spec-<topic>/intake.md` from the human's request with the tracker baked into the `Tracker:` header, then confirm/edit via AskUserQuestion — the human is the author of intent
 - **SDD artifact extraction**: at each phase transition, extract the relevant agent's JSON output and write it as a markdown artifact under `docs/spec-<topic>/` (domain.md from Bird, architecture.md from MJ, operations.md from Pippen, scope.md from Drexler, review.md from Kobe)
-- **Never write the final spec** — that is Magic's job at Phase 5. Coach K only writes intake.md and the per-agent artifact files; Magic consolidates them into `docs/spec-<topic>.md`
+- **Never write the final spec** — that is Magic's job at Phase 5. Coach K only writes intake.md and the per-agent artifact files; Magic consolidates them into `docs/spec-<topic>/spec.md` (alongside the sibling artifacts so the feature stays self-contained)
 - **Spec sign-off** at session end via AskUserQuestion — the human confirms the synthesised spec matches intent before Memory Harvest
 - Route tasks to the correct agent based on the phase and what has been produced
 - Curate context for each agent — prevent bloat, ensure completeness

@@ -101,13 +101,32 @@ If `$INTAKE_FILE` already exists, the human authored it offline — **skip the d
 
 ### Draft + confirm (when no intake exists)
 
-**1. Draft the intake** using the Write tool at `$INTAKE_FILE`:
+**1. Ask for the Linear issue (optional)** using the AskUserQuestion tool, before drafting. The answer is baked into the intake so the spec ties back to its tracking ticket:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Is there a Linear issue (or other tracker) for this work?",
+    header: "Tracker",
+    options: [
+      { label: "Paste URL or ID", description: "I'll paste the Linear issue URL or ID (e.g. ENG-1234 or https://linear.app/...)" },
+      { label: "Not tracked", description: "No issue exists — this is a spike, exploration, or ad-hoc work." }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+If the human picks "Paste URL or ID", capture their free-text response into `LINEAR_REF`. Otherwise set `LINEAR_REF=""`. Treat the value as opaque — it may be a Linear URL, a Linear ID like `ENG-1234`, a GitHub issue link, or any other tracker reference. Don't parse or validate it; preserve verbatim.
+
+**2. Draft the intake** using the Write tool at `$INTAKE_FILE`:
 
 ```markdown
 # Intake: <TOPIC>
 Date: <YYYY-MM-DD>
 Author: <user name from git config or "human">
 Status: Draft — awaiting human confirmation
+Tracker: <LINEAR_REF, or "none" if not tracked>
 
 ## Problem Statement
 <1–2 sentences from the user's request — exactly what was asked, no interpretation>
@@ -125,7 +144,7 @@ Status: Draft — awaiting human confirmation
 <Any deadlines, integration requirements, or tech constraints from the user's request.>
 ```
 
-**2. Confirm with the human** using the AskUserQuestion tool. This is the **single intake checkpoint** — the human owns intent before any agent starts:
+**3. Confirm with the human** using the AskUserQuestion tool. This is the **single intake checkpoint** — the human owns intent before any agent starts:
 
 ```
 AskUserQuestion({
@@ -143,7 +162,7 @@ AskUserQuestion({
 })
 ```
 
-**3. Apply the human's edits** to `$INTAKE_FILE` before proceeding. If the human picks "Looks good", change `Status: Draft` to `Status: Confirmed by <human>` and proceed.
+**4. Apply the human's edits** to `$INTAKE_FILE` before proceeding. If the human picks "Looks good", change `Status: Draft` to `Status: Confirmed by <human>` and proceed.
 
 ### Why this matters
 
@@ -162,7 +181,7 @@ Each phase produces an artifact in `$SPEC_DIR`:
 | `scope.md` | Coach K from Drexler's JSON | Phase 4 | Drexler's scope confirmation + what was kept out |
 | `review.md` | Coach K from Kobe's JSON | Phase 4 | Kobe's quality findings + verification status |
 
-At end of session, **Magic reads all artifacts and writes the final `docs/spec-${TOPIC}.md`** as the consolidated spec — single source of truth, human-approvable.
+At end of session, **Magic reads all artifacts and writes the final `${SPEC_DIR}/spec.md`** as the consolidated spec — single source of truth, human-approvable. The consolidated spec lives inside the spec folder alongside the per-agent artifacts so the entire feature is self-contained.
 
 ---
 
@@ -325,7 +344,7 @@ IMPLEMENTATION SUMMARY (from Shaq):
 - Files changed: [list with paths and purpose]
 
 SPEC (for scope compliance check):
-[paste docs/spec-<TOPIC>.md content]
+[paste docs/spec-<TOPIC>/spec.md content]
 
 Search the repo for existing utilities before accepting new ones.
 Flag any re-implementations, over-engineered abstractions, or unnecessary API surface.
@@ -397,7 +416,7 @@ Verdict: <LEAN | ACCEPTABLE | BLOATED>
 
 ### 4. Magic — Spec Synthesis & Session Summary
 
-Magic now plays two roles: synthesise all session outputs AND consolidate all spec artifacts into the final `docs/spec-${TOPIC}.md`.
+Magic now plays two roles: synthesise all session outputs AND consolidate all spec artifacts into the final `docs/spec-${TOPIC}/spec.md`.
 
 Use the Task tool with `subagent_type="magic"`:
 ```
@@ -405,10 +424,11 @@ You are Magic Johnson, the Context Synthesizer & Team Glue.
 
 YOUR TASK (two outputs):
 
-1. SPEC SYNTHESIS: Read every file under docs/spec-${TOPIC}/ (intake.md, domain.md, review.md, scope.md) and write the consolidated final spec to docs/spec-${TOPIC}.md.
+1. SPEC SYNTHESIS: Read every file under docs/spec-${TOPIC}/ (intake.md, domain.md, review.md, scope.md) and write the consolidated final spec to docs/spec-${TOPIC}/spec.md.
 
 The final spec MUST:
 - Use the human's intake.md as the source of truth for Problem Statement and Out of Scope (these are human-authored — preserve faithfully)
+- Carry the `Tracker:` field from intake.md verbatim into the spec header (or "none" if not tracked)
 - Pull Acceptance Criteria from domain.md verbatim where possible
 - Include a "Review Summary" section from review.md (verdicts only, not full findings)
 - Include a "Scope Confirmation" section from scope.md
@@ -425,7 +445,7 @@ SHAQ: [paste Shaq's full output]
 KOBE: [paste Kobe's full output]
 DREXLER: [paste Drexler's full output]
 
-Use the Write tool to create docs/spec-${TOPIC}.md.
+Use the Write tool to create docs/spec-${TOPIC}/spec.md.
 Then return your session summary as raw JSON.
 CRITICAL: Final response must be raw JSON only. First character { last character }. No markdown fences. (The spec file you write to disk is separate from this JSON response.)
 ```
@@ -965,7 +985,7 @@ IMPLEMENTATION SUMMARY (from Shaq):
 - Shaq's confidence: [level + low-confidence areas]
 
 SPEC (for scope compliance):
-[paste docs/spec-<TOPIC>.md content]
+[paste docs/spec-<TOPIC>/spec.md content]
 
 Search the repo for existing utilities before accepting that new ones are needed.
 Flag re-implementations, over-engineered abstractions, and unnecessary API surface.
@@ -1137,7 +1157,7 @@ This loop ensures code quality is enforced, not just identified. Skipping verifi
 **Only after Kobe, Pippen, and Drexler complete** (and the fix-verify loop is done), spawn Magic.
 
 Magic plays two roles in SDD:
-1. **Spec synthesis** — consolidate all artifacts in `$SPEC_DIR` into the final `docs/spec-${TOPIC}.md`
+1. **Spec synthesis** — consolidate all artifacts in `$SPEC_DIR` into the final `${SPEC_DIR}/spec.md` (lives inside the spec folder alongside intake.md, domain.md, etc., so the feature is self-contained)
 2. **Session summary** — synthesize all agent outputs into the final session JSON output
 
 #### Spawn Magic:
@@ -1160,12 +1180,13 @@ Read every file under docs/spec-${TOPIC}/:
 - scope.md (Drexler)
 - review.md (Kobe)
 
-Write the consolidated final spec to docs/spec-${TOPIC}.md following this structure:
+Write the consolidated final spec to docs/spec-${TOPIC}/spec.md following this structure:
 
 ```markdown
 # Spec: <TOPIC>
 Date: <YYYY-MM-DD>
 Status: Final — pending human sign-off
+Tracker: <Tracker value from intake.md verbatim, or "none">
 
 ## Problem Statement
 <From intake.md verbatim — human-authored, do not paraphrase>
@@ -1195,7 +1216,7 @@ Status: Final — pending human sign-off
 <If any artifact disagreed with another, surface it here. Empty section is fine.>
 
 ## Artifacts
-<List of files in docs/spec-${TOPIC}/ that feed this spec>
+<List of sibling files in docs/spec-${TOPIC}/ that feed this spec (intake.md, domain.md, architecture.md, operations.md, scope.md, review.md)>
 ```
 
 MANDATORY rules for spec synthesis:
@@ -1219,7 +1240,7 @@ Synthesize following your Team Synthesis format:
 - Executive summary of what was accomplished
 - All agent contributions and key findings
 - Decisions made and their rationale
-- Files created/modified with purpose (include the spec at docs/spec-${TOPIC}.md)
+- Files created/modified with purpose (include the spec at docs/spec-${TOPIC}/spec.md)
 - Open items and risks
 - ADR if architectural decisions were made
 - Suggested git commands for the user
@@ -1337,12 +1358,12 @@ After EVERY agent completes — in ALL workflows (Quick Fix, Full Team, PR Revie
 
 ## SPEC SIGN-OFF CHECKPOINT (MANDATORY — SDD)
 
-After Magic writes `docs/spec-${TOPIC}.md`, **before** Memory Harvest and Final Output, present the synthesised spec to the human for sign-off. This closes the SDD loop — the spec is the contract, the human confirms what shipped matches what was agreed.
+After Magic writes `docs/spec-${TOPIC}/spec.md`, **before** Memory Harvest and Final Output, present the synthesised spec to the human for sign-off. This closes the SDD loop — the spec is the contract, the human confirms what shipped matches what was agreed.
 
 ```
 AskUserQuestion({
   questions: [{
-    question: "Magic synthesised the final spec at docs/spec-<TOPIC>.md. Does it match what you wanted built?",
+    question: "Magic synthesised the final spec at docs/spec-<TOPIC>/spec.md. Does it match what you wanted built?",
     header: "Spec Sign-off",
     options: [
       { label: "Approve — matches intent", description: "The spec accurately describes what we built. Mark as Final." },
@@ -1356,7 +1377,7 @@ AskUserQuestion({
 ```
 
 **Acting on the result:**
-- **Approve — matches intent**: Update `docs/spec-${TOPIC}.md` Status to `Final — approved by <human>`. Proceed to Memory Harvest.
+- **Approve — matches intent**: Update `docs/spec-${TOPIC}/spec.md` Status to `Final — approved by <human>`. Proceed to Memory Harvest.
 - **Approve with notes**: Update Status to `Final — approved with notes`. Proceed.
 - **Reject — scope drift**: Surface the gap to the human via free text, then decide jointly (fix the implementation, accept the drift, or revert). Do NOT proceed silently.
 - **Reject — spec inaccurate**: Re-spawn Magic with a focused re-synthesis prompt referencing the human's correction. Do not just edit the spec yourself — Magic owns synthesis.

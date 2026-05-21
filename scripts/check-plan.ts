@@ -15,13 +15,11 @@ function hasSpec(dir: string): boolean {
     const docsDir = path.join(dir, "docs");
     if (fs.existsSync(docsDir)) {
       for (const entry of fs.readdirSync(docsDir, { withFileTypes: true })) {
-        // SDD final spec — Magic writes docs/spec-<topic>.md at Phase 5
-        if (entry.isFile() && entry.name.startsWith("spec-") && entry.name.endsWith(".md"))
-          return true;
-        // SDD intake — Coach K writes docs/spec-<topic>/intake.md at STEP 1b
+        // SDD spec folder — Coach K writes intake.md at STEP 1b, Magic writes spec.md at Phase 5
         if (entry.isDirectory() && entry.name.startsWith("spec-")) {
-          const intake = path.join(docsDir, entry.name, "intake.md");
-          if (fs.existsSync(intake)) return true;
+          const specDir = path.join(docsDir, entry.name);
+          if (fs.existsSync(path.join(specDir, "intake.md"))) return true;
+          if (fs.existsSync(path.join(specDir, "spec.md"))) return true;
         }
       }
     }
@@ -37,7 +35,7 @@ function hasSpec(dir: string): boolean {
 if (!hasSpec(process.cwd())) {
   process.stderr.write(
     "[dreamteam] No plan spec found. Use /team to have Coach K plan before implementing, " +
-      "or create docs/spec-<topic>.md first.\n"
+      "or create docs/spec-<topic>/intake.md first.\n"
   );
 }
 

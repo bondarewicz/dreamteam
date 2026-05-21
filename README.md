@@ -43,11 +43,11 @@ Coach K (the orchestrator) runs on `claude-opus-4-7`. All agents are pinned to s
 
 ## Spec-Driven Development (SDD)
 
-dreamteam is **spec-driven**: the spec is the contract, and every `/team` session produces one at `docs/spec-<topic>.md`. The twist vs. single-author SDD tools (GitHub Spec Kit, AWS Kiro, Cursor Plan Mode): the spec is **multi-authored**.
+dreamteam is **spec-driven**: the spec is the contract, and every `/team` session produces one at `docs/spec-<topic>/spec.md`. The twist vs. single-author SDD tools (GitHub Spec Kit, AWS Kiro, Cursor Plan Mode): the spec is **multi-authored**, and the whole feature lives in a single folder — intake, per-agent artifacts, and the consolidated spec all together.
 
-- **You** author intent in `docs/spec-<topic>/intake.md` — Problem Statement, Out of Scope, constraints. Coach K drafts from your one-liner, you confirm or rewrite via `AskUserQuestion`. If you wrote the intake offline first, dreamteam detects it and skips the draft.
+- **You** author intent in `docs/spec-<topic>/intake.md` — Problem Statement, Out of Scope, constraints. Coach K drafts from your one-liner, asks for an optional Linear/tracker reference via `AskUserQuestion` and bakes it into the intake's `Tracker:` header, then you confirm or rewrite via `AskUserQuestion`. If you wrote the intake offline first, dreamteam detects it and skips the draft.
 - **Each agent** writes their own artifact under `docs/spec-<topic>/`: Bird → `domain.md` (acceptance criteria), MJ → `architecture.md` (decisions + NFRs), Pippen → `operations.md` (readiness criteria), Drexler → `scope.md` (what was kept out), Kobe → `review.md` (quality findings).
-- **Magic** synthesises everything into the final `docs/spec-<topic>.md` — normalising terminology across sections (e.g. Bird's "Customer" vs Pippen's "Tenant") and flagging contradictions explicitly rather than silently picking one.
+- **Magic** synthesises everything into the final `docs/spec-<topic>/spec.md` — normalising terminology across sections (e.g. Bird's "Customer" vs Pippen's "Tenant") and flagging contradictions explicitly rather than silently picking one.
 - **You sign off** on the synthesised spec before the session ends. If it doesn't match intent, you reject and the spec is re-synthesised.
 
 Each artifact preserves the authoring agent's voice, so the spec isn't Coach K's paraphrase of agent output — it's the agents' actual work, stitched together. The hook at `scripts/check-plan.ts` advises (never blocks) when `Edit`/`Write` runs without an `intake.md` present.
@@ -58,7 +58,7 @@ Coach K coordinates the team in three modes:
 
 - **Quick Fix (subagents)** — sequential pipeline for bugs and small features: **you author intake** → Bird → Shaq → Kobe + Drexler (parallel) → Magic synthesises final spec → **you sign it off**. Coach K curates a focused brief per agent instead of dumping all prior outputs. If Kobe finds bugs or Drexler finds bloat, Shaq fixes and reviewers re-verify — no fixes are skipped.
 - **PR Review (parallel subagents)** — Bird + MJ + Kobe review the diff in parallel, Coach K synthesizes to `docs/PR-<number>-review.md`. All `gh` commands are READ-ONLY; nothing is posted to GitHub.
-- **Full Team (agent teams)** — 7 independent sessions for new features and complex multi-file work. **You author intake** at `docs/spec-<topic>/intake.md` → Phase 1 Bird + MJ analysis (concurrent, each writing their own artifact: `domain.md`, `architecture.md`) → Magic handoff brief → Coach K checkpoint + user approval → Shaq implements → Kobe + Pippen + Drexler review (parallel, writing `review.md`, `operations.md`, `scope.md`) → Magic consolidates all artifacts into the final `docs/spec-<topic>.md` → **you sign it off**. Checkpoints saved to disk so earlier work isn't lost. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; falls back to Quick Fix if disabled.
+- **Full Team (agent teams)** — 7 independent sessions for new features and complex multi-file work. **You author intake** at `docs/spec-<topic>/intake.md` → Phase 1 Bird + MJ analysis (concurrent, each writing their own artifact: `domain.md`, `architecture.md`) → Magic handoff brief → Coach K checkpoint + user approval → Shaq implements → Kobe + Pippen + Drexler review (parallel, writing `review.md`, `operations.md`, `scope.md`) → Magic consolidates all artifacts into the final `docs/spec-<topic>/spec.md` → **you sign it off**. Checkpoints saved to disk so earlier work isn't lost. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; falls back to Quick Fix if disabled.
 
 **Git safety:** no agent ever commits or pushes. The user controls all git operations.
 
