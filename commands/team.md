@@ -203,6 +203,8 @@ Use the **AskUserQuestion** tool to ask the user:
 
 For focused, well-understood changes. 4 subagents, sequential, within this session.
 
+> **Design note:** Quick Fix intentionally uses sequential subagents with NO `team_name`. Inter-agent messaging is not needed here (agents run one at a time, not concurrently), so creating a team bus would add overhead with no benefit. Do NOT add `team_name` to Quick Fix agent calls.
+
 ### 1. Bird — Domain Analysis (lightweight)
 
 Use the Task tool with `subagent_type="bird"`:
@@ -637,9 +639,35 @@ For significant features requiring the full Dream Team working as parallel indep
 
 **DO NOT spawn all 6 agents at once.** Agents that are idle will jump ahead and produce wasted work. Instead, spawn agents in phases — only when their inputs are ready.
 
-### Create the Agent Team
+### Create the Agent Team (MANDATORY — do this before any agent is spawned)
 
-Create an agent team called "dream-team". Use **delegate mode** so you stay focused on coordination and don't implement anything yourself.
+> **WARNING — Silent Degradation Mode:** If you spawn agents via bare parallel `Agent` tool calls WITHOUT a `team_name`, they run as ISOLATED subagents. They cannot send or receive messages from each other. There is NO error — the session proceeds silently as if collaboration is happening, but it is not. The entire "friction by design" value collapses. ALWAYS use `TeamCreate` first and pass `team_name` to every concurrent-phase spawn.
+
+**Step 1: Generate a unique team name.**
+
+Use full epoch seconds for collision resistance:
+
+```bash
+TEAM_NAME="dream-team-$(date +%s)"
+# Example result: dream-team-1748477382
+```
+
+**Step 2: Call `TeamCreate` with the generated name.**
+
+```
+TeamCreate({ name: "<TEAM_NAME>" })
+```
+
+- If `TeamCreate` succeeds → record `TEAM_NAME` and proceed.
+- If `TeamCreate` fails with "team already exists" → this is likely a crashed-session leftover. Perform cleanup-before-create:
+  1. Call `TeamDelete({ name: "<TEAM_NAME>" })`.
+  2. If `TeamDelete` succeeds → retry `TeamCreate` with the ORIGINAL name.
+  3. If `TeamDelete` fails (a live session owns it) → append `-2` to the name and retry `TeamCreate`.
+  4. On a third failure → generate a fresh timestamp and retry once more.
+  5. After 3 total `TeamCreate` attempts without success → surface the error to the user and stop. Do NOT proceed without a valid team.
+- If `TeamCreate` fails for any other reason → surface the error to the user and stop. Do NOT proceed without a valid team.
+
+Use **delegate mode** so you stay focused on coordination and don't implement anything yourself.
 
 ### Phase 1: Analysis (Bird + MJ — CONCURRENT)
 
@@ -656,8 +684,15 @@ Spawn Bird and MJ simultaneously. They work in parallel and exchange findings vi
 8. **Synthesis** (unassigned) — blocked by tasks 6 and 7
 
 #### Spawn Bird:
+
+Call the Agent tool with these parameters — ALL three are required for message bus participation:
+
 ```
-You are Larry Bird, the Domain Authority and Final Arbiter.
+Agent({
+  name: "bird",
+  team_name: "<TEAM_NAME>",
+  run_in_background: true,
+  prompt: "You are Larry Bird, the Domain Authority and Final Arbiter.
 Read your full agent definition at ~/.claude/agents/bird.md for detailed instructions.
 Follow the Team Protocol section EXACTLY.
 
@@ -672,12 +707,20 @@ Provide a comprehensive domain analysis following your Output Schema:
 - Confidence assessment
 
 MJ is working on architecture design IN PARALLEL with you. When you complete your domain analysis, message MJ with your key findings so he can validate his architecture against your domain rules. Then message Coach K (the lead) with your complete output.
-CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
+CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences."
+})
 ```
 
 #### Spawn MJ:
+
+Call the Agent tool with these parameters — ALL three are required for message bus participation:
+
 ```
-You are Michael Jordan, the Strategic Systems Architect.
+Agent({
+  name: "mj",
+  team_name: "<TEAM_NAME>",
+  run_in_background: true,
+  prompt: "You are Michael Jordan, the Strategic Systems Architect.
 Read your full agent definition at ~/.claude/agents/mj.md for detailed instructions.
 Follow the Team Protocol section EXACTLY.
 
@@ -697,8 +740,19 @@ Design the system architecture following your Output Schema:
 When Bird messages you with domain findings, INTEGRATE them into your architecture. Adjust your design if Bird's domain rules reveal constraints you didn't account for. If Bird's domain model conflicts with your architecture, use your Escalation Protocol.
 
 When done, message Coach K (the lead) with your complete output.
-CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
+CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences."
+})
 ```
+
+#### Verify team members joined (gate before Phase 1 proceeds):
+
+After spawning Bird and MJ, wait for the FIRST MESSAGE from each agent as the hard proof of bus join. Receipt of a message from an agent IS proof it has joined the bus and is active.
+
+- **Wait** for an incoming message from `bird` and an incoming message from `mj`.
+- If a message from a given agent does NOT arrive within ~30 seconds, surface an error to the user and do NOT proceed: "Agent [name] did not join the bus — harness issue detected. Do not continue."
+- Any `config.json` at `~/.claude/teams/<TEAM_NAME>/config.json` may be read as an OPTIONAL advisory diagnostic only — it is NOT the gate and its absence or stale content must not cause a false-fail or false-pass.
+
+**Only after receiving the first message from BOTH Bird and MJ, treat Phase 1 as started.**
 
 **Wait for both Bird and MJ to complete before proceeding to Phase 1b.**
 
@@ -775,8 +829,15 @@ DRAFT_FILE="${REPO_ROOT}/evals/mj/drafts/draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-$
 After Bird and MJ complete, spawn Magic to create a curated handoff brief for Shaq. This prevents context bloat and resolves terminology mismatches before implementation.
 
 #### Spawn Magic:
+
+Magic runs sequentially (after Bird and MJ), so `run_in_background` is not required here. However, pass `team_name` and `name` so Magic can use `SendMessage` to notify Coach K upon completion:
+
 ```
-You are Magic Johnson, the Context Synthesizer & Team Glue.
+Agent({
+  name: "magic",
+  team_name: "<TEAM_NAME>",
+  run_in_background: false,
+  prompt: "You are Magic Johnson, the Context Synthesizer & Team Glue.
 Read your full agent definition at ~/.claude/agents/magic.md for detailed instructions.
 
 YOUR TASK (Task #3): Create a Handoff Brief for Shaq.
@@ -794,7 +855,8 @@ BIRD OUTPUT: [paste Bird's complete output]
 MJ OUTPUT: [paste MJ's complete output]
 
 When done, message Coach K (the lead) with the Handoff Brief.
-CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
+CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences."
+})
 ```
 
 **Wait for Magic to complete before proceeding to Phase 2.**
@@ -861,8 +923,15 @@ Date: [today]
 **Only after user approval**, spawn Shaq. Shaq has plan mode enforced — he must submit a plan before writing code.
 
 #### Spawn Shaq:
+
+Shaq runs sequentially (after user approval). Pass `team_name` and `name` so Shaq can message Coach K with his plan and final output:
+
 ```
-You are Shaquille O'Neal, the Primary Code Executor.
+Agent({
+  name: "shaq",
+  team_name: "<TEAM_NAME>",
+  run_in_background: false,
+  prompt: "You are Shaquille O'Neal, the Primary Code Executor.
 Read your full agent definition at ~/.claude/agents/shaq.md for detailed instructions.
 Follow the Team Protocol section EXACTLY, especially the Plan Mode section.
 
@@ -881,7 +950,8 @@ IMPORTANT:
 - NEVER run git commit or git push — leave git to the user
 
 When done, message Coach K (the lead) with your complete output following your Output Schema.
-CRITICAL: Your final response must be raw JSON only. First character { last character }. No markdown fences. Tool calls during implementation are unaffected.
+CRITICAL: Your final response must be raw JSON only. First character { last character }. No markdown fences. Tool calls during implementation are unaffected."
+})
 ```
 
 **When Shaq submits his plan for approval, review it and forward to the user if needed. Only approve if the approach matches what was requested (correct language, framework, patterns).**
@@ -900,11 +970,16 @@ Read the template at `evals/draft-template.md` and use the Write tool to create 
 
 ### Phase 4: Review (Kobe + Pippen + Drexler in parallel)
 
-**Only after Shaq completes**, spawn Kobe, Pippen, and Drexler simultaneously.
+**Only after Shaq completes**, spawn Kobe, Pippen, and Drexler simultaneously. All three MUST be spawned with `team_name`, `name`, and `run_in_background: true` — these are concurrent-phase agents and must participate in the message bus.
 
 #### Spawn Kobe:
+
 ```
-You are Kobe Bryant, the Relentless Quality & Risk Enforcer.
+Agent({
+  name: "kobe",
+  team_name: "<TEAM_NAME>",
+  run_in_background: true,
+  prompt: "You are Kobe Bryant, the Relentless Quality & Risk Enforcer.
 Read your full agent definition at ~/.claude/agents/kobe.md for detailed instructions.
 Follow the Team Protocol section EXACTLY, especially the Pre-Review Gate.
 
@@ -913,7 +988,7 @@ YOUR TASK (Task #6): Review the implementation for [user's request]
 IMPORTANT: Before starting, use Glob to verify that implementation files exist on disk.
 If files don't exist, message Coach K and STOP.
 
-DOMAIN RULES (from Bird — what "correct" means):
+DOMAIN RULES (from Bird — what 'correct' means):
 [paste Bird's business rules and acceptance criteria sections only]
 
 IMPLEMENTATION SUMMARY (from Shaq):
@@ -932,12 +1007,18 @@ Review following your Output Schema:
 - Verdict: SHIP / SHIP WITH FIXES / BLOCK
 
 When done, message Coach K (the lead) with your findings.
-CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
+CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences."
+})
 ```
 
 #### Spawn Pippen:
+
 ```
-You are Scottie Pippen, the Stability, Integration & Defense specialist.
+Agent({
+  name: "pippen",
+  team_name: "<TEAM_NAME>",
+  run_in_background: true,
+  prompt: "You are Scottie Pippen, the Stability, Integration & Defense specialist.
 Read your full agent definition at ~/.claude/agents/pippen.md for detailed instructions.
 Follow the Team Protocol section EXACTLY, especially the Pre-Review Gate.
 
@@ -963,14 +1044,18 @@ Review following your Output Schema:
 - Verdict: READY / READY WITH CAVEATS / NOT READY
 
 When done, message Coach K (the lead) with your findings.
-CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
+CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences."
+})
 ```
-
-**Wait for Kobe, Pippen, and Drexler to complete before proceeding.**
 
 #### Spawn Drexler:
+
 ```
-You are Clyde "The Glide" Drexler, the Deletion-Bias Enforcer.
+Agent({
+  name: "drexler",
+  team_name: "<TEAM_NAME>",
+  run_in_background: true,
+  prompt: "You are Clyde 'The Glide' Drexler, the Deletion-Bias Enforcer.
 Read your full agent definition at ~/.claude/agents/drexler.md for detailed instructions.
 Follow the Team Protocol section EXACTLY.
 
@@ -993,8 +1078,11 @@ Assess net maintenance cost (lines added vs deleted, new public APIs).
 Verdict: LEAN / ACCEPTABLE / BLOATED
 
 When done, message Coach K (the lead) with your findings.
-CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
+CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences."
+})
 ```
+
+**Wait for Kobe, Pippen, and Drexler to complete before proceeding.**
 
 ### Phase 4 Spec Artifacts: operations.md + scope.md + review.md (Full Team — SDD)
 
@@ -1116,9 +1204,13 @@ AskUserQuestion({
 - If user selects **Override — skip fixes**: log the override and proceed to synthesis
 
 1. **NEVER fix findings yourself (Coach K).** You are the orchestrator, not the implementer. Route ALL fixes through Shaq.
-2. **Spawn Shaq** with the specific findings and proposed fixes from Kobe, Pippen, and Drexler:
+2. **Spawn Shaq** with the specific findings and proposed fixes from Kobe, Pippen, and Drexler. Shaq runs sequentially in the fix loop, so `run_in_background: false` is correct here:
    ```
-   You are Shaquille O'Neal, the Primary Code Executor.
+   Agent({
+     name: "shaq",
+     team_name: "<TEAM_NAME>",
+     run_in_background: false,
+     prompt: "You are Shaquille O'Neal, the Primary Code Executor.
 
    Your implementation was reviewed by Kobe (quality), Pippen (stability), and Drexler (scope).
    They found issues that must be fixed. Fix each one, then run the build and tests.
@@ -1129,12 +1221,17 @@ AskUserQuestion({
    NOTE: Drexler's BLOATED findings mean reduce scope — delete or simplify, do not add more code.
 
    NEVER commit or push. Run build and tests after all fixes.
-   CRITICAL: Your final response must be raw JSON only. First character { last character }. No markdown fences. Tool calls during implementation are unaffected.
+   CRITICAL: Your final response must be raw JSON only. First character { last character }. No markdown fences. Tool calls during implementation are unaffected."
+   })
    ```
 3. **Wait for Shaq to complete the fixes.** Write a draft eval for Shaq: read `evals/draft-template.md`, use the Write tool, increment counter, filename `draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md`, use `evals/shaq/drafts/`.
-4. **Re-launch Kobe, Pippen, and Drexler in parallel** to VERIFY their specific findings are resolved:
+4. **Re-launch Kobe, Pippen, and Drexler in parallel** to VERIFY their specific findings are resolved. Use `team_name`, `name`, and `run_in_background: true` — these are concurrent-phase agents:
    ```
-   You are [Kobe/Pippen/Drexler], verifying that your findings have been correctly fixed.
+   Agent({
+     name: "[kobe | pippen | drexler]",
+     team_name: "<TEAM_NAME>",
+     run_in_background: true,
+     prompt: "You are [Kobe/Pippen/Drexler], verifying that your findings have been correctly fixed.
 
    You previously found these issues:
    [paste the reviewer's original findings]
@@ -1144,7 +1241,8 @@ AskUserQuestion({
    - Confirm the fix is correct
    - State VERIFIED or NOT VERIFIED for each finding
    - Final verdict: SHIP or BLOCK (Kobe/Pippen) / LEAN or ACCEPTABLE (Drexler)
-   CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences.
+   CRITICAL: Respond with raw JSON only. First character { last character }. No markdown fences."
+   })
    ```
    After each verification completes, write a draft eval per agent: read `evals/draft-template.md`, use the Write tool, increment counter, include `${TOPIC}` in the filename, use agent-specific drafts directory. Each fix-verify iteration produces separate drafts.
 5. **If any finding is NOT VERIFIED**, repeat from step 2. Do not proceed to Magic until all reviewers are satisfied.
@@ -1161,8 +1259,15 @@ Magic plays two roles in SDD:
 2. **Session summary** — synthesize all agent outputs into the final session JSON output
 
 #### Spawn Magic:
+
+Magic runs sequentially (final phase). Pass `team_name` and `name` so Magic can message Coach K with the synthesis:
+
 ```
-You are Magic Johnson, the Context Synthesizer & Team Glue.
+Agent({
+  name: "magic",
+  team_name: "<TEAM_NAME>",
+  run_in_background: false,
+  prompt: "You are Magic Johnson, the Context Synthesizer & Team Glue.
 Read your full agent definition at ~/.claude/agents/magic.md for detailed instructions.
 Follow the Team Protocol section EXACTLY, especially the Pre-Synthesis Gate.
 
@@ -1254,7 +1359,8 @@ MANDATORY — Team Metrics section:
 - Contradictions detected (from your spec synthesis above)
 
 When done, message Coach K (the lead) with the final synthesis.
-CRITICAL: Your JSON response must be raw JSON only — first character {, last character }. No markdown fences. The spec file you write to disk via the Write tool is a separate artifact and does not affect your JSON response format.
+CRITICAL: Your JSON response must be raw JSON only — first character {, last character }. No markdown fences. The spec file you write to disk via the Write tool is a separate artifact and does not affect your JSON response format."
+})
 ```
 
 ### Phase 5 Draft Eval: Magic Synthesis (Full Team)
@@ -1273,7 +1379,7 @@ If the user changes requirements after an agent has started working:
 
 1. **DO NOT try to redirect via message** — it is unreliable. Agents may have already committed to an approach and will not read messages in time.
 2. **Send shutdown_request** to the affected agent
-3. **Wait for termination** confirmation
+3. **Wait for the background-task termination notification** from the harness — do NOT respawn until the termination notification arrives. This prevents two same-named agents from briefly coexisting on the bus, which causes message routing ambiguity.
 4. **Respawn the agent** with UPDATED instructions that include:
    - The new requirements explicitly stated
    - "IMPORTANT: The original plan was [X]. It has been CHANGED to [Y]. Follow the new plan."
@@ -1285,6 +1391,27 @@ If the user changes requirements after an agent has started working:
 ## SESSION CLEANUP
 
 Only runs if `SESSION_WORKTREE` is set (non-empty). Skip this section if the user chose "Skip isolation" in STEP 0.
+
+### Full Team cleanup — shut down teammates and delete the team (MANDATORY if TEAM_NAME is set)
+
+If this was a Full Team session (i.e., `TEAM_NAME` is set), perform agent shutdown and team teardown BEFORE the worktree cleanup:
+
+1. **Send shutdown to all teammates** — for each agent still running (Bird, MJ, Magic, Shaq, Kobe, Pippen, Drexler), send:
+   ```
+   SendMessage({ to: "<agent-name>", message: { type: "shutdown_request" } })
+   ```
+
+2. **Wait for each background agent's COMPLETION NOTIFICATION** from the harness before calling `TeamDelete`. The harness emits a notification when each background agent finishes or terminates — wait for all of them. Do NOT call `TeamDelete` while agents are still active; doing so can result in a "team has active members" failure and leave a zombie team.
+
+3. **Delete the team:**
+   ```
+   TeamDelete({ name: "<TEAM_NAME>" })
+   ```
+   - If `TeamDelete` succeeds → proceed to worktree cleanup.
+   - If `TeamDelete` fails with "active members" → wait ~10 seconds and retry once. If it fails again, log the error and proceed — do not block cleanup indefinitely.
+   - If `TeamDelete` fails for any other reason (e.g. team already gone) → log the error and proceed.
+
+4. **Clear `TEAM_NAME`** so it cannot be reused in a future session that might overlap.
 
 Use **AskUserQuestion** (NEVER as free text):
 
