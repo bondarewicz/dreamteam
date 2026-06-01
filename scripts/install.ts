@@ -117,6 +117,16 @@ for (const filename of fs.readdirSync(SCRIPT_DIR)) {
 console.log(`  ${scriptCount} scripts installed.`);
 console.log("");
 
+// --- Step 6b: Record dreamteam repo root for runtime resolution ---
+// /team is installed globally but runs in arbitrary repos. It needs to know
+// where this dreamteam checkout lives so it can read eval templates and write
+// draft evals back here (not into the working repo). team.md reads this file.
+const DREAMTEAM_DIR = path.join(CLAUDE_DIR, "dreamteam");
+fs.mkdirSync(DREAMTEAM_DIR, { recursive: true });
+fs.writeFileSync(path.join(DREAMTEAM_DIR, "repo-root"), REPO_DIR, "utf-8");
+console.log(`Recorded dreamteam repo root: ${REPO_DIR}`);
+console.log("");
+
 // --- Step 7: Ensure output directories exist ---
 fs.mkdirSync(path.join(REPO_DIR, "reports", "retros"), { recursive: true });
 fs.mkdirSync(path.join(REPO_DIR, "reports", "evals"), { recursive: true });
