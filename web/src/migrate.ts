@@ -112,15 +112,18 @@ function buildRawMap(runDate: string): Map<string, RawOutput> {
 }
 
 export function migrate(db: Database) {
+  // OR REPLACE (not IGNORE) so re-scoring an existing run_id updates the DB
+  // instead of being silently skipped. Keyed by run_id (eval_runs PK) and
+  // UNIQUE(run_id, agent, scenario_id, trial_index) on eval_results.
   const insertRun = db.prepare(`
-    INSERT OR IGNORE INTO eval_runs
+    INSERT OR REPLACE INTO eval_runs
       (run_id, timestamp, trials, scenarios_run, scenarios_total, is_complete_baseline,
        pass_count, partial_count, fail_count, pass_rate, meta)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertResult = db.prepare(`
-    INSERT OR IGNORE INTO eval_results
+    INSERT OR REPLACE INTO eval_results
       (run_id, agent, scenario_id, trial_index, score, confidence_stated, justification,
        observations, grader_results, grader_override, duration_ms, tokens_used,
        input_tokens, output_tokens, cost_usd, agent_output_excerpt, failure_reason,
