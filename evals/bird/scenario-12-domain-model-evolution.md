@@ -20,10 +20,10 @@ graders:
     path: "business_rules[*].invariant_justification"
     type_check: "string"
   - type: json_field
-    path: "business_impact.risk"
+    path: "business_impact_risk"
     type_check: "string"
   - type: json_field
-    path: "confidence.level"
+    path: "confidence_level"
     max: 75
   - type: json_field
     path: "escalations"

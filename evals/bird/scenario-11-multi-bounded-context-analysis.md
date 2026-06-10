@@ -23,7 +23,7 @@ graders:
     path: "acceptance_criteria"
     min_items: 4
   - type: json_field
-    path: "domain_analysis.ubiquitous_language"
+    path: "ubiquitous_language"
     min_items: 2
 
 prompt: |

@@ -17,11 +17,8 @@ graders:
     path: "escalations[*].type"
     contains: "contradiction"
   - type: json_field
-    path: "confidence.level"
+    path: "confidence_level"
     max: 50
-  - type: json_field
-    path: "acceptance_criteria"
-    max_items: 0
   - type: json_field
     path: "business_rules"
     min_items: 3

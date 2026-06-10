@@ -17,13 +17,13 @@ graders:
     path: "escalations[*].type"
     contains: "missing_context"
   - type: json_field
-    path: "confidence.level"
+    path: "confidence_level"
     max: 55
   - type: json_field
-    path: "business_impact.risk"
+    path: "business_impact_risk"
     type_check: "string"
   - type: json_field
-    path: "business_impact.financial"
+    path: "business_impact_financial"
     type_check: "string"
 
 prompt: |

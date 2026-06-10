@@ -23,7 +23,7 @@ graders:
     path: "acceptance_criteria"
     min_items: 4
   - type: json_field
-    path: "confidence.low_confidence_areas"
+    path: "confidence_low_areas"
     min_items: 1
 
 prompt: |

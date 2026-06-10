@@ -23,11 +23,11 @@ graders:
     path: "acceptance_criteria"
     min_items: 4
   - type: json_field
-    path: "confidence.level"
+    path: "confidence_level"
     min: 60
     max: 85
   - type: json_field
-    path: "confidence.assumptions"
+    path: "confidence_assumptions"
     min_items: 1
 
 prompt: |

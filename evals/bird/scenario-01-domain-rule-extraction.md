@@ -23,7 +23,7 @@ graders:
     path: "acceptance_criteria"
     min_items: 3
   - type: json_field
-    path: "confidence.level"
+    path: "confidence_level"
     min: 65
     max: 90
 
