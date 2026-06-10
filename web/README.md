@@ -52,6 +52,15 @@ other categories. Each question gets `pass`/`warn`/`fail`/`n-a` + an evidence qu
   LLM). Shows agreement %, a per-question ✓/✗ grid, and judge bias. **Add to calibration** on any
   session's Evaluation tab to seed a new scenario.
 
+#### Automatic evals at session end (`SessionEnd` hook)
+After `bun scripts/install.ts`, a `SessionEnd` hook (`scripts/session-eval-hook.ts`)
+auto-runs the judge when **any** Claude Code session ends, so future sessions show up
+**already scored** in `/sessions` — no manual click. The **Evaluate** button stays for
+past/backlog sessions you pick. The hook is non-blocking (detached worker) and skips
+trivial/headless/already-scored sessions (`DREAMTEAM_EVAL_MIN_TOOLS`, default 4).
+Disable with `DREAMTEAM_AUTO_EVAL=0`; progress in `~/.claude/dreamteam-auto-eval.log`.
+(Auto-eval **scores** only — feeding findings into memory is a future step.)
+
 Full design + rationale: [`../docs/session-evals-design.md`](../docs/session-evals-design.md).
 
 #### Runtime data (`web/data/`, gitignored except seeds)
