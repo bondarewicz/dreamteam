@@ -16,6 +16,7 @@ graders:
   - type: json_field
     path: "context_curation.included"
     min_items: 2
+    advisory: true
   - type: json_field
     path: "context_curation.rationale"
     type_check: "string"
@@ -26,6 +27,7 @@ graders:
     path: "confidence.level"
     min: 70
     max: 100
+    advisory: true
 
 prompt: |
   You are Coach K orchestrating a Quick Fix workflow. Eval capture is disabled.

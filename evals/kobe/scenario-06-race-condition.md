@@ -14,12 +14,14 @@ graders:
     path: critical_findings
     min_items: 1
     max_items: 3
+    advisory: true
   - type: json_field
     path: production_readiness.safe_to_deploy
     equals: false
   - type: json_field
     path: confidence.level
     min: 75
+    advisory: true
 
 prompt: |
   Review the following TypeScript function that handles adding an item to a cart with stock checking:

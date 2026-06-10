@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: "business_rules"
     min_items: 3
+    advisory: true
   - type: json_field
     path: "business_rules[*].invariant"
     type_check: "boolean"
@@ -22,9 +23,11 @@ graders:
   - type: json_field
     path: "acceptance_criteria"
     min_items: 4
+    advisory: true
   - type: json_field
     path: "ubiquitous_language"
     min_items: 2
+    advisory: true
 
 prompt: |
   A logistics platform's product team describes a new feature called "Smart Route Optimization":

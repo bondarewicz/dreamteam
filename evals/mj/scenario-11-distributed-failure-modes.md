@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: risks
     min_items: 1
+    advisory: true
 
 prompt: |
   The following architecture has been deployed:

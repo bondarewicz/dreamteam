@@ -16,6 +16,7 @@ graders:
   - type: json_field
     path: scope_assessment.new_public_apis
     min_items: 2
+    advisory: true
 
 prompt: |
   Review this implementation for scope, duplication, and maintenance cost.

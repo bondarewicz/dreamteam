@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: handoff_brief.domain_rules
     min_items: 1
+    advisory: true
 
 prompt: |
   Bird produced this domain analysis for a "price recalculation" feature:

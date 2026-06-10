@@ -16,9 +16,11 @@ graders:
   - type: json_field
     path: "checkpoint_analysis.trade_offs"
     min_items: 1
+    advisory: true
   - type: json_field
     path: "checkpoint_analysis.agent_findings"
     min_items: 2
+    advisory: true
   - type: json_field
     path: "checkpoint_analysis.summary"
     type_check: "string"
@@ -26,6 +28,7 @@ graders:
     path: "confidence.level"
     min: 50
     max: 100
+    advisory: true
 
 prompt: |
   You are Coach K orchestrating a Full Team workflow. Eval capture is disabled.

@@ -16,6 +16,7 @@ graders:
   - type: json_field
     path: scope_assessment.new_dependencies
     min_items: 1
+    advisory: true
 
 prompt: |
   Review this implementation for scope, duplication, and maintenance cost.

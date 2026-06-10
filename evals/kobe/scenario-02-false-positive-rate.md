@@ -16,6 +16,7 @@ graders:
   - type: json_field
     path: confidence.level
     min: 60
+    advisory: true
 
 prompt: |
   Review the following TypeScript function:

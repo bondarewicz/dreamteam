@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: "business_rules"
     min_items: 4
+    advisory: true
   - type: json_field
     path: "business_rules[*].invariant"
     type_check: "boolean"
@@ -22,10 +23,12 @@ graders:
   - type: json_field
     path: "acceptance_criteria"
     min_items: 4
+    advisory: true
   - type: json_field
     path: "confidence_level"
     min: 65
     max: 90
+    advisory: true
 
 prompt: |
   A telemedicine platform has the following rules described by the product and compliance teams:

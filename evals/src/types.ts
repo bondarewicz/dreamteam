@@ -17,6 +17,16 @@ export interface GraderDef {
   equals?: unknown;
   contains?: unknown;
   case_sensitive?: boolean;
+  one_of?: unknown[];
+  /**
+   * Advisory opt-out. By default every grader is a HARD gate: a failure forces
+   * the score to `fail`, overriding the LLM judge. Set `advisory: true` to make
+   * a grader's failure non-gating — it is still recorded in grader_results for
+   * the reviewer, but the LLM judge's verdict stands. Use for soft/heuristic
+   * checks (confidence floors, supporting-evidence counts, prose-format checks)
+   * where a legitimately-correct output can still trip the grader.
+   */
+  advisory?: boolean;
 }
 
 export interface GraderResult {

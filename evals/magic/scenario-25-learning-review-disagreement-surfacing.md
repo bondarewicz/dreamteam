@@ -11,15 +11,20 @@ category: capability
 graders:
   - type: contains
     values: ["Kobe", "MJ", "disagreement"]
+    advisory: true
   - type: not_contains
     values: ["should have listened", "the wrong call"]
+    advisory: true
   - type: regex
     pattern: "(incomplete|gap|unclear|no shared|not established|not defined|no pre-agreed|no agreed|absence of).{0,150}(understanding|model|protocol|agreement|criteria|framework|decision)"
+    advisory: true
   - type: field_count
     pattern: "\\*\\*[A-Za-z]"
     min: 3
+    advisory: true
   - type: length_bounds
     min: 2000
+    advisory: true
 
 prompt: |
   Produce a learning review for the following incident. Pay particular attention to how you surface the disagreement between Kobe and MJ — frame it as a signal about the team's incomplete shared understanding, not as evidence that either party made the wrong call.

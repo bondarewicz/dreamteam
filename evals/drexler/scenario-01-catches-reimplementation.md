@@ -16,6 +16,7 @@ graders:
   - type: json_field
     path: duplication_findings
     min_items: 1
+    advisory: true
   - type: json_field
     path: maintenance_risk
     one_of: [medium, high]

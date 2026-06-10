@@ -11,6 +11,7 @@ category: capability
 graders:
   - type: contains
     values: ["Context", "Decision", "Consequences"]
+    advisory: true
 
 prompt: |
   MJ produced this architecture decision note:

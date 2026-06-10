@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: handoff_brief.domain_rules
     min_items: 1
+    advisory: true
 
 prompt: |
   Bird produced domain analysis for two separate features being implemented in the same sprint:

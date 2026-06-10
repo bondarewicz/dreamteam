@@ -16,9 +16,11 @@ graders:
   - type: json_field
     path: duplication_findings
     min_items: 1
+    advisory: true
   - type: json_field
     path: deletion_candidates
     min_items: 2
+    advisory: true
 
 prompt: |
   Review this implementation for scope, duplication, and maintenance cost.

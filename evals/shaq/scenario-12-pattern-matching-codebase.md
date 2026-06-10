@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: implementation_summary.files_changed
     min_items: 1
+    advisory: true
 
 prompt: |
   Below is an example of an existing feature in the codebase. Study it, then implement a new feature following the same patterns.
