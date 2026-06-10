@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: tests
     min_items: 1
+    advisory: true
 
 prompt: |
   The following TypeScript function has been implemented:

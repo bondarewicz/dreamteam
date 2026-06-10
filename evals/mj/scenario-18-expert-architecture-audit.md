@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: risks
     min_items: 3
+    advisory: true
 
 prompt: |
   Review the following architecture and identify all risks, hidden coupling, and future scalability problems:

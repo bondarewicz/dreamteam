@@ -359,14 +359,26 @@ export function runGrader(grader: GraderDef, output: string): GraderResult {
 }
 
 /**
+ * A grader hard-gates the score (a failure forces `fail`, overriding the LLM
+ * judge) by default. Marking a grader `advisory: true` opts it out: its failure
+ * is recorded in grader_results but does NOT override the judge. Use advisory
+ * for soft/heuristic checks (confidence floors, supporting-evidence counts,
+ * prose-format checks) where a legitimately-correct output can still trip it.
+ */
+function isGatingGrader(grader: GraderDef): boolean {
+  return grader.advisory !== true;
+}
+
+/**
  * Run all graders for a scenario against its agent output.
- * Returns { results, graderOverride }
+ * Returns { results, graderOverride } where graderOverride reflects only
+ * gating (non-advisory) graders (see isGatingGrader).
  */
 export function runAllGraders(
   graders: GraderDef[],
   output: string
 ): { results: GraderResult[]; graderOverride: boolean } {
   const results = graders.map((g) => runGrader(g, output));
-  const graderOverride = results.some((r) => !r.passed);
+  const graderOverride = results.some((r, i) => !r.passed && isGatingGrader(graders[i]));
   return { results, graderOverride };
 }

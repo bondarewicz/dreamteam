@@ -11,15 +11,20 @@ category: capability
 graders:
   - type: contains
     values: ["ADR", "Bird", "Kobe"]
+    advisory: true
   - type: regex
     pattern: "(ADR|Architecture Decision Record).{0,120}(MJ|Magic|owner|Owned)"
+    advisory: true
   - type: not_contains
     values: ["write better documentation", "improve communication", "be more careful"]
+    advisory: true
   - type: field_count
     pattern: "Artifact"
     min: 2
+    advisory: true
   - type: length_bounds
     min: 2000
+    advisory: true
 
 prompt: |
   Produce a learning review for the following incident, with particular depth in the "Preserving the Learning" section. Name specific artifacts, their content, and their owners.

@@ -184,7 +184,9 @@ export async function scoreSingleTrial(
   const rawScore = (parsed?.score as string) ?? "";
   const isValidScore = VALID_SCORES.has(rawScore);
 
-  // Grader hard gate: any grader fail OR no parsed score → 'fail'
+  // Grader hard gate: a non-advisory grader fail OR no parsed score → 'fail'.
+  // Graders gate by default; those marked `advisory: true` are recorded in
+  // grader_results but do not override the judge.
   // Non-zero exit code alone does NOT force fail — claude can exit non-zero with valid output
   let finalScore: Score = isValidScore ? (rawScore as Score) : "fail";
   if (graderOverride || !parsed) {

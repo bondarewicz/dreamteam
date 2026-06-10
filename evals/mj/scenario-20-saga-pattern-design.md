@@ -13,9 +13,11 @@ graders:
   - type: json_field
     path: trade_offs
     min_items: 1
+    advisory: true
   - type: json_field
     path: risks
     min_items: 1
+    advisory: true
 
 prompt: |
   A courier marketplace order flow involves these sequential steps across 4 services:

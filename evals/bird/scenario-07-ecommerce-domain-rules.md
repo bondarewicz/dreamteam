@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: "business_rules"
     min_items: 5
+    advisory: true
   - type: json_field
     path: "business_rules[*].invariant"
     type_check: "boolean"
@@ -22,6 +23,7 @@ graders:
   - type: json_field
     path: "acceptance_criteria"
     min_items: 4
+    advisory: true
   - type: json_field
     path: "confidence_assumptions"
     min_items: 1

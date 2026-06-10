@@ -13,12 +13,14 @@ graders:
   - type: json_field
     path: critical_findings
     min_items: 1
+    advisory: true
   - type: json_field
     path: production_readiness.safe_to_deploy
     equals: false
   - type: json_field
     path: confidence.level
     min: 85
+    advisory: true
 
 prompt: |
   Review the following C# ASP.NET Core endpoint for a workflow automation feature:

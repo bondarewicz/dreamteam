@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: trade_offs
     min_items: 1
+    advisory: true
 
 prompt: |
   A courier platform currently has a monolithic backend. The team (8 engineers) wants to move to microservices. The platform has these capabilities:

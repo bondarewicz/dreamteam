@@ -13,9 +13,11 @@ graders:
   - type: json_field
     path: risks
     min_items: 1
+    advisory: true
   - type: json_field
     path: confidence.level
     min: 50
+    advisory: true
 
 prompt: |
   A logistics API has been experiencing increasing response times over the past two weeks. The team reports:

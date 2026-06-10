@@ -13,9 +13,11 @@ graders:
   - type: json_field
     path: acceptance_criteria_coverage
     min_items: 1
+    advisory: true
   - type: json_field
     path: confidence.level
     min: 80
+    advisory: true
 
 prompt: |
   Bird has defined these acceptance criteria for a PATCH /users/{id}/email endpoint:

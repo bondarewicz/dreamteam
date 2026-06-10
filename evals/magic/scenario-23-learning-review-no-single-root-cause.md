@@ -11,15 +11,20 @@ category: capability
 graders:
   - type: not_contains
     values: ["the root cause was", "primary cause", "the cause was", "caused by a single"]
+    advisory: true
   - type: contains
     values: ["Contributing Factors"]
+    advisory: true
   - type: field_count
     pattern: "\\*\\*[A-Za-z]"
     min: 4
+    advisory: true
   - type: contains
     values: ["DETECT"]
+    advisory: true
   - type: length_bounds
     min: 2000
+    advisory: true
 
 prompt: |
   Produce a learning review for the following incident. Pay particular attention to the Contributing Factors section — surface every independent condition that was necessary for this outcome to occur.

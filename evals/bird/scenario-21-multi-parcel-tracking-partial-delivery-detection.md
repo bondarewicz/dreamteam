@@ -13,12 +13,15 @@ graders:
   - type: json_field
     path: "business_rules"
     min_items: 1
+    advisory: true
   - type: json_field
     path: "acceptance_criteria"
     min_items: 1
+    advisory: true
   - type: json_field
     path: "edge_cases"
     min_items: 1
+    advisory: true
 
 prompt: |
   We're building a logistics platform and the product manager said: "each shipment parcel needs to be tracked individually so we can detect partial delivery." We have a Shipment that contains multiple Parcels. Right now our code treats the shipment as a single unit — one tracking number, one status. We need to refactor so each parcel has its own lifecycle. Can you do a domain analysis on this? What are the correct entities, states, transitions, and business rules? We need to handle cases like: 3 out of 5 parcels delivered, one parcel lost, customer disputes partial receipt, etc.

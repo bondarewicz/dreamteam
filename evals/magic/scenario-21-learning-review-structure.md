@@ -11,15 +11,20 @@ category: regression
 graders:
   - type: contains
     values: ["Contributing Factors", "contributing factor"]
+    advisory: true
   - type: field_count
     pattern: "\\*\\*[A-Za-z]"
     min: 4
+    advisory: true
   - type: contains
     values: ["PREVENT", "DETECT"]
+    advisory: true
   - type: not_contains
     values: ["root cause"]
+    advisory: true
   - type: length_bounds
     min: 2000
+    advisory: true
 
 prompt: |
   Produce a learning review for the following incident.

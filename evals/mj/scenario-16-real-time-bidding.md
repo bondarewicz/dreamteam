@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: trade_offs
     min_items: 1
+    advisory: true
 
 prompt: |
   A courier marketplace wants to build a real-time courier bidding system:

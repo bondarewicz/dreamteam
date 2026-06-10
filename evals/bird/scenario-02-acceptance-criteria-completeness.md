@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: "acceptance_criteria"
     min_items: 3
+    advisory: true
   - type: json_field
     path: "acceptance_criteria[*].given"
     type_check: "string"

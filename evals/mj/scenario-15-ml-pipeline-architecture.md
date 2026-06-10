@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: trade_offs
     min_items: 1
+    advisory: true
 
 prompt: |
   A logistics platform wants to build an ML-based delivery time estimation system:

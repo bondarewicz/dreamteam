@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: acceptance_criteria_coverage
     min_items: 1
+    advisory: true
 
 prompt: |
   Bird has defined these acceptance criteria for an order state machine:

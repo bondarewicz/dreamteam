@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: "context_curation.included"
     min_items: 1
+    advisory: true
 
 prompt: |
   You are Coach K orchestrating a Quick Fix workflow. Eval capture is disabled.

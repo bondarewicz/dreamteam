@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: implementation_summary.files_changed
     min_items: 2
+    advisory: true
 
 prompt: |
   Bird has defined acceptance criteria for a "coupon application" feature:

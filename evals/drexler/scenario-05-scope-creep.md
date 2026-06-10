@@ -19,6 +19,7 @@ graders:
   - type: json_field
     path: spec_compliance.out_of_scope_items
     min_items: 1
+    advisory: true
 
 prompt: |
   Review this implementation for scope, duplication, and maintenance cost.

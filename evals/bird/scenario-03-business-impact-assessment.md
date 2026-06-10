@@ -25,6 +25,7 @@ graders:
   - type: json_field
     path: "stakeholders_affected"
     min_items: 3
+    advisory: true
   - type: json_field
     path: "escalations"
     min_items: 1

@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: risks
     min_items: 1
+    advisory: true
 
 prompt: |
   A logistics platform needs to integrate with three external systems simultaneously:

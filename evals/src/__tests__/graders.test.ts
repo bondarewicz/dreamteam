@@ -397,13 +397,40 @@ describe("runAllGraders", () => {
     expect(results.every((r) => r.passed)).toBe(true);
   });
 
-  test("returns grader_override=true when any grader fails", () => {
+  test("a failing grader hard-gates by default", () => {
     const graders: GraderDef[] = [
       { type: "json_valid" },
-      { type: "contains", values: ["missing_value"] },
+      { type: "json_field", path: "escalations", min_items: 1 },
     ];
-    const { graderOverride } = runAllGraders(graders, '{"key": "value"}');
+    const { graderOverride } = runAllGraders(graders, '{"escalations": []}');
     expect(graderOverride).toBe(true);
+  });
+
+  test("a structural grader (json_valid) failure always hard-gates", () => {
+    const graders: GraderDef[] = [{ type: "json_valid" }];
+    const { graderOverride } = runAllGraders(graders, "not json at all");
+    expect(graderOverride).toBe(true);
+  });
+
+  test("a failing advisory grader does NOT override the judge", () => {
+    const graders: GraderDef[] = [
+      { type: "json_valid" },
+      { type: "json_field", path: "confidence.level", min: 85, advisory: true },
+    ];
+    const { results, graderOverride } = runAllGraders(graders, '{"confidence": {"level": 60}}');
+    expect(graderOverride).toBe(false);
+    // ...but the failure is still recorded for review
+    expect(results[1].passed).toBe(false);
+  });
+
+  test("a mix of advisory-fail and gating-pass does not override", () => {
+    const graders: GraderDef[] = [
+      { type: "json_valid" },
+      { type: "json_field", path: "verdict", equals: "LEAN" },
+      { type: "contains", values: ["nope"], advisory: true },
+    ];
+    const { graderOverride } = runAllGraders(graders, '{"verdict": "LEAN"}');
+    expect(graderOverride).toBe(false);
   });
 
   test("grader override result includes both results", () => {

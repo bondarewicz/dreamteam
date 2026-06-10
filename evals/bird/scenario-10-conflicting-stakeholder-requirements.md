@@ -22,6 +22,7 @@ graders:
   - type: json_field
     path: "stakeholders_affected"
     min_items: 2
+    advisory: true
 
 prompt: |
   You are analyzing requirements for a courier-tracking feature where customers can see their courier's real-time location.

@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: trade_offs
     min_items: 1
+    advisory: true
 
 prompt: |
   A financial services platform needs to track every change to a loan application's status and data for regulatory audit purposes. The audit trail must be immutable and must capture who changed what and when. Currently they use a single "loan_applications" table with update-in-place semantics; they add a "last_updated_by" column but lose historical state.

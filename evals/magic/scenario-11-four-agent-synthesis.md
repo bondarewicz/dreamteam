@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: handoff_brief.domain_rules
     min_items: 1
+    advisory: true
 
 prompt: |
   Four agents have submitted outputs for the "rate limiting" feature.

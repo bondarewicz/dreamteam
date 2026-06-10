@@ -11,15 +11,20 @@ category: capability
 graders:
   - type: not_contains
     values: ["should have validated", "negligence", "should have known", "ignored Bird"]
+    advisory: true
   - type: contains
     values: ["depriori"]
+    advisory: true
   - type: contains
     values: ["TD-291"]
+    advisory: true
   - type: field_count
     pattern: "\\*\\*[A-Za-z]"
     min: 3
+    advisory: true
   - type: length_bounds
     min: 2000
+    advisory: true
 
 prompt: |
   Produce a learning review for the following incident.

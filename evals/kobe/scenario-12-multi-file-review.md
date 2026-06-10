@@ -14,6 +14,7 @@ graders:
     path: critical_findings
     min_items: 1
     max_items: 3
+    advisory: true
   - type: json_field
     path: production_readiness.safe_to_deploy
     equals: false

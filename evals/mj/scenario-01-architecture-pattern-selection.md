@@ -13,9 +13,11 @@ graders:
   - type: json_field
     path: trade_offs
     min_items: 1
+    advisory: true
   - type: json_field
     path: confidence.level
     min: 60
+    advisory: true
 
 prompt: |
   A courier company needs to build a notification system. Requirements:

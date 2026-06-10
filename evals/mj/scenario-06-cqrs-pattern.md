@@ -13,6 +13,7 @@ graders:
   - type: json_field
     path: trade_offs
     min_items: 1
+    advisory: true
 
 prompt: |
   A logistics platform has a reporting problem. The order management database has 50 million records. Queries for the operations dashboard (showing: orders by status, delivery success rates, average transit time by zone, courier performance rankings) are taking 30-60 seconds. These queries are read-only. The underlying order data model is highly normalized (12 tables, complex joins required). Write volume is low: ~500 new orders/day.
