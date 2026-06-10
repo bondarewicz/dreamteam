@@ -101,6 +101,27 @@ interface JsonEnvelope {
   is_error?: boolean;
 }
 
+/**
+ * Parse a `--output-format stream-json` NDJSON stream into an event array.
+ * Each line is one JSON event (system init, assistant, user, result, ...).
+ * The init `system` event carries model/session/tools/version metadata that
+ * the dashboard's TraceViewer reads; the final `result` event mirrors the
+ * single-shot `--output-format json` envelope.
+ */
+function parseStreamEvents(stdout: string): Record<string, unknown>[] {
+  const events: Record<string, unknown>[] = [];
+  for (const line of stdout.split("\n")) {
+    const t = line.trim();
+    if (!t || t[0] !== "{") continue;
+    try {
+      events.push(JSON.parse(t) as Record<string, unknown>);
+    } catch {
+      // skip partial / non-JSON status lines
+    }
+  }
+  return events;
+}
+
 function parseJsonEnvelope(stdout: string): JsonEnvelope | null {
   const trimmed = stdout.trim();
   if (!trimmed) return null;
@@ -133,6 +154,8 @@ export type SchemaRunSuccess<T> = {
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
+  /** Full stream-json event list (init + assistant + result) for trace capture */
+  trace?: Record<string, unknown>[];
 };
 
 export type SchemaRunFailure = {
@@ -148,6 +171,8 @@ export type SchemaRunFailure = {
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
+  /** Full stream-json event list (init + assistant + result) for trace capture */
+  trace?: Record<string, unknown>[];
 };
 
 export type SchemaRunResult<T = unknown> = SchemaRunSuccess<T> | SchemaRunFailure;
@@ -242,7 +267,8 @@ export async function runAgentWithSchema<T = unknown>(
     "--json-schema",
     jsonSchemaStr,
     "--output-format",
-    "json",
+    "stream-json",
+    "--verbose",
   ];
 
   // Only emit --model when we have a non-empty value — passing "" causes a 400 API error.
@@ -297,8 +323,13 @@ export async function runAgentWithSchema<T = unknown>(
 
   const durationMs = Date.now() - startMs;
 
-  // 6. Parse JSON envelope
-  const envelope = parseJsonEnvelope(stdout);
+  // 6. Parse stream-json events. The final `result` event mirrors the old
+  // single-shot json envelope; the full event list is kept as `trace` so the
+  // init metadata (model/session/version/tools) is preserved for the UI.
+  const traceEvents = parseStreamEvents(stdout);
+  const envelope =
+    (traceEvents.find((e) => e.type === "result") as JsonEnvelope | undefined) ??
+    parseJsonEnvelope(stdout); // fallback if CLI emitted a single object
   const costUsd = typeof envelope?.total_cost_usd === "number" ? envelope.total_cost_usd : 0;
   const inputTokens =
     typeof envelope?.usage?.input_tokens === "number" ? envelope.usage.input_tokens : 0;
@@ -368,6 +399,7 @@ export async function runAgentWithSchema<T = unknown>(
       costUsd,
       inputTokens,
       outputTokens,
+      trace: traceEvents,
     };
   }
 
@@ -386,6 +418,7 @@ export async function runAgentWithSchema<T = unknown>(
       costUsd,
       inputTokens,
       outputTokens,
+      trace: traceEvents,
     };
   }
 
@@ -399,5 +432,6 @@ export async function runAgentWithSchema<T = unknown>(
     costUsd,
     inputTokens,
     outputTokens,
+    trace: traceEvents,
   };
 }

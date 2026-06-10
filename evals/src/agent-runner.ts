@@ -203,7 +203,7 @@ async function runBirdAgentCall(
       output_tokens: result.outputTokens,
       cost_usd: result.costUsd,
       timestamp,
-      trace: [],
+      trace: result.trace ?? [],
     };
   } else {
     // Schema run failed — record the error, return empty agent_output
@@ -218,7 +218,7 @@ async function runBirdAgentCall(
       output_tokens: result.outputTokens,
       cost_usd: result.costUsd,
       timestamp,
-      trace: [],
+      trace: result.trace ?? [],
       error: `schema-runner failed (${result.reason}): ${result.detail}`,
     };
   }
