@@ -33,6 +33,11 @@ import {
   draftPromoteHandler,
 } from "./src/routes/scenarios.ts";
 import { adminModelsHandler, adminModelsSaveHandler } from "./src/routes/admin.ts";
+import {
+  sessionsListHandler, sessionDetailHandler, evaluateSessionHandler,
+  judgePromptHandler, judgePromptSaveHandler,
+  calibrationHandler, calibrationRunHandler, calibrationSaveLabelsHandler, captureCalibrationHandler,
+} from "./src/routes/sessions.ts";
 import { serveStatic } from "./src/routes/static.ts";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -63,6 +68,18 @@ router.get("/api/eval-runs/live", evalRunsSSEHandler);
 // Admin — agent model/version editor
 router.get("/admin/models", adminModelsHandler);
 router.post("/admin/models", adminModelsSaveHandler);
+
+// Sessions — rehydrated Claude Code sessions across all projects
+router.get("/sessions", sessionsListHandler);
+router.get("/admin/session-judge", judgePromptHandler);
+router.post("/admin/session-judge", judgePromptSaveHandler);
+// Calibration ("eval the evaluator") — register before generic /sessions/:project/:id
+router.get("/admin/session-judge/calibration", calibrationHandler);
+router.post("/admin/session-judge/calibration/run", calibrationRunHandler);
+router.post("/admin/session-judge/calibration/:id/labels", calibrationSaveLabelsHandler);
+router.get("/sessions/:project/:id", sessionDetailHandler);
+router.post("/sessions/:project/:id/evaluate", evaluateSessionHandler);
+router.post("/sessions/:project/:id/calibrate", captureCalibrationHandler);
 
 // Scenario browser and editor
 router.get("/scenarios", scenariosListHandler);
