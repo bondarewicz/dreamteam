@@ -32,6 +32,7 @@ export const CLAUDE_CODE_ALIASES = ["opus", "sonnet", "haiku", "opusplan"] as co
  * truth at runtime, this is only the offline safety net.
  */
 const FALLBACK_MODEL_IDS = [
+  "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-opus-4-6",
   "claude-opus-4-5",

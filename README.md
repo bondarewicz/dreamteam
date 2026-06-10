@@ -8,11 +8,11 @@ Source of truth for all Claude Code agents and commands. Install once, use every
 
 | Agent | Command | Persona | Role | Model | Tools |
 |-------|---------|---------|------|-------|-------|
-| **bird** | `/bird` | Larry Bird | Domain Authority & Final Arbiter | `claude-opus-4-6` | Read, Grep, Glob, Bash |
-| **mj** | `/mj` | Michael Jordan | Strategic Systems Architect | `claude-opus-4-6` | + WebFetch, WebSearch, Context7, Honeycomb |
+| **bird** | `/bird` | Larry Bird | Domain Authority & Final Arbiter | `claude-opus-4-8` | Read, Grep, Glob, Bash |
+| **mj** | `/mj` | Michael Jordan | Strategic Systems Architect | `claude-opus-4-8` | + WebFetch, WebSearch, Context7, Honeycomb |
 | **shaq** | `/shaq` | Shaquille O'Neal | Primary Code Executor | `claude-sonnet-4-6` | All except Task |
-| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | `claude-opus-4-6` | + Edit |
-| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | `claude-opus-4-6` | Read, Grep, Glob, Bash, Honeycomb |
+| **kobe** | `/kobe` | Kobe Bryant | Quality & Risk Enforcer | `claude-opus-4-8` | + Edit |
+| **pippen** | `/pippen` | Scottie Pippen | Stability, Integration & Defense | `claude-opus-4-8` | Read, Grep, Glob, Bash, Honeycomb |
 | **magic** | `/magic` | Magic Johnson | Context Synthesizer & Team Glue | `claude-sonnet-4-6` | + Write, Edit |
 | **drexler** | `/drexler` | Clyde "The Glide" Drexler | Deletion-Bias Enforcer | `claude-sonnet-4-6` | Read, Grep, Glob, Bash |
 
