@@ -23,10 +23,10 @@ graders:
     path: "acceptance_criteria[*].then"
     type_check: "string"
   - type: json_field
-    path: "confidence.level"
+    path: "confidence_level"
     max: 65
   - type: json_field
-    path: "confidence.low_confidence_areas"
+    path: "confidence_low_areas"
     min_items: 2
 
 prompt: |

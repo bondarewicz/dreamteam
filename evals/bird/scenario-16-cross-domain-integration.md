@@ -23,7 +23,7 @@ graders:
     path: "escalations"
     min_items: 1
   - type: json_field
-    path: "domain_analysis.bounded_context"
+    path: "bounded_context"
     type_check: "string"
 
 prompt: |

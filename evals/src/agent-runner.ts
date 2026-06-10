@@ -2,6 +2,12 @@
  * agent-runner.ts — NDJSON stream parsing, individual + team scenario execution
  *
  * Impure: calls ClaudeAdapter, reads/writes files.
+ *
+ * Per-agent dispatch:
+ *   - Bird: uses runAgentWithSchema (--system-prompt-file + --json-schema + --output-format json)
+ *           Pulls structured_output (or result string) and validates with Zod.
+ *           Feeds the JSON-stringified structured output into agent_output for graders.
+ *   - All other agents: use the existing --agent path (unchanged).
  */
 
 import path from "path";
@@ -10,6 +16,7 @@ import type { ClaudeAdapter, RawOutput, PhaseOutput } from "./types.ts";
 import { extractGraders } from "./scenario-parser.ts";
 import { runAllGraders } from "./graders.ts";
 import { extractPrompt, parseTeamScenario } from "./scenario-parser.ts";
+import { runAgentWithSchema } from "./schema-runner.ts";
 
 const EVAL_MODE_APPEND =
   "EVAL MODE: You are running in a headless evaluation. Do NOT enter plan mode. Do NOT call EnterPlanMode. Do NOT wait for approval. Execute the task directly and produce your complete final output immediately.";
@@ -158,6 +165,66 @@ export async function runSingleAgentCall(
 }
 
 /**
+ * Run a single Bird agent call via the schema-enforced path.
+ *
+ * Uses --system-prompt-file + --json-schema + --output-format json (per architecture.md).
+ * Extracts structured_output (or result string) and JSON-stringifies it so the
+ * existing graders can parse it as agent_output.
+ *
+ * Returns a raw output record (does not write to disk).
+ */
+async function runBirdAgentCall(
+  scenarioId: string,
+  prompt: string,
+  timeoutMs: number,
+  model?: string
+): Promise<Omit<RawOutput, "phases" | "pipeline_fields">> {
+  const timestamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  const startMs = Date.now();
+
+  const result = await runAgentWithSchema("bird", prompt, {
+    timeoutMs,
+    model,
+  });
+
+  const durationMs = Date.now() - startMs;
+
+  if (result.ok) {
+    // Serialize the structured output as JSON string — this is what graders parse
+    const agentOutput = JSON.stringify(result.data);
+    return {
+      agent: "bird",
+      scenario_id: scenarioId,
+      agent_output: agentOutput,
+      agent_output_excerpt: agentOutput.slice(0, 500),
+      duration_ms: durationMs,
+      tokens_used: result.inputTokens + result.outputTokens,
+      input_tokens: result.inputTokens,
+      output_tokens: result.outputTokens,
+      cost_usd: result.costUsd,
+      timestamp,
+      trace: [],
+    };
+  } else {
+    // Schema run failed — record the error, return empty agent_output
+    return {
+      agent: "bird",
+      scenario_id: scenarioId,
+      agent_output: "",
+      agent_output_excerpt: "",
+      duration_ms: durationMs,
+      tokens_used: result.inputTokens + result.outputTokens,
+      input_tokens: result.inputTokens,
+      output_tokens: result.outputTokens,
+      cost_usd: result.costUsd,
+      timestamp,
+      trace: [],
+      error: `schema-runner failed (${result.reason}): ${result.detail}`,
+    };
+  }
+}
+
+/**
  * Run a single agent scenario (one trial). Writes raw output to disk.
  * Returns the raw_output_file path.
  */
@@ -192,7 +259,13 @@ export async function runAgentScenario(
     console.error(`  WARN: empty prompt extracted for ${agent}/${scenarioId}`);
   }
 
-  const record = await runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs, model);
+  // Per-agent dispatch: Bird uses the schema-enforced path; all others use --agent.
+  let record: Omit<RawOutput, "phases" | "pipeline_fields">;
+  if (agent === "bird") {
+    record = await runBirdAgentCall(scenarioId, prompt, timeoutMs, model);
+  } else {
+    record = await runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs, model);
+  }
 
   fs.writeFileSync(rawOutput, JSON.stringify(record, null, 2), "utf-8");
   console.log(`  Done: ${agent}/${scenarioId}${label} (${record.duration_ms}ms)`);

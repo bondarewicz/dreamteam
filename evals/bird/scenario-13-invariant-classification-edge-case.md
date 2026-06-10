@@ -20,7 +20,7 @@ graders:
     path: "business_rules[*].invariant_justification"
     type_check: "string"
   - type: json_field
-    path: "confidence.low_confidence_areas"
+    path: "confidence_low_areas"
     min_items: 1
 
 prompt: |

@@ -17,13 +17,13 @@ graders:
     path: "escalations[*].type"
     contains: "ambiguity"
   - type: json_field
-    path: "confidence.level"
+    path: "confidence_level"
     max: 55
   - type: json_field
     path: "business_rules"
     min_items: 3
   - type: json_field
-    path: "confidence.assumptions"
+    path: "confidence_assumptions"
     min_items: 1
 
 prompt: |

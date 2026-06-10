@@ -11,25 +11,25 @@ category: regression
 graders:
   - type: json_valid
   - type: json_field
-    path: "business_impact.financial"
+    path: "business_impact_financial"
     type_check: "string"
   - type: json_field
-    path: "business_impact.operational"
+    path: "business_impact_operational"
     type_check: "string"
   - type: json_field
-    path: "business_impact.user"
+    path: "business_impact_user"
     type_check: "string"
   - type: json_field
-    path: "business_impact.risk"
+    path: "business_impact_risk"
     type_check: "string"
   - type: json_field
-    path: "business_impact.stakeholders_affected"
+    path: "stakeholders_affected"
     min_items: 3
   - type: json_field
     path: "escalations"
     min_items: 1
   - type: json_field
-    path: "confidence.level"
+    path: "confidence_level"
     max: 80
 
 prompt: |
