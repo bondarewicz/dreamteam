@@ -629,9 +629,9 @@ PR: [number or branch]
 
 | Agent | Model | Role              |
 |-------|-------|-------------------|
-| bird  | claude-opus-4-6 | Domain review |
-| mj    | claude-opus-4-6 | Architecture review |
-| kobe  | claude-opus-4-6 | Quality/risk review |
+| bird  | claude-opus-4-8 | Domain review |
+| mj    | claude-opus-4-8 | Architecture review |
+| kobe  | claude-opus-4-8 | Quality/risk review |
 
 Output: LOCAL ONLY (docs/PR-<number>-review.md)
 Tip: Run /usage to check rate limit impact.
@@ -1590,12 +1590,12 @@ Task: [one-line description]
 
 | Agent   | Model             | Role                        |
 |---------|-------------------|-----------------------------|
-| bird    | claude-opus-4-6   | Domain analysis             |
-| mj      | claude-opus-4-6   | Architecture design         |
+| bird    | claude-opus-4-8   | Domain analysis             |
+| mj      | claude-opus-4-8   | Architecture design         |
 | magic   | claude-sonnet-4-6 | Context curation + synthesis |
-| shaq    | claude-opus-4-6   | Implementation              |
-| kobe    | claude-opus-4-6   | Quality review              |
-| pippen  | claude-opus-4-6   | Stability review            |
+| shaq    | claude-sonnet-4-6 | Implementation              |
+| kobe    | claude-opus-4-8   | Quality review              |
+| pippen  | claude-opus-4-8   | Stability review            |
 
 Tip: Run /usage to check rate limit impact.
 ```
