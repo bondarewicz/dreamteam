@@ -354,7 +354,7 @@ tools: Read
 ---
 `);
     const fm = parseAgentFrontmatter(fp);
-    expect(fm.model).toBe("claude-opus-4-6");
+    expect(fm.model).toBe("claude-opus-4-8");
   });
 
   test("returns empty tools when tools field absent", () => {
@@ -385,7 +385,7 @@ disallowedTools: Task
     );
     if (!fs.existsSync(birdMd)) return; // skip if not in repo context
     const fm = parseAgentFrontmatter(birdMd);
-    expect(fm.model).toBe("claude-opus-4-6");
+    expect(fm.model).toBe("claude-opus-4-8");
     expect(fm.tools).toContain("Read");
     expect(fm.tools).toContain("Bash");
   });
