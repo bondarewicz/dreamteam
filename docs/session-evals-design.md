@@ -108,9 +108,14 @@ session_evals(
 )
 ```
 
-## 8. The loop (v2)
+## 8. Auto-eval at session end + the loop
 
-Session **end** is also when memory capture happens — same moment, same trace. So the session eval **becomes** the end-of-session memory step, upgraded: replaces the open-ended "what should we remember?" with a grounded **keep / mute / promote** list.
+**Auto-eval (BUILT):** a **`SessionEnd` hook** (`scripts/session-eval-hook.ts`, wired via `scripts/hooks.json` → `~/.claude/settings.json`) auto-runs the judge when any Claude Code session ends, so **future sessions appear already scored** in the web Sessions view — no manual Evaluate click. The web "Evaluate" button stays for **past/backlog** sessions you pick.
+- **Non-blocking:** the hook reads the SessionEnd JSON, applies cheap guards, then spawns a **detached worker** (so the ~25–40s judge never delays session exit). The worker reuses `web/` judge code + DB (no duplication; finds the repo via `~/.claude/dreamteam/repo-root`).
+- **Cost guards (auto-skip):** excluded projects (`dreamteam-evals`), headless/synthetic sessions, `< DREAMTEAM_EVAL_MIN_TOOLS` (default 4) tool calls, and sessions already scored under the current `prompt_version`. Disable with `DREAMTEAM_AUTO_EVAL=0`. Progress logged to `~/.claude/dreamteam-auto-eval.log`.
+- **Still manual half (v2):** auto-eval **scores**; it does **not** yet write findings into memory / inject guidance (next).
+
+**The memory loop (v2, NOT built):** Session **end** is also when memory capture happens — same moment, same trace. So the session eval **becomes** the end-of-session memory step, upgraded: replaces the open-ended "what should we remember?" with a grounded **keep / mute / promote** list.
 - One end-of-session pass, two outputs: (1) score + findings → Evaluation tab + `feedback`-type candidates; (2) durable-fact candidates → `user`/`project`/`reference` memories.
 - **Feeds the existing memory-injection channel**, curation-gated. Do **not** build a second context-injection system.
 - The loop consumes **findings/evidence, not the scalar** (Goodhart insulation).
@@ -126,8 +131,8 @@ Session **end** is also when memory capture happens — same moment, same trace.
 
 ## 10. Build status
 
-- **DONE (slices 1–4):** all-projects parser → `/sessions` index (project picker, pagination, mtime cache) → `/sessions/:project/:id` 4-tab detail → Coach K judge + `session_evals` persistence → Evaluation tab → editable sectioned judge prompt + editable rubric wording → calibration (frozen scenarios, mechanical agreement, capture-from-session). 30 web tests green; live judge + calibration verified.
-- **NOT built (v2 / follow-ups):** the memory-injection loop (§8); image thumbnail downscaling (detail pages inline full-res base64); a real golden corpus incl. a planted-failure scenario; per-category judge fan-out; pinning the judge model.
+- **DONE (slices 1–4 + auto-eval):** all-projects parser → `/sessions` index (project picker, pagination, mtime cache) → `/sessions/:project/:id` 4-tab detail → Coach K judge + `session_evals` persistence → Evaluation tab → editable sectioned judge prompt + editable rubric wording → calibration (frozen scenarios, mechanical agreement, capture-from-session) → **`SessionEnd` auto-eval hook (§8)**. 28 web tests green; live judge, calibration, and auto-eval hook verified.
+- **NOT built (v2 / follow-ups):** the memory-injection loop (§8, the curation→inject half); image thumbnail downscaling (detail pages inline full-res base64); a real golden corpus incl. a planted-failure scenario; per-category judge fan-out; pinning the judge model.
 - **Note — file changes (+/−):** derived from `Edit`/`Write`/`MultiEdit` tool-call line deltas (approximate, log-only). `file-history-snapshot` records only carry backup *references*, so true before/after diffs are NOT reconstructable from the log alone.
 
 ## 11. Open / tunable
