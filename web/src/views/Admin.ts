@@ -103,6 +103,11 @@ export function AdminModelsPage(
     : "";
 
   return `
+    <div class="filters" style="margin-bottom:20px">
+      <a class="filter-btn active" href="/admin/models" style="text-decoration:none">Agent Models</a>
+      <a class="filter-btn" href="/admin/session-judge" style="text-decoration:none">Session Judge Prompt</a>
+      <a class="filter-btn" href="/admin/session-judge/calibration" style="text-decoration:none">Judge Calibration</a>
+    </div>
     <div class="page-title">
       <h1>Agent Models</h1>
       <p>Set the <code>model:</code> frontmatter value for each agent. Saving writes to <code>agents/&lt;name&gt;.md</code> in the repo only — run <code>bun scripts/install.ts</code> separately to sync into <code>~/.claude/</code>.</p>
