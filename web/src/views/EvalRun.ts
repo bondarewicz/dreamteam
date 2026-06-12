@@ -125,6 +125,11 @@ export function EvalRunPage(
   // Header
   const trialsLabel = trialCount > 1 ? `k=${trialCount} &middot; ${total} total` : `${total} total`;
   const baselineLabel = run.is_complete_baseline ? "complete" : "partial";
+  // The model under test lives in the run's meta blob (agent runs only; judge is constant).
+  const runModel = (() => {
+    try { return (JSON.parse(run.meta ?? "{}") as { model?: string }).model ?? null; }
+    catch { return null; }
+  })();
 
   const headerHtml = `
   <div class="header">
@@ -134,6 +139,11 @@ export function EvalRunPage(
         <div class="header-sub">${esc(run.run_id)}</div>
       </div>
       <div class="header-meta">
+        ${runModel ? `
+        <div class="meta-item">
+          <div class="meta-label">Model</div>
+          <div class="meta-value">${esc(runModel)}</div>
+        </div>` : ""}
         <div class="meta-item">
           <div class="meta-label">Run Date</div>
           <div class="meta-value">${esc(formatDate(run.timestamp))}</div>
@@ -197,7 +207,7 @@ export function EvalRunPage(
       </div>` : ""}
     </div>
     <div style="height: 16px;"></div>
-    ${summaries.length > 0 ? buildAgentChipRow(summaries, results) : ""}
+    ${summaries.length > 0 ? buildAgentChipRow(summaries) : ""}
   </div>`;
 
   // Calibration section
@@ -369,26 +379,13 @@ export function EvalRunPage(
   `;
 }
 
-// The 3 fixed scenario type slots shown in the chip dots (matches evals/src/cli.ts convention)
-const CHIP_SCENARIO_TYPES = ["happy-path", "edge-case", "escalation"] as const;
-
 function scoreOrd(score: string): number {
   if (score === "fail") return 0;
   if (score === "partial") return 1;
   return 2; // pass or empty
 }
 
-/** Normalise a raw scenario_type to one of the 3 chip slots, or null */
-function chipSlot(stype: string | null): typeof CHIP_SCENARIO_TYPES[number] | null {
-  if (!stype) return null;
-  const t = stype.toLowerCase().replace(/ /g, "-");
-  if (t.startsWith("happy")) return "happy-path";
-  if (t.startsWith("edge")) return "edge-case";
-  if (t.startsWith("escalat")) return "escalation";
-  return null;
-}
-
-function buildAgentChipRow(summaries: AgentSummary[], results: EvalResult[]): string {
+function buildAgentChipRow(summaries: AgentSummary[]): string {
   // Sort summaries alphabetically
   const sortedSummaries = [...summaries].sort((a, b) => {
     const ai = AGENT_ORDER.indexOf(a.agent.toLowerCase());
@@ -399,46 +396,30 @@ function buildAgentChipRow(summaries: AgentSummary[], results: EvalResult[]): st
     return ai - bi;
   });
 
-  // Build per-agent worst-score per chip slot
-  const agentTypeScore: Record<string, Record<string, string>> = {};
-  for (const r of results) {
-    const agent = r.agent.toLowerCase();
-    const slot = chipSlot(r.scenario_type);
-    if (!slot) continue;
-    if (!agentTypeScore[agent]) agentTypeScore[agent] = {};
-    const existing = agentTypeScore[agent][slot];
-    // Keep worst score across all scenarios in that slot
-    if (!existing || scoreOrd(r.score) < scoreOrd(existing)) {
-      agentTypeScore[agent][slot] = r.score;
-    }
-  }
-
   const chips = sortedSummaries.map(s => {
     const color = agentColor(s.agent);
     const agent = s.agent.toLowerCase();
     const chipName = s.agent.charAt(0).toUpperCase() + s.agent.slice(1);
-    const typeScores = agentTypeScore[agent] ?? {};
 
-    let passCount = 0;
-    let totalSlots = 0;
-    const dots = CHIP_SCENARIO_TYPES.map(stype => {
-      const sc = typeScores[stype] ?? "";
-      if (sc) totalSlots++;
-      if (sc === "pass") { passCount++; return `<div class="dot pass"></div>`; }
-      if (sc === "partial") return `<div class="dot partial"></div>`;
-      if (sc === "fail") return `<div class="dot fail"></div>`;
-      return `<div class="dot" style="background:var(--surface-3)"></div>`;
-    }).join("");
+    // Drive the chip from the agent's actual scenarios in this run (the
+    // already-aggregated worst-score summary), not a fixed set of type slots —
+    // a curated subset has arbitrary scenario_types, so fixed slots show 0/N.
+    const passCount = s.pass_count;
+    const total = s.pass_count + s.partial_count + s.fail_count;
+    const dots =
+      `<div class="dot pass"></div>`.repeat(s.pass_count) +
+      `<div class="dot partial"></div>`.repeat(s.partial_count) +
+      `<div class="dot fail"></div>`.repeat(s.fail_count);
 
-    if (totalSlots === 0) totalSlots = 3;
-    const scoreClass = passCount === totalSlots ? "perfect" : passCount === 0 ? "bad" : "mixed";
+    const denom = total === 0 ? 0 : total;
+    const scoreClass = total > 0 && passCount === total ? "perfect" : passCount === 0 ? "bad" : "mixed";
 
     return `
         <a class="agent-chip" href="#${esc(agent)}">
           <div class="agent-chip-dot" style="background:${color}"></div>
           <span class="agent-chip-name">${esc(chipName)}</span>
           <div class="agent-chip-dots">${dots}</div>
-          <span class="agent-chip-score ${scoreClass}">${passCount}/${totalSlots}</span>
+          <span class="agent-chip-score ${scoreClass}">${passCount}/${denom}</span>
         </a>`;
   }).join("");
 
