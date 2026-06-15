@@ -1,6 +1,8 @@
 // All shared types and interfaces for the eval pipeline
 
-export type Score = "pass" | "partial" | "fail";
+// "error" = the judge could not produce a verdict (throttle / non-zero exit / unparseable
+// output). It is NOT a model outcome — exclude it from pass/partial/fail tallies and pass_rate.
+export type Score = "pass" | "partial" | "fail" | "error";
 
 export interface GraderDef {
   type: string;
@@ -169,6 +171,7 @@ export interface FinalResult {
     pass: number;
     partial: number;
     fail: number;
+    error?: number; // scenarios the judge could not score (excluded from pass_rate)
     pass_rate: number;
   };
   results: ScoredResult[];

@@ -116,8 +116,9 @@ async function invokeScoringClaude(
   label: string
 ): Promise<{ parsed: Record<string, unknown> | null; error: string }> {
   let scoreError = "";
+  const MAX_ATTEMPTS = 3;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     let stdout = "";
     try {
       const result = await adapter.run(["-p"], prompt, timeoutMs);
@@ -137,12 +138,16 @@ async function invokeScoringClaude(
       return { parsed, error: scoreError };
     }
 
-    if (attempt === 0) {
-      console.log(`  RETRY scoring parse for ${label}`);
+    // Backoff before retrying — most non-zero exits with no output are transient
+    // rate/usage throttling on the judge call; a short, growing pause lets them clear.
+    if (attempt < MAX_ATTEMPTS - 1) {
+      console.log(`  RETRY scoring parse for ${label} (attempt ${attempt + 2}/${MAX_ATTEMPTS})`);
+      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
     }
   }
 
-  return { parsed: null, error: scoreError || "scoring parse failed after 2 attempts" };
+  // Caller maps a null parse to score 'error' (judge failure), not 'fail' (model failure).
+  return { parsed: null, error: scoreError || `scoring parse failed after ${MAX_ATTEMPTS} attempts` };
 }
 
 /**
@@ -184,13 +189,19 @@ export async function scoreSingleTrial(
   const rawScore = (parsed?.score as string) ?? "";
   const isValidScore = VALID_SCORES.has(rawScore);
 
-  // Grader hard gate: a non-advisory grader fail OR no parsed score → 'fail'.
-  // Graders gate by default; those marked `advisory: true` are recorded in
-  // grader_results but do not override the judge.
-  // Non-zero exit code alone does NOT force fail — claude can exit non-zero with valid output
-  let finalScore: Score = isValidScore ? (rawScore as Score) : "fail";
-  if (graderOverride || !parsed) {
+  // Grader hard gate vs judge failure are different things:
+  //  - graderOverride: a deterministic (non-advisory) grader failed → real 'fail'.
+  //  - !parsed: the judge call itself failed (throttle / non-zero exit / unparseable) →
+  //    'error', NOT 'fail'. A throttled judge must never masquerade as a model failure.
+  let finalScore: Score;
+  if (graderOverride) {
     finalScore = "fail";
+  } else if (!parsed) {
+    finalScore = "error";
+  } else if (isValidScore) {
+    finalScore = rawScore as Score;
+  } else {
+    finalScore = "error"; // judge returned an unrecognised verdict
   }
 
   const effectiveParsed = parsed ?? {
@@ -302,7 +313,9 @@ export async function scoreScenarioAllTrials(
 
   if (trialResults.length === 0) return null;
 
-  const primary = trialResults[0];
+  // Representative trial = first that the judge actually scored; only falls back to an
+  // 'error' trial when every trial failed to score (→ scenario score 'error', not 'fail').
+  const primary = trialResults.find((t) => t.score !== "error") ?? trialResults[0];
   const scoredResult: ScoredResult = {
     agent,
     scenario_id: scenarioId,
@@ -327,7 +340,8 @@ export async function scoreScenarioAllTrials(
 
   if (trials > 1) {
     scoredResult.trials = trialResults;
-    const scoresSet = new Set(trialResults.map((t) => t.score));
+    // Flakiness is real-verdict variance — an unscored ('error') trial isn't a verdict.
+    const scoresSet = new Set(trialResults.filter((t) => t.score !== "error").map((t) => t.score));
     scoredResult.flaky = scoresSet.size > 1;
     scoredResult.pass_hat_k = trialResults.some((t) => t.score === "pass");
   }
@@ -421,8 +435,17 @@ export async function scoreTeamScenarioAllTrials(
 
     const rawScore = (parsed?.score as string) ?? "";
     const isValidScore = VALID_SCORES.has(rawScore);
-    let finalScore: Score = isValidScore ? (rawScore as Score) : "fail";
-    if (anyGraderFail || !parsed) finalScore = "fail";
+    // See scoreSingleTrial: deterministic grader fail → 'fail'; judge failure → 'error'.
+    let finalScore: Score;
+    if (anyGraderFail) {
+      finalScore = "fail";
+    } else if (!parsed) {
+      finalScore = "error";
+    } else if (isValidScore) {
+      finalScore = rawScore as Score;
+    } else {
+      finalScore = "error";
+    }
 
     const effectiveParsed = parsed ?? {
       justification: `scoring parse error: ${scoreError || "no output"}`,
@@ -453,7 +476,8 @@ export async function scoreTeamScenarioAllTrials(
 
   if (trialResults.length === 0) return null;
 
-  const primary = trialResults[0];
+  // Representative trial = first the judge actually scored (see scoreScenarioAllTrials).
+  const primary = trialResults.find((t) => t.score !== "error") ?? trialResults[0];
   const scoredResult: ScoredResult = {
     agent: "team",
     scenario_id: scenarioId,
@@ -478,7 +502,7 @@ export async function scoreTeamScenarioAllTrials(
 
   if (trials > 1) {
     scoredResult.trials = trialResults;
-    const scoresSet = new Set(trialResults.map((t) => t.score));
+    const scoresSet = new Set(trialResults.filter((t) => t.score !== "error").map((t) => t.score));
     scoredResult.flaky = scoresSet.size > 1;
     scoredResult.pass_hat_k = trialResults.some((t) => t.score === "pass");
   }

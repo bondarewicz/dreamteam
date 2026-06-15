@@ -75,9 +75,14 @@ export function EvalRunPage(
   }
 
   let flakyCount = 0;
+  // Scenarios the judge could not score (every trial is 'error') — surfaced as
+  // "Unscored", never counted as fail. Caused by judge throttling, not the model.
+  let unscoredCount = 0;
   for (const group of byScenario.values()) {
+    const realVerdicts = group.filter(g => g.score === "pass" || g.score === "partial" || g.score === "fail");
+    if (realVerdicts.length === 0) { unscoredCount++; continue; }
     if (group.length > 1) {
-      const scores = new Set(group.map(g => g.score));
+      const scores = new Set(realVerdicts.map(g => g.score));
       if (scores.size > 1) flakyCount++;
     }
   }
@@ -168,6 +173,7 @@ export function EvalRunPage(
         <div class="score-pill pass"><div class="score-dot pass"></div>${passCount} Pass</div>
         <div class="score-pill partial"><div class="score-dot partial"></div>${partialCount} Partial</div>
         <div class="score-pill fail"><div class="score-dot fail"></div>${failCount} Fail</div>
+        ${unscoredCount > 0 ? `<div class="score-pill" title="Judge could not score these — throttled/errored, not a model failure"><div class="score-dot" style="background:var(--text-muted)"></div>${unscoredCount} Unscored</div>` : ""}
       </div>
       <div class="progress-bar-wrap">
         <div class="progress-label">${scenariosRun} scenarios scored &mdash; ${passRatePct}% pass rate${trialCount > 1 ? ` (worst-score across k=${trialCount})` : ""}</div>
