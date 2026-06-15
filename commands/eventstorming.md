@@ -21,6 +21,8 @@ Produces an Event Storm following Brandolini's canonical notation, the project's
 
 4. **Anything else** — Treat the whole string as the scope and default the variant to `as-is`. Confirm the assumption back to the user in one sentence before building.
 
+**Level (orthogonal to variant):** the scope may also name a level — **process** (default) or **design**. Recognise `process level` / `PLES` and `design level` / `DLES` in the text. Process-level models the *flow* (§3a grammar); design-level re-models from the aggregate's perspective to surface **invariants** (§3b grammar). When unsure, build process level first, then offer design level as the follow-up — that mirrors how the team actually works.
+
 ## Execution flow (when building a board)
 
 1. **Check Miro auth first.** Call `mcp__miro__authenticate` (or the relevant Miro MCP tool) before doing any modeling work. If auth is missing, surface the auth step to the user and stop — don't waste tokens building a spec that can't be uploaded.
@@ -64,9 +66,9 @@ Canonical sticky table (Ch. 22 + 23 + Ch. 40 ingredients list):
 | **Aggregate** | 🟨 large yellow square | The DDD unit of consistency. Groups its commands+events. Brandolini's "what happens between a command and an event" | `yellow` |
 | **Policy** | 🟪 violet (purple) square | "Whenever X then Y" reactive logic. **Sits between an orange event and a blue command.** Ch. 23: *"there must be a lilac between an orange and the blue."* | `violet` ⚠ **project override** — Brandolini's canonical is lilac (`light_pink`); this project uses `violet` instead |
 | **Read Model** | 🟢 green square | Information used to make a decision (drives a command). UI / projection. | `light_green` |
-| **External System** | 💗 large pink rectangle (`#F0C6EB`) | "Whatever we can put the blame on" (Ch. 4). 3rd-party APIs, upstream services, other depts. | `pink` (sticky) / `fill=#F0C6EB` (shape) |
+| **External System** | 💗 large pink rectangle (`#F0C6EB`) | "Whatever we can put the blame on" (Ch. 4). 3rd-party APIs, upstream services, other depts. **Name it after the actual service** (§3c), never a generic "External System" box. | `pink` (sticky) / `fill=#F0C6EB` (shape) |
 | **Actor / Person** | 🟡 small pale-yellow rectangle | The user/role who issues a command | `light_yellow` |
-| **Hot Spot** | 🟥 **red** square | Disagreement, unknown, problem, friction. ⚠ **project override** — Brandolini's canonical is purple (Ch. 36: *"Mark hot spots with purple sticky notes. Purple is the closest you can get to signal warning or danger"*). This project uses `red` for stronger visual warning, and reserves violet for Policy. | `red` ⚠ **project override** |
+| **Hot Spot** | 🟥 **red** square | Disagreement, unknown, problem, friction — **phrased as a question** (`Laurel?`), see §3c. ⚠ **project override** — Brandolini's canonical is purple (Ch. 36: *"Mark hot spots with purple sticky notes. Purple is the closest you can get to signal warning or danger"*). This project uses `red` for stronger visual warning, and reserves violet for Policy. | `red` ⚠ **project override** |
 | **Pivotal Event** | 🟧 orange + label tape | A key event that splits the timeline into business phases (e.g. `Order Placed`, `Payment Received`). 4–5 per workshop. Marked with horizontal coloured tape running below it. | Same `orange` sticky + a thin orange `SHAPE rectangle` running vertically through the timeline |
 
 **Project-specific palette (Willow / Poplar / Sycamore):**
@@ -133,7 +135,7 @@ So: horizontal swimlanes = **parallel narratives in time** (e.g. customer flow v
 
 ---
 
-## 3. Design-Level EventStorming grammar (Ch. 23 schema)
+## 3a. Process-Level grammar (Ch. 23 schema)
 
 The canonical chain Brandolini draws:
 
@@ -152,6 +154,50 @@ The canonical chain Brandolini draws:
 ```
 
 Each story = **3 core stickies stacked tightly**: yellow aggregate on top, blue command + orange event below.
+
+---
+
+## 3b. Design-Level grammar — invariants (mrpicky)
+
+Reference: https://mrpicky.dev/design-level-event-storming-with-examples/ (reviewed with the team, 2026-06-05).
+
+Process-level shows the *flow*; **design-level (DLES) re-models each story from the aggregate's perspective** to force out the **real aggregate and its invariants**. DLES is **not** "process-level with yellow stickies added" — you re-model and ask, at each step, *what invariant lives here?* (sometimes you discover an aggregate isn't needed; sometimes a missing one).
+
+The story-cell grammar is tighter than process level:
+
+```
+[Command] → [Business Rule / Invariant] → [Aggregate] → [Event(s)]
+                      ▲                        ▲
+                 [Read Model]           (enforces the rules)
+```
+
+- **Invariants / business rules are their own stickies, placed *between* the command and the aggregate** — the constraints the aggregate enforces before it emits events.
+- The **aggregate is the central decision point** and **repeats along the timeline at each state change** (show state transitions, not one static box).
+- **Read models drive commands** — data informs the decision.
+
+**AS-IS vs TO-BE at design level is the highest-value artifact.** AS-IS shows the aggregate with its **missing invariants as red hotspots** (the bug stated in modelling terms); TO-BE shows the same aggregate **enforcing them**. Number the invariants (`INV1…INVn`) — they become the **acceptance criteria for the code fix** — and add green ✅ FIX markers mapping each AS-IS hotspot to its TO-BE resolution. Built this way, the board *is* the spec.
+
+## 3c. Team conventions — how our humans build process-level boards
+
+Learned from the team's real workshop boards (reviewed 2026-06-05). Match these; they override any "tidy diagram" instinct:
+
+- **The grammar cycle is the legend KEY, not the layout.** Put the `Command → Aggregate → Event → Policy/Projection → Command` cycle as a small key in the **top-left of each section**. The storm itself is **not** drawn in that rigid shape.
+- **The storm is a single horizontal narrative line** of interleaved stickies read strictly left → right — *not* a grid, *not* a lane-per-type pipeline. (First-attempt failure mode to avoid: laying it out as a rigid grid.)
+- **Pink = System (abstraction), named after the actual service.** Put the real service name on the pink sticky (this org's services are tree-named — Poplar, Sycamore, Acacia, Olive, Willow…); never a generic "External System" box. Third parties (e.g. Royal Mail) are also pink systems, named for the service.
+- **Hotspots are phrased as questions / open risks** — `Laurel?`, `No API for collection booking?` — not statements. A hotspot captures the thing nobody is sure about.
+- **Phase dividers = thick black vertical bars** between business phases (the team's marker). The orange pivotal tape in §4 is the Brandolini equivalent; use the black bar to match team boards.
+- **Time triggers = clock / Passage-of-Time stickies**; small `user on FE` yellow triggers attach to the command a user kicks off; long **curved loop-back arrows** close cycles.
+- **Connectors:** the Miro MCP layout tool **cannot draw native Miro connectors** (the hand-drawn curved arrows). Approximate them with **arrow *shapes*** between stickies, and say so if the user expects pixel-identical connectors.
+
+## 3d. Sticky-label readability (apply to EVERY sticky, board-wide)
+
+Direct user feedback, given twice: **space out compound CamelCase identifiers** so labels wrap at word boundaries instead of mid-word.
+
+- `ThrottledFailurePublisher` → `Throttled Failure Publisher`
+- `CarrierApiCallThrottled` → `Carrier Api Call Throttled`
+- `CarrierThrottleGate` → `Carrier Throttle Gate`
+
+**Leave code-literal values verbatim** — they read as identifiers and wrap fine on underscores/dots: `local_policy_rejection`, `too_many_requests`, `Task.Delay`, `Retry-After`, `retry(rateLimit(call))`. Apply the spacing to **all** stickies on the board, not just the ones under discussion.
 
 ---
 
@@ -225,6 +271,9 @@ When the user asks for both, place them in two separate frames:
 | **Divide and Conquer** | Breaking the story into sub-teams modelling pieces | Loses the cross-cutting view that's the whole point. |
 | **Service-architecture swimlanes** *(my addition — implicit anti-pattern)* | Stacking Willow / Poplar / Sycamore as 3 horizontal bands | Inverts the grammar. Time is the axis, not service ownership. |
 | **Pink for policies** *(my addition)* | Saturated pink for Whenever→Then | Pink is **external systems**. In this project policies are **violet** (project override). |
+| **Rigid grid layout** *(team convention, §3c)* | Stickies in a lane-per-type grid / flat pipeline | The storm is a **horizontal narrative line**; the grammar cycle belongs in the legend key, not the layout. |
+| **Generic "External System" box** *(team convention, §3c)* | Pink sticky labelled "External System" | Pink systems are **named after the real service** (Poplar, Royal Mail, …). |
+| **CamelCase sticky labels** *(readability, §3d)* | `CarrierApiCallThrottled` on a sticky | Wraps mid-word and is unreadable — **space the compounds**; keep code-literals verbatim. |
 
 ---
 
@@ -244,6 +293,14 @@ When the user asks for both, place them in two separate frames:
 12. If the cycle loops back, add a dashed loop indicator.
 13. Add the `Time →` arrow at the bottom.
 14. If TO-BE: add ⊕ ACLs at boundaries, ✅ on fixed aggregates, 📦 on Published Language flows, and a green Fixes panel replacing the hot spot column.
+
+**Always, on every board (team conventions, §3c–3d):**
+- Name pink systems after the **real service**, not "External System".
+- Phrase hotspots as **questions**.
+- Lay the storm out as a **horizontal narrative line**, not a grid; put the grammar cycle as a top-left **legend key**.
+- **Space out CamelCase** sticky labels (`CarrierThrottleGate` → `Carrier Throttle Gate`); leave code-literals verbatim.
+- Connectors aren't supported by the MCP — approximate with **arrow shapes**.
+- **Design level?** Use the §3b invariant grammar (Command → Invariant → Aggregate → Event; aggregate repeats on state change; number invariants `INV1…n` as acceptance criteria).
 
 ---
 
