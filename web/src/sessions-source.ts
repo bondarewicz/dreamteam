@@ -11,7 +11,11 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
-const PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
+// Resolved at call time so tests (and alternate hosts) can point at a fixture
+// directory via CLAUDE_PROJECTS_DIR instead of the real ~/.claude/projects.
+function projectsDir(): string {
+  return process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), ".claude", "projects");
+}
 
 /** Projects excluded from indexing entirely (automated eval-runner noise). */
 const EXCLUDED_PROJECTS = new Set(["-Users-lb-Github-Bondarewicz-dreamteam-evals"]);
@@ -227,11 +231,12 @@ function summarize(project: string, file: string): SessionSummary | null {
 
 // ── public API ────────────────────────────────────────────────
 export function listProjects(): Array<{ dir: string; label: string; sessions: number }> {
-  if (!fs.existsSync(PROJECTS_DIR)) return [];
+  const root = projectsDir();
+  if (!fs.existsSync(root)) return [];
   const out: Array<{ dir: string; label: string; sessions: number }> = [];
-  for (const dir of fs.readdirSync(PROJECTS_DIR)) {
+  for (const dir of fs.readdirSync(root)) {
     if (EXCLUDED_PROJECTS.has(dir)) continue;
-    const full = path.join(PROJECTS_DIR, dir);
+    const full = path.join(root, dir);
     let n = 0;
     try {
       if (!fs.statSync(full).isDirectory()) continue;
@@ -246,11 +251,12 @@ export type ListOpts = { project?: string; includeHeadless?: boolean; limit?: nu
 
 /** List session summaries (newest first). Excludes excluded projects + headless by default. */
 export function listSessions(opts: ListOpts = {}): SessionSummary[] {
+  const root = projectsDir();
   const projects = opts.project ? [opts.project] : listProjects().map(p => p.dir);
   const summaries: SessionSummary[] = [];
   for (const dir of projects) {
     if (EXCLUDED_PROJECTS.has(dir)) continue;
-    const full = path.join(PROJECTS_DIR, dir);
+    const full = path.join(root, dir);
     let files: string[] = [];
     try { files = fs.readdirSync(full).filter(f => f.endsWith(".jsonl")); } catch { continue; }
     for (const f of files) {
@@ -265,7 +271,7 @@ export function listSessions(opts: ListOpts = {}): SessionSummary[] {
 }
 
 export function loadSession(project: string, id: string): SessionDetail | null {
-  const file = path.join(PROJECTS_DIR, project, `${id}.jsonl`);
+  const file = path.join(projectsDir(), project, `${id}.jsonl`);
   const summary = summarize(project, file);
   if (!summary) return null;
   const records = readJsonl(file);
