@@ -11,6 +11,9 @@
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import fs from "fs";
+
+// Avoid real retry-backoff sleeps in unit tests (scorer reads this at call time).
+process.env.EVAL_SCORING_BACKOFF_MS = "0";
 import os from "os";
 import path from "path";
 import type { ClaudeAdapter, GraderResult, RawOutput } from "../types.ts";
@@ -159,12 +162,12 @@ describe("scoreSingleTrial", () => {
     expect(result!.grader_results).toEqual(graderResults);
   });
 
-  test("score forced to 'fail' when LLM returns unparseable output (after retry)", async () => {
+  test("score forced to 'error' when LLM returns unparseable output (after retries exhausted)", async () => {
     const rawPath = path.join(tmpDir, "shaq-scenario-01.json");
     fs.writeFileSync(rawPath, JSON.stringify(makeRawOutput()));
 
-    // Both attempts return unparseable output
-    const adapter = new MockAdapter(["not json at all", "still not json"]);
+    // Every attempt returns unparseable output
+    const adapter = new MockAdapter(["not json at all", "still not json", "nope"]);
 
     const result = await scoreSingleTrial(
       "shaq",
@@ -180,9 +183,11 @@ describe("scoreSingleTrial", () => {
     );
 
     expect(result).not.toBeNull();
-    expect(result!.score).toBe("fail");
+    // A judge that never produces parseable output is a judge failure ('error'),
+    // not a model failure ('fail') — see scoreSingleTrial.
+    expect(result!.score).toBe("error");
     expect(result!.confidence_stated).toBe(0);
-    expect(adapter.calls).toHaveLength(2); // one retry was made
+    expect(adapter.calls).toHaveLength(3); // all retries exhausted
   });
 
   test("retry succeeds: first LLM call returns garbage, second returns valid JSON", async () => {

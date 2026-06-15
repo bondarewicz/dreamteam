@@ -142,7 +142,9 @@ async function invokeScoringClaude(
     // rate/usage throttling on the judge call; a short, growing pause lets them clear.
     if (attempt < MAX_ATTEMPTS - 1) {
       console.log(`  RETRY scoring parse for ${label} (attempt ${attempt + 2}/${MAX_ATTEMPTS})`);
-      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+      // Backoff base is overridable (set to 0 in unit tests to avoid real sleeps).
+      const backoffBaseMs = Number(process.env.EVAL_SCORING_BACKOFF_MS ?? 2000);
+      await new Promise((r) => setTimeout(r, backoffBaseMs * (attempt + 1)));
     }
   }
 
