@@ -315,10 +315,15 @@ export function migrate(db: Database) {
             agentStats[baseR.agent] = { pass: 0, partial: 0, fail: 0, confidences: [] };
           }
           const stats = agentStats[baseR.agent];
-          if (trial.score === "pass") stats.pass++;
-          else if (trial.score === "partial") stats.partial++;
-          else stats.fail++;
-          if (trial.confidence_stated != null) stats.confidences.push(trial.confidence_stated);
+          // Count the scenario's representative verdict (baseR.score), and exclude
+          // 'error' (judge could not score) from every bucket — it is not a model
+          // failure, so it must not land in `fail`.
+          const sc = baseR.score;
+          if (sc === "pass") stats.pass++;
+          else if (sc === "partial") stats.partial++;
+          else if (sc === "fail") stats.fail++;
+          // Skip confidence for unscored scenarios — no real verdict to calibrate against.
+          if (sc !== "error" && trial.confidence_stated != null) stats.confidences.push(trial.confidence_stated);
         }
       };
 

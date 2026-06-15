@@ -46,12 +46,14 @@ export function computeAgentSummaries(results: ScoredResult[]): Record<string, A
     if (!buckets[a]) {
       buckets[a] = { pass: 0, partial: 0, fail: 0, confidences: [] };
     }
-    const s = r.score;
-    buckets[a][s] = (buckets[a][s] ?? 0) + 1;
-
-    const c = r.confidence_stated;
-    if (c !== undefined && c !== null) {
-      buckets[a].confidences.push(c);
+    // 'error' (judge could not score) is excluded from pass/partial/fail, pass_rate,
+    // and the confidence/calibration aggregation — it carries no real verdict.
+    if (r.score === "pass" || r.score === "partial" || r.score === "fail") {
+      buckets[a][r.score] += 1;
+      const c = r.confidence_stated;
+      if (c !== undefined && c !== null) {
+        buckets[a].confidences.push(c);
+      }
     }
   }
 
@@ -129,7 +131,11 @@ export function assembleFinalResult(
   const passCount = results.filter((r) => r.score === "pass").length;
   const partialCount = results.filter((r) => r.score === "partial").length;
   const failCount = results.filter((r) => r.score === "fail").length;
-  const passRate = scenariosRun > 0 ? Math.round((passCount / scenariosRun) * 10000) / 10000 : 0;
+  const errorCount = results.filter((r) => r.score === "error").length;
+  // pass_rate denominator excludes unscored ('error') scenarios — a throttled judge
+  // shouldn't drag the rate down as if the model had failed.
+  const scored = passCount + partialCount + failCount;
+  const passRate = scored > 0 ? Math.round((passCount / scored) * 10000) / 10000 : 0;
 
   const agentSummaries = computeAgentSummaries(results);
   const repoCommit = getRepoCommit(repoRoot);
@@ -145,6 +151,7 @@ export function assembleFinalResult(
       pass: passCount,
       partial: partialCount,
       fail: failCount,
+      error: errorCount,
       pass_rate: passRate,
     },
     results,
