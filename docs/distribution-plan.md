@@ -15,6 +15,11 @@ the user installs once; we invoke it with its own native interface.
 | **Claude** (opus / sonnet / haiku) | `claude -p` (Claude Code) | **Max plan — $0 API, sanctioned** |
 | **Ollama** (`qwen3.6`, `gemma4`) | `POST localhost:11434/v1/chat/completions` | **local, $0** |
 | **Gemini** (`gemini-2.x`) | `gemini -p "<prompt>" -m <model> -o json` (or API w/ `GEMINI_API_KEY`) | free tier |
+| **Codex** (`gpt-5-codex` / o-series) | `codex exec "<prompt>" -m <model> --output-schema <f> --output-last-message <f>` | **ChatGPT subscription (`~/.codex` login) — $0, first-party CLI = sanctioned** |
+
+Every backend is a **first-party** CLI/API for its provider — so subscription auth (Claude Max,
+ChatGPT Plus/Pro) is sanctioned. That's the key difference from the opencode dead-end, which
+was a *third-party* tool using the Anthropic subscription against ToS.
 
 **Why no opencode** (this was the prior dead-end, now fully avoided): opencode forces a
 *metered Anthropic API key* and Anthropic prohibits Max-subscription use through third-party
@@ -32,15 +37,17 @@ into Max. `dreamteam doctor` checks presence/reachability and tells you what's m
 assets/agents/bird.md            canonical spec (provider-neutral)
   capabilities: [read, search, shell]
   model: { tier: reasoning-heavy,
-           pin: { claude: claude-opus-4-8, gemini: gemini-2.x, ollama: qwen3.6 } }
+           pin: { claude: claude-opus-4-8, gemini: gemini-2.x, ollama: qwen3.6, codex: gpt-5-codex } }
         │
         ├── INSTALL (interactive use) ── claude-code adapter → ~/.claude/agents/*.md (+hooks +MCP)
         │                                 (Claude Code is the agentic harness; Max plan)
         │
         └── runAgent(agent, prompt, {model}) ── direct provider backends (eval + scripted use)
-              ├── claude  → claude -p --system-prompt-file <agent.md> --json-schema …   (Max)
+              ├── claude  → claude -p --system-prompt-file <agent.md> --json-schema …   (Max; native schema)
               ├── ollama  → POST :11434/v1/chat/completions  (system=agent body, response_format=json_schema)
-              └── gemini  → gemini -p "<prompt>" -m <model> -o json   OR  Gemini API (systemInstruction + responseSchema)
+              ├── gemini  → gemini -p "<prompt>" -m <model> -o json   (soft schema → Zod re-validate)
+              └── codex   → codex exec "<prompt>" -m <model> --output-schema <f> --output-last-message <f>
+                            --sandbox read-only --skip-git-repo-check   (ChatGPT sub; NATIVE schema)
 ```
 
 ```ts
@@ -71,6 +78,10 @@ inference (the common eval path).** That's an acceptable, explicit asymmetry.
   `--approval-mode plan` (read-only); `GEMINI_API_KEY` set.
 - **Claude Code** on Max (native `claude -p`, the schema-enforcement path already in
   `evals/src/schema-runner.ts`).
+- **Codex CLI 0.140.0** at `~/.local/bin/codex`; authed via `~/.codex` (ChatGPT login, no
+  `OPENAI_API_KEY`). Headless `codex exec`; `--json` (JSONL events), `--output-last-message`
+  (final message → file), `--output-schema` (native JSON-Schema final response),
+  `--sandbox read-only`, `--skip-git-repo-check`.
 - No opencode involvement. (The stale `~/.config/opencode/dreamteam/` from a prior experiment
   can be ignored/removed — not part of this design.)
 
@@ -79,6 +90,7 @@ inference (the common eval path).** That's an acceptable, explicit asymmetry.
 bun evals/src/cli.ts --agent bird --model claude-opus-4-8 --trials 3   # claude -p, Max
 bun evals/src/cli.ts --agent bird --model ollama/qwen3.6  --trials 3   # direct :11434
 bun evals/src/cli.ts --agent bird --model gemini/gemini-2.x --trials 3 # gemini -p / API
+bun evals/src/cli.ts --agent bird --model codex/gpt-5-codex --trials 3 # codex exec, ChatGPT sub
 ```
 
 ---
@@ -125,10 +137,16 @@ Testable: existing Claude evals + install unchanged, now routed through `runAgen
      Caveats (acceptable): it's an agent harness — injects its own ~8k-token tool/system
      preamble per call (agent body is *appended*, not a clean system role), ~14 s latency,
      some nondeterminism. Zod re-validation + `--trials` absorb it.
-2. Model routing: `provider/model` prefix selects the backend; bare id ⇒ claude. `costUsd`
-   defaults 0 for ollama/free-tier.
-3. Tier → model table per provider (`reasoning-heavy → {claude-opus-4-8, gemini-2.x, qwen3.6}`,
-   `fast-cheap → {claude-haiku, gemini-flash, gemma4}`).
+   - `codex` — `codex exec "<prompt>" -m <model> --output-schema <schema.json>
+     --output-last-message <out> --sandbox read-only --skip-git-repo-check`; agent body
+     prepended/piped as instructions; read `<out>` for the final message, parse against the
+     native `--output-schema`, Zod re-validate. ChatGPT-subscription auth (`~/.codex`), $0.
+     Best off-Claude schema fidelity (native, like `claude --json-schema`).
+2. Model routing: `provider/model` prefix selects the backend (`ollama/…`, `gemini/…`,
+   `codex/…`); bare id ⇒ claude. `costUsd` defaults 0 for local/subscription providers.
+3. Tier → model table per provider
+   (`reasoning-heavy → {claude-opus-4-8, gemini-2.x, qwen3.6, gpt-5-codex}`,
+   `fast-cheap → {claude-haiku, gemini-flash, gemma4, gpt-5-codex-mini}`).
 
 Testable: the acceptance bar — Bird graded on all three providers, same corpus.
 
@@ -148,8 +166,8 @@ migration shim.
 ## Phase 5 — Cross-provider eval baseline  *(the differentiator)*
 
 The 40-scenario corpus as a `(scenario × provider)` matrix; HTML report A/Bs
-`claude-opus-4-8` (Max) vs `ollama/qwen3.6` (local) vs `gemini/gemini-2.x`. Just `--model`
-permutations through the Phase 2 backends. Publish as the public proof:
+`claude-opus-4-8` (Max) vs `ollama/qwen3.6` (local) vs `gemini/gemini-2.x` vs
+`codex/gpt-5-codex` (ChatGPT sub). Just `--model` permutations through the Phase 2 backends. Publish as the public proof:
 *"graded against a domain corpus, on any provider — not vibes."*
 
 ---
@@ -180,5 +198,5 @@ Phase 2 is the heart and the highest-information unknown — go for it right aft
 3. **Schema enforcement per provider.** Ollama `response_format` and Gemini `responseSchema`
    are native; for the slice, prompt-embedded + Zod is the cheap universal path. Native day one?
 4. **Tier → model table.** Local: `qwen3.6` (reasoning-heavy), `gemma4` (fast); pin the exact
-   `gemini-2.x` id.
+   `gemini-2.x` and Codex (`gpt-5-codex` vs default; confirm via `codex exec -m <id>`) ids.
 5. **`dreamteam` bin name** collision on npm (`distribution.md §8.5`); `dt` fallback alias.

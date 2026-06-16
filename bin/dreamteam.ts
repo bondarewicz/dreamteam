@@ -98,6 +98,10 @@ async function cmdDoctor(): Promise<number> {
   const geminiAuth = !!process.env.GEMINI_API_KEY || fs.existsSync(path.join(process.env.HOME ?? "~", ".gemini"));
   rows.push(["Gemini CLI (gemini)", gemini.ok && geminiAuth, gemini.ok ? (geminiAuth ? gemini.detail : "installed, but no GEMINI_API_KEY / ~/.gemini auth") : "not on PATH"]);
 
+  const codex = await bin("codex", ["--version"]);
+  const codexAuth = fs.existsSync(path.join(process.env.HOME ?? "~", ".codex")) || !!process.env.OPENAI_API_KEY || !!process.env.CODEX_API_KEY;
+  rows.push(["Codex CLI (codex)", codex.ok && codexAuth, codex.ok ? (codexAuth ? codex.detail : "installed, but not logged in (`codex login`) / no API key") : "not on PATH"]);
+
   let allOk = true;
   for (const [label, ok, detail] of rows) {
     console.log(`  ${ok ? "✓" : "✗"} ${label.padEnd(24)} ${detail}`);
