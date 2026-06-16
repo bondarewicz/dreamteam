@@ -5,7 +5,7 @@
  * Fields may be multiline (block scalar with | or bare newlines).
  */
 
-import type { GraderDef, ScenarioMeta, ScenarioFields, TeamPhase, PipelineFields } from "./types.ts";
+import type { GraderDef, ScenarioMeta, ScenarioFields } from "./types.ts";
 
 /**
  * Extract a top-level YAML-like multiline field from scenario content.
@@ -166,62 +166,6 @@ export function extractGraders(content: string): GraderDef[] | null {
 
   flush(current);
   return graders;
-}
-
-/**
- * Parse a team scenario file into phases and pipeline fields.
- */
-export function parseTeamScenario(content: string): { phases: TeamPhase[]; pipelineFields: PipelineFields } {
-  const phases: TeamPhase[] = [];
-  let phaseNum = 1;
-
-  while (true) {
-    const agentRe = new RegExp(`^phase_${phaseNum}_agent:\\s*(\\S+)`, "m");
-    const agentMatch = agentRe.exec(content);
-    if (!agentMatch) break;
-
-    const phaseAgent = agentMatch[1].trim();
-
-    function extractPhaseField(field: string): string {
-      const key = `phase_${phaseNum}_${field}`;
-      const re = new RegExp(
-        "^" + escapeRegex(key) + ":\\s*\\|?\\s*\\n([\\s\\S]*?)(?=\\nphase_\\d+_[a-zA-Z]|\\npipeline_[a-zA-Z]|$)",
-        "m"
-      );
-      const m = re.exec(content);
-      return m ? m[1].trimEnd() : "";
-    }
-
-    const phasePrompt = extractPhaseField("prompt");
-    const phaseExpected = extractPhaseField("expected_behavior");
-    const phaseFailure = extractPhaseField("failure_modes");
-    const phaseRubric = extractPhaseField("scoring_rubric");
-    const phaseReference = extractPhaseField("reference_output");
-    const phaseGradersRaw = extractPhaseField("graders");
-    const humanDecision = phaseAgent === "human" ? phasePrompt : "";
-
-    phases.push({
-      phaseNum,
-      agent: phaseAgent,
-      prompt: phasePrompt,
-      expectedBehavior: phaseExpected,
-      failureModes: phaseFailure,
-      scoringRubric: phaseRubric,
-      gradersRaw: phaseGradersRaw,
-      referenceOutput: phaseReference,
-      humanDecision,
-    });
-
-    phaseNum++;
-  }
-
-  const pipelineFields: PipelineFields = {
-    pipelineExpectedBehavior: extractField("pipeline_expected_behavior", content),
-    pipelineFailureModes: extractField("pipeline_failure_modes", content),
-    pipelineScoringRubric: extractField("pipeline_scoring_rubric", content),
-  };
-
-  return { phases, pipelineFields };
 }
 
 function escapeRegex(s: string): string {

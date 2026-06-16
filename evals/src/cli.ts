@@ -12,7 +12,7 @@
  *                        Does NOT affect Coach K scoring calls — the judge stays on the default model
  *                        so 4.6 vs 4.7 runs are compared against a constant baseline.
  *   --dry-run            Show what would run without executing
- *   --timeout-per-phase  Timeout in seconds per phase (default: 300 individual, 600 team)
+ *   --timeout-per-phase  Timeout in seconds per scenario (default: 300)
  */
 
 import path from "path";

@@ -9,12 +9,9 @@ import fs from "fs";
 import type { ClaudeAdapter, GraderResult, DiscoveredScenario, PipelineOptions } from "./types.ts";
 import { discoverScenarios } from "./discovery.ts";
 import { runConcurrent } from "./concurrency.ts";
-import { runAgentScenario, runTeamScenario } from "./agent-runner.ts";
+import { runAgentScenario } from "./agent-runner.ts";
 import { triggerMigration } from "./report.ts";
-import {
-  scoreScenarioAllTrials,
-  scoreTeamScenarioAllTrials,
-} from "./scorer.ts";
+import { scoreScenarioAllTrials } from "./scorer.ts";
 import { assembleFinalResult } from "./assembler.ts";
 import { extractGraders } from "./scenario-parser.ts";
 import { runAllGraders } from "./graders.ts";
@@ -44,8 +41,6 @@ async function phaseAgents(
 
   const timeoutMs =
     options.timeoutPerPhase > 0 ? options.timeoutPerPhase * 1000 : 300 * 1000;
-  const teamTimeoutMs =
-    options.timeoutPerPhase > 0 ? options.timeoutPerPhase * 1000 : 600 * 1000;
 
   // Build work items: (scenario, trial)
   const workItems: Array<{ scenario: DiscoveredScenario; trial: number }> = [];
@@ -57,30 +52,17 @@ async function phaseAgents(
 
   const tasks = workItems.map(({ scenario, trial }) => async () => {
     const { scenarioFile, agent, scenarioId } = scenario;
-    if (agent === "team") {
-      await runTeamScenario(
-        scenarioFile,
-        rawDir,
-        scenarioId,
-        trial,
-        adapter,
-        teamTimeoutMs,
-        options.trials,
-        options.model
-      );
-    } else {
-      await runAgentScenario(
-        scenarioFile,
-        rawDir,
-        agent,
-        scenarioId,
-        trial,
-        adapter,
-        timeoutMs,
-        options.trials,
-        options.model
-      );
-    }
+    await runAgentScenario(
+      scenarioFile,
+      rawDir,
+      agent,
+      scenarioId,
+      trial,
+      adapter,
+      timeoutMs,
+      options.trials,
+      options.model
+    );
   });
 
   const results = await runConcurrent(tasks, options.parallel);
@@ -110,12 +92,6 @@ function phaseGraders(
   const graderOverrideMap = new Map<string, boolean>();
 
   for (const { scenarioFile, agent, scenarioId } of scenarios) {
-    // Team scenarios run graders inline during phase 1
-    if (agent === "team") {
-      console.log(`  SKIP (team, graders run inline): ${agent}/${scenarioId}`);
-      continue;
-    }
-
     const content = fs.readFileSync(scenarioFile, { encoding: "utf-8" });
     const graderDefs = extractGraders(content);
 
@@ -176,34 +152,20 @@ async function phaseScore(
 
   const timeoutMs =
     options.timeoutPerPhase > 0 ? options.timeoutPerPhase * 1000 : 300 * 1000;
-  const teamTimeoutMs =
-    options.timeoutPerPhase > 0 ? options.timeoutPerPhase * 1000 : 600 * 1000;
 
   const tasks = scenarios.map(({ scenarioFile, agent, scenarioId }) => async () => {
-    if (agent === "team") {
-      await scoreTeamScenarioAllTrials(
-        scenarioFile,
-        rawDir,
-        scoredDir,
-        scenarioId,
-        adapter,
-        teamTimeoutMs,
-        options.trials
-      );
-    } else {
-      await scoreScenarioAllTrials(
-        scenarioFile,
-        rawDir,
-        scoredDir,
-        agent,
-        scenarioId,
-        graderResultsMap,
-        graderOverrideMap,
-        adapter,
-        timeoutMs,
-        options.trials
-      );
-    }
+    await scoreScenarioAllTrials(
+      scenarioFile,
+      rawDir,
+      scoredDir,
+      agent,
+      scenarioId,
+      graderResultsMap,
+      graderOverrideMap,
+      adapter,
+      timeoutMs,
+      options.trials
+    );
   });
 
   const results = await runConcurrent(tasks, options.parallel);
@@ -327,21 +289,12 @@ export async function runPipeline(
     console.log(`  Raw dir: ${rawDir}`);
     console.log();
 
-    for (const { scenarioFile, agent, scenarioId } of scenarios) {
-      if (agent === "team") {
-        const rawOutput = path.join(rawDir, `team-${scenarioId}.json`);
-        if (fs.existsSync(rawOutput)) {
-          console.log(`  SKIP (exists): ${agent}/${scenarioId}`);
-        } else {
-          console.log(`  RUN (team): ${agent}/${scenarioId}`);
-        }
+    for (const { agent, scenarioId } of scenarios) {
+      const rawOutput = path.join(rawDir, `${agent}-${scenarioId}.json`);
+      if (fs.existsSync(rawOutput)) {
+        console.log(`  SKIP (exists): ${agent}/${scenarioId}`);
       } else {
-        const rawOutput = path.join(rawDir, `${agent}-${scenarioId}.json`);
-        if (fs.existsSync(rawOutput)) {
-          console.log(`  SKIP (exists): ${agent}/${scenarioId}`);
-        } else {
-          console.log(`  RUN: ${agent}/${scenarioId}`);
-        }
+        console.log(`  RUN: ${agent}/${scenarioId}`);
       }
     }
 
