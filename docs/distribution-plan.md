@@ -174,8 +174,9 @@ Testable: existing Claude evals + install unchanged, now routed through `runAgen
   Produced **Zod-valid** output (18 keys). `--output-schema` deferred: it requires OpenAI
   strict schemas (all-props-required) → 400 on our optional-field schemas; Phase 3 adds a
   strict-schema transform. For now: prompt-embedded schema + Zod.
-- **Gemini** ⚠ — wired, but the CLI agent-loop returns prose/empty `.response` unreliably
-  (see Open #2). Best-effort until the API path lands.
+- **Gemini** ✓ — reliable via `GEMINI_SYSTEM_MD=<agent system file>`, which overrides gemini's
+  built-in agentic system prompt → single-shot generation (3/3 runs return complete structured
+  JSON; tool-loop gone). Residual Zod gaps are model schema-interpretation signals (see Open #2).
 
 Testable: the acceptance bar — Bird graded across providers, same corpus. Claude path
 byte-for-byte unchanged (eval tests 0 fail).
@@ -251,12 +252,14 @@ Phase 2 is the heart and the highest-information unknown — go for it right aft
 1. **Interactive vs eval scope.** Confirmed: direct single-shot covers the eval/measurement
    goal for all agents on all providers. Multi-tool agentic use stays Claude (Claude Code) /
    Gemini (gemini CLI); Ollama is single-shot only. OK?
-2. **Gemini: CLI vs API.** *CLI chosen, but Phase 2 testing shows it's unreliable for evals:*
-   `gemini -p … -o json` is a full agent loop, and its final `.response` is frequently a prose
-   summary ("…output is formatted as JSON…") or **empty** (28k+ tokens of internal work, no
-   textual answer) — not the structured output. Zod/`--trials` can't rescue an empty response.
-   **Recommendation: revisit the Gemini API path** (`generateContent` + `responseSchema`,
-   `GEMINI_API_KEY`) for deterministic structured output. CLI stays wired as best-effort.
+2. **Gemini: CLI vs API.** *Resolved → gemini CLI works, via `GEMINI_SYSTEM_MD`.* The empty/prose
+   `.response` was caused by gemini's BUILT-IN agentic system prompt (tool-loop + narration).
+   Setting `GEMINI_SYSTEM_MD=<agent system file>` replaces it with the agent's own prompt →
+   single-shot generation: verified **3/3 runs return complete structured JSON** (tokens dropped
+   ~28–60k → ~12k as the tool loop disappeared). Residual `Zod: false` is a model
+   schema-interpretation signal (e.g. `ubiquitous_language` as `{term,definition}` objects vs
+   strings) — gradable, the kind of divergence the cross-provider eval exists to surface. No API
+   key needed; CLI stays the path.
 3. **Schema enforcement per provider.** Ollama `response_format` and Gemini `responseSchema`
    are native; for the slice, prompt-embedded + Zod is the cheap universal path. Native day one?
 4. **Tier → model table.** Local: `qwen3.6` (reasoning-heavy), `gemma4` (fast); pin the exact

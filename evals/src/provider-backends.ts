@@ -152,10 +152,15 @@ export async function runGemini(agent: string, scenarioId: string, prompt: strin
   const start = Date.now();
   const schema = jsonSchemaFor(agent);
   let system = agentSystemPrompt(agent);
-  if (schema) system += `\n\nIMPORTANT: Do not narrate or summarize. Your FINAL message must be ONLY a single JSON object that conforms to this JSON Schema — no prose, no summary, no markdown fences, nothing before or after the JSON:\n${JSON.stringify(schema)}`;
+  if (schema) system += `\n\nIMPORTANT: Do not narrate, summarize, or use tools. Your FINAL response must be ONLY a single JSON object that conforms to this JSON Schema — no prose, no markdown fences, nothing before or after the JSON:\n${JSON.stringify(schema)}`;
+  // Replace gemini's BUILT-IN system prompt (which turns it into an agentic, tool-looping
+  // coding assistant — the cause of empty/prose .response) with the agent's own prompt, via
+  // GEMINI_SYSTEM_MD. The model then does single-shot generation and returns the answer.
+  const sysFile = path.join(os.tmpdir(), `dt-gemini-${scenarioId.replace(/[^a-z0-9]/gi, "_")}-${start}.system.md`);
   try {
+    fs.writeFileSync(sysFile, system);
     const proc = Bun.spawn(["gemini", "-p", prompt, "-m", modelId, "-o", "json", "--approval-mode", "plan"], {
-      stdin: new TextEncoder().encode(system),
+      env: { ...process.env, GEMINI_SYSTEM_MD: sysFile },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -178,6 +183,8 @@ export async function runGemini(agent: string, scenarioId: string, prompt: strin
     });
   } catch (e) {
     return record(agent, scenarioId, "", { durationMs: Date.now() - start, error: `gemini: ${e instanceof Error ? e.message : String(e)}` });
+  } finally {
+    try { fs.rmSync(sysFile, { force: true }); } catch { /* ignore */ }
   }
 }
 
