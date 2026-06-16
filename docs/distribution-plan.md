@@ -63,6 +63,24 @@ The canonical agent spec is the single source of truth. **Two consumers ride on 
   to the chosen provider directly. The eval "backend" is not a separate design — it's the
   provider dispatch reused.
 
+### Install adapter vs. run backend — why only `claude-code` is an adapter (decided)
+
+These are two distinct layers; "an adapter per provider" was never the goal:
+
+- **Install adapter** (`adapters/HarnessAdapter`) installs agents into a *harness* for
+  **interactive** use. Needs a harness with an agent-loading concept. **Claude Code is the
+  only install adapter** — your interactive `/team` home on Max. **Ollama categorically can't
+  be one** (bare model server, no agent loop). Gemini CLI and Codex CLI *could* be
+  (GEMINI.md / AGENTS.md) but interactive install into them is **out of scope** for now.
+- **Run backend** (`runAgent`, Phase 2) runs an agent on a *provider/model* for evals/scripted
+  use. **All four providers are run backends** — this is where "stop being Claude-specific"
+  is delivered (measurement across providers). No install adapter is required to grade a model.
+
+**Decision (2026-06-16):** multi-provider lives at the **run-backend** layer only. Gemini/Codex
+do **not** get install adapters; the eval corpus grading agents across all four providers is the
+goal. (`distribution.md §6.2`'s `codex.ts`/`cursor.ts` install adapters remain a possible later
+extension, explicitly deferred.)
+
 **Scope honesty (§6.3 reality check).** Most Dream Team agents are analysis/review agents
 that emit a single structured output (Bird's domain rules, Kobe's review verdict, MJ's
 architecture) — direct single-shot inference covers them fully on all three providers.
