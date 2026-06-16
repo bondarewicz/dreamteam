@@ -166,7 +166,19 @@ Testable: existing Claude evals + install unchanged, now routed through `runAgen
    (`reasoning-heavy → {claude-opus-4-8, gemini-2.x, qwen3.6, gpt-5-codex}`,
    `fast-cheap → {claude-haiku, gemini-flash, gemma4, gpt-5-codex-mini}`).
 
-Testable: the acceptance bar — Bird graded on all three providers, same corpus.
+**Phase 2 status (verified on Bird / scenario-01, `--phase agents`):**
+- **Ollama** ✓ — native `/api/chat` `format`=schema → structured JSON, tokens captured, gradable.
+  (gemma4 dropped one optional field — a real weaker-model signal, not a bug.)
+- **Codex** ✓ — model **`gpt-5.5`** (NOT `gpt-5-codex`; that 400s on a ChatGPT account); prompt
+  fed via stdin with `-` (a positional starting with bird.md's `---` is mis-parsed as a flag).
+  Produced **Zod-valid** output (18 keys). `--output-schema` deferred: it requires OpenAI
+  strict schemas (all-props-required) → 400 on our optional-field schemas; Phase 3 adds a
+  strict-schema transform. For now: prompt-embedded schema + Zod.
+- **Gemini** ⚠ — wired, but the CLI agent-loop returns prose/empty `.response` unreliably
+  (see Open #2). Best-effort until the API path lands.
+
+Testable: the acceptance bar — Bird graded across providers, same corpus. Claude path
+byte-for-byte unchanged (eval tests 0 fail).
 
 ## Phase 3 — Full roster + schema hardening
 
@@ -239,10 +251,12 @@ Phase 2 is the heart and the highest-information unknown — go for it right aft
 1. **Interactive vs eval scope.** Confirmed: direct single-shot covers the eval/measurement
    goal for all agents on all providers. Multi-tool agentic use stays Claude (Claude Code) /
    Gemini (gemini CLI); Ollama is single-shot only. OK?
-2. **Gemini: CLI vs API.** *Resolved → gemini CLI (zero-config):* `gemini -p … -o json` using
-   existing auth, no key wiring. Accept the agent-harness nondeterminism; lean on Zod
-   re-validation + `--trials`. (Gemini API w/ `responseSchema` remains a later option if schema
-   adherence proves too noisy.)
+2. **Gemini: CLI vs API.** *CLI chosen, but Phase 2 testing shows it's unreliable for evals:*
+   `gemini -p … -o json` is a full agent loop, and its final `.response` is frequently a prose
+   summary ("…output is formatted as JSON…") or **empty** (28k+ tokens of internal work, no
+   textual answer) — not the structured output. Zod/`--trials` can't rescue an empty response.
+   **Recommendation: revisit the Gemini API path** (`generateContent` + `responseSchema`,
+   `GEMINI_API_KEY`) for deterministic structured output. CLI stays wired as best-effort.
 3. **Schema enforcement per provider.** Ollama `response_format` and Gemini `responseSchema`
    are native; for the slice, prompt-embedded + Zod is the cheap universal path. Native day one?
 4. **Tier → model table.** Local: `qwen3.6` (reasoning-heavy), `gemma4` (fast); pin the exact

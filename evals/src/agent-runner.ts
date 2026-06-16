@@ -15,6 +15,7 @@ import fs from "fs";
 import type { ClaudeAdapter, RawOutput } from "./types.ts";
 import { extractPrompt } from "./scenario-parser.ts";
 import { runAgentWithSchema } from "./schema-runner.ts";
+import { parseProvider, runProviderBackend } from "./provider-backends.ts";
 
 const EVAL_MODE_APPEND =
   "EVAL MODE: You are running in a headless evaluation. Do NOT enter plan mode. Do NOT call EnterPlanMode. Do NOT wait for approval. Execute the task directly and produce your complete final output immediately.";
@@ -257,12 +258,19 @@ export async function runAgentScenario(
     console.error(`  WARN: empty prompt extracted for ${agent}/${scenarioId}`);
   }
 
-  // Per-agent dispatch: Bird uses the schema-enforced path; all others use --agent.
+  // Provider dispatch on the model id. Claude (bare id / "claude/…") keeps its
+  // exact existing path; non-claude providers run directly via provider-backends.
+  const { provider, modelId } = parseProvider(model);
   let record: RawOutput;
-  if (agent === "bird") {
-    record = await runBirdAgentCall(scenarioId, prompt, timeoutMs, model);
+  if (provider === "claude") {
+    // Per-agent dispatch: Bird uses the schema-enforced path; all others use --agent.
+    if (agent === "bird") {
+      record = await runBirdAgentCall(scenarioId, prompt, timeoutMs, model);
+    } else {
+      record = await runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs, model);
+    }
   } else {
-    record = await runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs, model);
+    record = await runProviderBackend(provider, agent, scenarioId, prompt, modelId, timeoutMs);
   }
 
   fs.writeFileSync(rawOutput, JSON.stringify(record, null, 2), "utf-8");
