@@ -11,6 +11,7 @@ import { discoverScenarios } from "./discovery.ts";
 import { runConcurrent } from "./concurrency.ts";
 import { runAgentScenario } from "./agent-runner.ts";
 import { triggerMigration } from "./report.ts";
+import { resultsDir as resolveResultsDir } from "../../scripts/paths.ts";
 import { scoreScenarioAllTrials } from "./scorer.ts";
 import { assembleFinalResult } from "./assembler.ts";
 import { extractGraders } from "./scenario-parser.ts";
@@ -239,8 +240,8 @@ export async function runPipeline(
   options: PipelineOptions,
   adapter: ClaudeAdapter
 ): Promise<PipelineResult> {
-  const evalsDir = path.join(options.repoRoot, "evals");
-  const resultsDir = path.join(options.repoRoot, "evals", "results");
+  const evalsDir = path.join(options.repoRoot, "evals"); // scenarios live in the repo/assets
+  const resultsDir = resolveResultsDir();                 // writable → ~/.dreamteam/workspace
 
   // Discover scenarios
   const { scenarios, allScenariosTotal } = discoverScenarios(

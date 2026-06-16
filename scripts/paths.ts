@@ -52,6 +52,21 @@ export function backupsDir(): string {
   return path.join(dataDir(), "backups");
 }
 
+/** Eval result JSON + raw/ live here (was: <repo>/evals/results). Writable → dataDir. */
+export function resultsDir(): string {
+  return path.join(workspaceDir(), "evals", "results");
+}
+
+/** Generated reports (retros, eval summaries) (was: <repo>/reports). */
+export function reportsDir(): string {
+  return path.join(workspaceDir(), "reports");
+}
+
+/** The web app's SQLite DB, rebuilt from resultsDir (was: <repo>/data/dreamteam.db). */
+export function dbPath(): string {
+  return path.join(workspaceDir(), "dreamteam.db");
+}
+
 /** A file Dream Team wrote during install: its installed path + content hash. */
 export interface InstalledFile {
   /** Absolute path of the installed file (in the harness's config dir). */

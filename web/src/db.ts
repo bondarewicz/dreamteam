@@ -1,9 +1,11 @@
 import { Database } from "bun:sqlite";
-import path from "path";
 import fs from "fs";
+import { workspaceDir, dbPath } from "../../scripts/paths.ts";
 
-const DATA_DIR = path.join(import.meta.dir, "../../data");
-const DB_PATH = path.join(DATA_DIR, "dreamteam.db");
+// Writable user workspace (~/.dreamteam/workspace) — was <repo>/data. Lets the
+// shipped web read a DB outside the read-only package.
+const DATA_DIR = workspaceDir();
+const DB_PATH = dbPath();
 
 let _db: Database | null = null;
 

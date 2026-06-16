@@ -13,6 +13,8 @@ import {
   dataDir,
   workspaceDir,
   backupsDir,
+  resultsDir,
+  reportsDir,
   writeConfig,
   readConfig,
   resolveVersion,
@@ -80,9 +82,22 @@ export async function provision(opts: { harnesses?: string; dryRun?: boolean } =
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, "repo-root"), assets, "utf-8");
 
-    // Repo output dirs (eval results/reports still live in the repo for now).
-    for (const d of [["reports", "retros"], ["reports", "evals"], ["evals", "results"]]) {
-      fs.mkdirSync(path.join(assets, ...d), { recursive: true });
+    // Writable workspace dirs (results + reports now live under ~/.dreamteam/workspace,
+    // not the repo — so the shipped web reads them). One-time history preservation: if the
+    // workspace results dir is empty and the repo/assets has legacy results, copy them over.
+    fs.mkdirSync(resultsDir(), { recursive: true });
+    fs.mkdirSync(reportsDir(), { recursive: true });
+    const legacyResults = path.join(assets, "evals", "results");
+    const isEmpty = !fs.existsSync(resultsDir()) || fs.readdirSync(resultsDir()).filter((f) => f.endsWith(".json")).length === 0;
+    if (isEmpty && fs.existsSync(legacyResults)) {
+      for (const f of fs.readdirSync(legacyResults)) {
+        const src = path.join(legacyResults, f);
+        try {
+          if (fs.statSync(src).isFile() && f.endsWith(".json")) fs.cpSync(src, path.join(resultsDir(), f));
+          else if (f === "raw") fs.cpSync(src, path.join(resultsDir(), "raw"), { recursive: true });
+        } catch { /* best-effort */ }
+      }
+      console.log(`  migrated legacy eval results → ${resultsDir()}`);
     }
   }
 
