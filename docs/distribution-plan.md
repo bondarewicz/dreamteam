@@ -174,6 +174,34 @@ All 8 agents have canonical specs; native structured-output path per provider (O
 `response_format`, Gemini `responseSchema`), prompt-embedded + Zod as the universal fallback
 for any model with weak schema adherence. `dreamteam status` shows install drift.
 
+## Phase 3.5 — Web multi-provider surface
+
+The web app (`web/`) is Claude-only today and must become provider-aware. Three pieces,
+all hanging off **one shared provider/model registry** (the same `provider/model` ids the
+Phase 2 `runAgent` backends route on — single source of truth for picker + eval + CLI).
+
+1. **Generalize the model registry** (`web/src/models-api.ts`, today Claude-only). Add a
+   `provider` field to `ModelRecord`; resolve per provider:
+   - `claude` — existing Anthropic `/v1/models` + `claude-*` fallback (unchanged).
+   - `ollama` — **live** `GET :11434/api/tags` → installed models → ids `ollama/<name>`.
+   - `gemini` — curated static list (`gemini/gemini-2.x`); the API key can't be assumed.
+   - `codex` — curated static list (`codex/gpt-5-codex`, o-series).
+   Canonical id is `provider/model`; a bare `claude-*` still means Claude (back-compat).
+2. **`/admin/models` — grouped picker.** Each agent's `<select>` gains `<optgroup>` per
+   provider (Claude / Ollama / Gemini / Codex). Loosen the `admin.ts` model-id validation to
+   accept `provider/model`. Writing `model: ollama/qwen3.6` into an agent's frontmatter is
+   what makes a non-Claude default real.
+3. **`/admin/providers` — new page (the "OAuth" page).** *Reality check:* a browser page
+   **cannot perform the OAuth/login flows** — those are first-party CLI/browser flows
+   (`claude` subscription login, `gemini` login, `codex login`, `ollama serve`). So this page
+   is **`dreamteam doctor` in the browser**: per-provider reachability + auth status, plus the
+   exact command to fix each (and where keys like `GEMINI_API_KEY` go). It surfaces and guides;
+   it does not store tokens. Reuse the same checks as `bin/dreamteam.ts doctor`.
+
+**Coupling + sequencing:** the registry's `provider/model` ids must match the Phase 2 backend
+routing, so this lands **after Phase 2** (else the picker offers models nothing can run). The
+`/admin/providers` status page is independent (mirrors `doctor`) and can land anytime.
+
 ## Phase 4 — Publishable package
 
 `bun add -g @bondarewicz/dreamteam` (per `distribution.md §3, §5`): `files` allowlist,
@@ -196,10 +224,12 @@ The 40-scenario corpus as a `(scenario × provider)` matrix; HTML report A/Bs
 Phase 0 ──► Phase 1 (CLI + canonical spec + claude backend)
                 │
                 ▼
-        Phase 2 ★ direct ollama + gemini backends   (Bird slice: all 3 providers)
-                ├──► Phase 3 (full roster, schema hardening)
-                ├──► Phase 4 (publish)
-                └──► Phase 5 (cross-provider eval baseline)
+        Phase 2 ★ direct ollama + gemini + codex backends   (Bird slice: all 4 providers)
+                ├──► Phase 3   (full roster, schema hardening)
+                ├──► Phase 3.5 (web multi-provider: model registry, grouped picker, providers page)
+                ├──► Phase 4   (publish)
+                └──► Phase 5   (cross-provider eval baseline)
+   (Phase 3.5's /admin/providers status page is independent — mirrors doctor, can land anytime)
 ```
 
 Phase 2 is the heart and the highest-information unknown — go for it right after 0→1.
