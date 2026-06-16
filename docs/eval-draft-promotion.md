@@ -1,5 +1,12 @@
 # Eval Draft Promotion (Step B) — Design Notes
 
+> **Team-scenario promotion is retired (2026-06-16).** Team evals (`/team` orchestration
+> re-runs) have been retired as a quality signal — a re-run has no live message bus, so it
+> isn't like-for-like with a real session. `/team` quality is now measured by **session evals**
+> (retrospective LLM-judge over the real recorded trace) — see `docs/session-evals-design.md`.
+> The team scenarios and team draft template referenced below now live under
+> `evals/.archive/team/` and are not run. The **per-agent** half of this doc still applies.
+
 Status: **proposed / not built**. Picked out of the draft-template investigation (2026-05-29).
 Step A (point `/team` at the dreamteam repo so the template is always found and drafts
 are written back to `evals/<agent>/drafts/`) is **done**. This doc captures the remaining
@@ -26,8 +33,9 @@ Two hard constraints, confirmed in code:
    `f.startsWith("scenario-") && f.endsWith(".md")`. Files named `draft-*.md` are invisible to the
    runner by design. Promotion must rename `draft-*` → `scenario-NN-*`.
 
-Reference runnable examples: `evals/team/scenario-01-automapper-removal.md`,
-`evals/team/scenario-02-eval-typescript-migration.md`.
+Reference runnable examples (now archived — retired team evals):
+`evals/.archive/team/scenario-01-automapper-removal.md`,
+`evals/.archive/team/scenario-02-eval-typescript-migration.md`.
 
 ## "Both templates" is sound — and the bus is a non-issue
 

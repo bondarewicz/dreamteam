@@ -19,7 +19,7 @@ We have **two fundamentally different kinds of eval**, and conflating them is wh
 | Comparable across runs? | **Yes** (same scenario → regressions) | **No** (every session is a different task) → trend the distribution |
 | Feeds | agent **spec** changes (regression gate) | **guidance / memory** via curation loop |
 
-**Retire team-scenario re-runs.** They have no live message bus, so agents can't talk → not like-for-like. Retrospective judging of the *real* trace dissolves the bus problem (the bus already happened; it's in the trace). Keep ≤1–2 team scenarios only as an orchestration wiring smoke-test.
+**Retire team-scenario re-runs (done 2026-06-16).** They have no live message bus, so agents can't talk → not like-for-like. Retrospective judging of the *real* trace dissolves the bus problem (the bus already happened; it's in the trace). The team scenarios are now archived under `evals/.archive/team/` (not run); session evals are the `/team` quality signal. The team-scenario harness code (`runTeamScenario`/`parseTeamScenario`) remains in `evals/src/` but is dormant with no team scenarios present.
 
 ## 2. Scope
 

@@ -1,5 +1,5 @@
 /**
- * agent-runner.ts — NDJSON stream parsing, individual + team scenario execution
+ * agent-runner.ts — NDJSON stream parsing, individual scenario execution
  *
  * Impure: calls ClaudeAdapter, reads/writes files.
  *
@@ -12,10 +12,8 @@
 
 import path from "path";
 import fs from "fs";
-import type { ClaudeAdapter, RawOutput, PhaseOutput } from "./types.ts";
-import { extractGraders } from "./scenario-parser.ts";
-import { runAllGraders } from "./graders.ts";
-import { extractPrompt, parseTeamScenario } from "./scenario-parser.ts";
+import type { ClaudeAdapter, RawOutput } from "./types.ts";
+import { extractPrompt } from "./scenario-parser.ts";
 import { runAgentWithSchema } from "./schema-runner.ts";
 
 const EVAL_MODE_APPEND =
@@ -91,7 +89,7 @@ export async function runSingleAgentCall(
   adapter: ClaudeAdapter,
   timeoutMs: number,
   model?: string
-): Promise<Omit<RawOutput, "phases" | "pipeline_fields">> {
+): Promise<RawOutput> {
   const timestamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   const startMs = Date.now();
 
@@ -146,7 +144,7 @@ export async function runSingleAgentCall(
 
   const durationMs = Date.now() - startMs;
 
-  const record: Omit<RawOutput, "phases" | "pipeline_fields"> = {
+  const record: RawOutput = {
     agent,
     scenario_id: scenarioId,
     agent_output: agentOutput,
@@ -178,7 +176,7 @@ async function runBirdAgentCall(
   prompt: string,
   timeoutMs: number,
   model?: string
-): Promise<Omit<RawOutput, "phases" | "pipeline_fields">> {
+): Promise<RawOutput> {
   const timestamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   const startMs = Date.now();
 
@@ -260,7 +258,7 @@ export async function runAgentScenario(
   }
 
   // Per-agent dispatch: Bird uses the schema-enforced path; all others use --agent.
-  let record: Omit<RawOutput, "phases" | "pipeline_fields">;
+  let record: RawOutput;
   if (agent === "bird") {
     record = await runBirdAgentCall(scenarioId, prompt, timeoutMs, model);
   } else {
@@ -269,152 +267,5 @@ export async function runAgentScenario(
 
   fs.writeFileSync(rawOutput, JSON.stringify(record, null, 2), "utf-8");
   console.log(`  Done: ${agent}/${scenarioId}${label} (${record.duration_ms}ms)`);
-  return rawOutput;
-}
-
-/**
- * Run graders for a phase's output inline (used by team scenario runner).
- */
-function runPhaseGraders(
-  gradersRaw: string,
-  agentOutput: string
-): { graderResults: import("./types.ts").GraderResult[]; graderOverride: boolean } | null {
-  if (!gradersRaw || gradersRaw === "[]") return null;
-
-  // Parse graders from raw text block (wrap in a fake scenario for extractGraders)
-  const fakeScenario = `graders:\n${gradersRaw}\n\nnext_field: done`;
-  const graderDefs = extractGraders(fakeScenario);
-  if (!graderDefs || graderDefs.length === 0) return null;
-
-  return runAllGraders(graderDefs, agentOutput);
-}
-
-/**
- * Run a team scenario (sequential phases). Writes combined raw output to disk.
- * Returns the raw_output_file path.
- */
-export async function runTeamScenario(
-  scenarioFile: string,
-  rawDir: string,
-  scenarioId: string,
-  trial: number,
-  adapter: ClaudeAdapter,
-  timeoutMs: number,
-  trials: number,
-  model?: string
-): Promise<string> {
-  const rawOutput =
-    trial === 0
-      ? path.join(rawDir, `team-${scenarioId}.json`)
-      : path.join(rawDir, `team-${scenarioId}-t${trial}.json`);
-
-  if (fs.existsSync(rawOutput)) {
-    const label = trials > 1 ? ` [trial ${trial + 1}/${trials}]` : "";
-    console.log(`  SKIP (raw output exists): team/${scenarioId}${label}`);
-    return rawOutput;
-  }
-
-  const label = trials > 1 ? ` [trial ${trial + 1}/${trials}]` : "";
-  console.log(`  Running team scenario: team/${scenarioId}${label}`);
-
-  const content = fs.readFileSync(scenarioFile, { encoding: "utf-8" });
-  const { phases, pipelineFields } = parseTeamScenario(content);
-
-  const startMs = Date.now();
-  const timestamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
-
-  const phaseOutputs: PhaseOutput[] = [];
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let totalCostUsd = 0;
-
-  for (const phase of phases) {
-    const pn = phase.phaseNum;
-    const phAgent = phase.agent;
-    const phPrompt = phase.prompt;
-
-    console.log(`    Phase ${pn} (${phAgent}): running...`);
-
-    let phaseRecord: PhaseOutput;
-
-    if (phAgent === "human") {
-      const fixtureText = phase.humanDecision || phPrompt;
-      phaseRecord = {
-        phase_num: pn,
-        agent: phAgent,
-        agent_output: fixtureText,
-        duration_ms: 0,
-        tokens_used: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        cost_usd: 0,
-        is_fixture: true,
-        trace: [],
-      };
-    } else {
-      const record = await runSingleAgentCall(
-        phAgent,
-        `${scenarioId}/phase-${pn}`,
-        phPrompt,
-        adapter,
-        timeoutMs,
-        model
-      );
-      totalInputTokens += record.input_tokens;
-      totalOutputTokens += record.output_tokens;
-      totalCostUsd += record.cost_usd;
-      phaseRecord = {
-        phase_num: pn,
-        agent: phAgent,
-        agent_output: record.agent_output,
-        duration_ms: record.duration_ms,
-        tokens_used: record.tokens_used,
-        input_tokens: record.input_tokens,
-        output_tokens: record.output_tokens,
-        cost_usd: record.cost_usd,
-        is_fixture: false,
-        trace: record.trace,
-      };
-      if (record.error) phaseRecord.error = record.error;
-    }
-
-    // Run per-phase graders if defined
-    const gradersRaw = phase.gradersRaw.trim();
-    if (gradersRaw && gradersRaw !== "[]") {
-      const graderResult = runPhaseGraders(gradersRaw, phaseRecord.agent_output);
-      if (graderResult) {
-        phaseRecord.grader_results = graderResult.graderResults;
-        phaseRecord.grader_override = graderResult.graderOverride;
-      }
-    }
-
-    phaseOutputs.push(phaseRecord);
-    console.log(`    Phase ${pn} (${phAgent}): done`);
-  }
-
-  const durationMs = Date.now() - startMs;
-
-  const combined: RawOutput = {
-    agent: "team",
-    scenario_id: scenarioId,
-    phases: phaseOutputs,
-    agent_output: JSON.stringify(phaseOutputs),
-    agent_output_excerpt: `[${phaseOutputs.length} phases]`,
-    duration_ms: durationMs,
-    tokens_used: totalInputTokens + totalOutputTokens,
-    input_tokens: totalInputTokens,
-    output_tokens: totalOutputTokens,
-    cost_usd: totalCostUsd,
-    timestamp,
-    trace: [],
-    pipeline_fields: {
-      pipeline_expected_behavior: pipelineFields.pipelineExpectedBehavior,
-      pipeline_failure_modes: pipelineFields.pipelineFailureModes,
-      pipeline_scoring_rubric: pipelineFields.pipelineScoringRubric,
-    },
-  };
-
-  fs.writeFileSync(rawOutput, JSON.stringify(combined, null, 2), "utf-8");
-  console.log(`  Done team scenario: team/${scenarioId}${label} (${durationMs}ms)`);
   return rawOutput;
 }

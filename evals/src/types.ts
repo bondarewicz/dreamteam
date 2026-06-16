@@ -56,24 +56,6 @@ export interface ScenarioFields {
   graders: GraderDef[] | null;
 }
 
-export interface TeamPhase {
-  phaseNum: number;
-  agent: string;
-  prompt: string;
-  expectedBehavior: string;
-  failureModes: string;
-  scoringRubric: string;
-  gradersRaw: string;
-  referenceOutput: string;
-  humanDecision: string;
-}
-
-export interface PipelineFields {
-  pipelineExpectedBehavior: string;
-  pipelineFailureModes: string;
-  pipelineScoringRubric: string;
-}
-
 export interface RawOutput {
   agent: string;
   scenario_id: string;
@@ -86,25 +68,6 @@ export interface RawOutput {
   cost_usd: number;
   timestamp: string;
   trace: unknown[];
-  error?: string;
-  // For team scenarios
-  phases?: PhaseOutput[];
-  pipeline_fields?: Record<string, string>;
-}
-
-export interface PhaseOutput {
-  phase_num: number;
-  agent: string;
-  agent_output: string;
-  duration_ms: number;
-  tokens_used: number;
-  input_tokens: number;
-  output_tokens: number;
-  cost_usd: number;
-  is_fixture: boolean;
-  trace: unknown[];
-  grader_results?: GraderResult[];
-  grader_override?: boolean;
   error?: string;
 }
 
@@ -123,7 +86,6 @@ export interface TrialResult {
   grader_results?: GraderResult[];
   grader_override?: boolean;
   failure_reason?: string;
-  phases?: PhaseOutput[];
 }
 
 export interface ScoredResult {
@@ -149,7 +111,6 @@ export interface ScoredResult {
   trials?: TrialResult[];
   flaky?: boolean;
   pass_hat_k?: boolean;
-  phases?: PhaseOutput[];
 }
 
 export interface AgentSummary {

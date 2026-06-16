@@ -6,7 +6,6 @@ import {
   extractPrompt,
   parseScenarioMeta,
   extractGraders,
-  parseTeamScenario,
 } from "../scenario-parser.ts";
 
 const EVALS_DIR = path.join(import.meta.dir, "../../");
@@ -188,59 +187,5 @@ describe("Real scenario files", () => {
       expect(() => parseScenarioMeta(content)).not.toThrow();
       expect(() => extractGraders(content)).not.toThrow();
     }
-  });
-});
-
-// ── parseTeamScenario ─────────────────────────────────────────────────────────
-
-describe("parseTeamScenario", () => {
-  const teamContent = `# Team Scenario
-
-phase_1_agent: shaq
-phase_1_prompt: |
-  Do step one.
-
-phase_2_agent: human
-phase_2_prompt: |
-  Approve this.
-
-phase_3_agent: bird
-phase_3_prompt: |
-  Verify the output.
-
-pipeline_expected_behavior:
-  The pipeline completes successfully.
-
-pipeline_failure_modes:
-  Missing steps.
-
-pipeline_scoring_rubric:
-  Full marks if all phases complete.
-`;
-
-  test("parses 3 phases", () => {
-    const { phases } = parseTeamScenario(teamContent);
-    expect(phases.length).toBe(3);
-  });
-
-  test("parses agents correctly", () => {
-    const { phases } = parseTeamScenario(teamContent);
-    expect(phases[0].agent).toBe("shaq");
-    expect(phases[1].agent).toBe("human");
-    expect(phases[2].agent).toBe("bird");
-  });
-
-  test("sets humanDecision for human phase", () => {
-    const { phases } = parseTeamScenario(teamContent);
-    expect(phases[1].humanDecision).toContain("Approve this.");
-    expect(phases[0].humanDecision).toBe("");
-    expect(phases[2].humanDecision).toBe("");
-  });
-
-  test("parses pipeline fields", () => {
-    const { pipelineFields } = parseTeamScenario(teamContent);
-    expect(pipelineFields.pipelineExpectedBehavior).toContain("completes successfully");
-    expect(pipelineFields.pipelineFailureModes).toContain("Missing steps");
-    expect(pipelineFields.pipelineScoringRubric).toContain("Full marks");
   });
 });
