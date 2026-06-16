@@ -132,6 +132,23 @@ async function cmdEval(args: string[]): Promise<number> {
   return (await proc.exited) ?? 0;
 }
 
+async function cmdWeb(args: string[]): Promise<number> {
+  const port = flag(args, "--port") ?? process.env.PORT ?? "3000";
+  const entry = path.join(assetsDir(), "web", "index.ts");
+  if (!fs.existsSync(entry)) {
+    console.error(`Web app not found at ${entry}. (Is web/ part of this install?)`);
+    return 1;
+  }
+  console.log(`Starting Dream Team web → http://localhost:${port}  (reads ${dataDir()}/workspace)`);
+  const proc = Bun.spawn(["bun", entry], {
+    env: { ...process.env, PORT: String(port) },
+    stdout: "inherit",
+    stderr: "inherit",
+    stdin: "inherit",
+  });
+  return (await proc.exited) ?? 0;
+}
+
 function usage(): void {
   console.log(`dreamteam — Dream Team CLI
 
@@ -141,6 +158,7 @@ function usage(): void {
   doctor            Claude / Ollama / Gemini reachability
   list              roster + commands
   eval [...]        passthrough to evals/src/cli.ts
+  web [--port N]    serve the web app (eval report, /admin/models, sessions)
 `);
 }
 
@@ -153,6 +171,7 @@ switch (cmd) {
   case "doctor": code = await cmdDoctor(); break;
   case "list": code = cmdList(); break;
   case "eval": code = await cmdEval(rest); break;
+  case "web": code = await cmdWeb(rest); break;
   case undefined:
   case "help":
   case "--help":
