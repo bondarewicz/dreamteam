@@ -211,16 +211,28 @@ Phase 2 `runAgent` backends route on — single source of truth for picker + eva
    exact command to fix each (and where keys like `GEMINI_API_KEY` go). It surfaces and guides;
    it does not store tokens. Reuse the same checks as `bin/dreamteam.ts doctor`.
 
+4. **Ship web in the package + `dreamteam web` (decided 2026-06-16).** Reverses
+   `distribution.md §3`'s "web stays in repo." Add `web/` to the `files` allowlist and a
+   `dreamteam web [--port]` command that serves `web/index.ts` (eval report + `/admin/models` +
+   `/admin/providers` + sessions). **Prerequisite — pulls in the deferred Phase 0 relocation:**
+   eval results/reports must move to `~/.dreamteam/workspace`, and the web reader
+   (`migrate.ts` / results paths) must read `dataDir` instead of repo paths — otherwise the
+   shipped web has nothing to show for a `bun add -g` user (no repo). This relocation also
+   touches `report.ts` (`triggerMigration`) and the web's results source.
+
 **Coupling + sequencing:** the registry's `provider/model` ids must match the Phase 2 backend
 routing, so this lands **after Phase 2** (else the picker offers models nothing can run). The
-`/admin/providers` status page is independent (mirrors `doctor`) and can land anytime.
+`/admin/providers` status page is independent (mirrors `doctor`) and can land anytime. The
+`dreamteam web` command is small; the **results relocation is the real work** and must precede
+publishing (Phase 4).
 
 ## Phase 4 — Publishable package
 
-`bun add -g @bondarewicz/dreamteam` (per `distribution.md §3, §5`): `files` allowlist,
-precompiled `dist/dreamteam.js` bin, `publishConfig.access: public` on the personal
-`@bondarewicz` scope, Changesets + OIDC release CI gated on `--trials 3`, legacy-layout
-migration shim.
+`bun add -g @bondarewicz/dreamteam` (per `distribution.md §3, §5`): `files` allowlist **now
+including `web/`** (decided — see Phase 3.5), precompiled `dist/dreamteam.js` bin,
+`publishConfig.access: public` on the personal `@bondarewicz` scope, Changesets + OIDC release
+CI gated on `--trials 3`, legacy-layout migration shim. Gated on the
+results→`~/.dreamteam/workspace` relocation so `dreamteam web` works for package users.
 
 ## Phase 5 — Cross-provider eval baseline  *(the differentiator)*
 
