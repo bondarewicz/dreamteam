@@ -76,9 +76,13 @@ function validateModelValue(value: string): { ok: true } | { ok: false; reason: 
   if (trimmed.length === 0) return { ok: false, reason: "model cannot be empty" };
   if (/\s/.test(trimmed)) return { ok: false, reason: "model must not contain whitespace" };
   if (trimmed.length > 100) return { ok: false, reason: "model value too long" };
-  // Allow identifiers like `claude-opus-4-7`, `opus`, `opusplan`, `claude-sonnet-4-5-20250929`
-  if (!/^[a-zA-Z0-9._:\-\[\]]+$/.test(trimmed)) {
+  // Allow `claude-opus-4-7`, `opus`, plus provider-prefixed ids `ollama/qwen3.6`,
+  // `gemini/gemini-2.5-flash`, `codex/gpt-5.5` (single slash → one provider prefix).
+  if (!/^[a-zA-Z0-9._:\-\[\]\/]+$/.test(trimmed)) {
     return { ok: false, reason: "model contains invalid characters" };
+  }
+  if ((trimmed.match(/\//g) ?? []).length > 1) {
+    return { ok: false, reason: "model may contain at most one '/' (provider/model)" };
   }
   return { ok: true };
 }

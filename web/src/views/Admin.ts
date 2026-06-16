@@ -18,59 +18,75 @@ export type FlashMessage = {
   message: string;
 };
 
-/** Render the <select> for one agent row. Groups: aliases, API ids, current-unknown. */
+/** Provider → display label + order for the picker's <optgroup>s. */
+const PROVIDER_LABELS: Record<string, string> = {
+  claude: "Claude (Max — claude -p)",
+  ollama: "Ollama (local)",
+  gemini: "Gemini (gemini CLI)",
+  codex: "Codex (ChatGPT — codex exec)",
+};
+const PROVIDER_ORDER = ["claude", "ollama", "gemini", "codex"];
+
+/** Render the <select> for one agent row, grouped by provider. */
 function renderSelect(agent: string, currentModel: string, modelsResult: ModelsResult): string {
-  const apiIds = modelsResult.models.map((m) => m.id);
+  const allIds = modelsResult.models.map((m) => m.id);
   const aliasList: readonly string[] = CLAUDE_CODE_ALIASES;
 
   const inAliases = aliasList.includes(currentModel);
-  const inApi = apiIds.includes(currentModel);
-  const unknown = currentModel.length > 0 && !inAliases && !inApi;
+  const inList = allIds.includes(currentModel);
+  const unknown = currentModel.length > 0 && !inAliases && !inList;
 
   const aliasOptions = aliasList
-    .map((alias) => {
-      const selected = currentModel === alias ? " selected" : "";
-      return `<option value="${esc(alias)}"${selected}>${esc(alias)}</option>`;
-    })
+    .map((alias) => `<option value="${esc(alias)}"${currentModel === alias ? " selected" : ""}>${esc(alias)}</option>`)
     .join("");
 
-  const apiOptions = modelsResult.models
-    .map((m) => {
-      const selected = currentModel === m.id ? " selected" : "";
-      const label = m.displayName && m.displayName !== m.id ? `${m.id} — ${m.displayName}` : m.id;
-      return `<option value="${esc(m.id)}"${selected}>${esc(label)}</option>`;
-    })
-    .join("");
+  // One optgroup per provider, in PROVIDER_ORDER.
+  const providerGroups = PROVIDER_ORDER.map((prov) => {
+    const models = modelsResult.models.filter((m) => m.provider === prov);
+    if (models.length === 0) return "";
+    const opts = models
+      .map((m) => {
+        const label = m.displayName && m.displayName !== m.id ? `${m.id} — ${m.displayName}` : m.id;
+        return `<option value="${esc(m.id)}"${currentModel === m.id ? " selected" : ""}>${esc(label)}</option>`;
+      })
+      .join("");
+    return `<optgroup label="${esc(PROVIDER_LABELS[prov] ?? prov)}">${opts}</optgroup>`;
+  }).join("");
 
   const unknownOption = unknown
     ? `<optgroup label="Current value (not in list)"><option value="${esc(currentModel)}" selected>${esc(currentModel)}</option></optgroup>`
     : "";
 
-  const sourceLabel = modelsResult.source === "api" ? "Pinned model IDs (Anthropic API)" : "Pinned model IDs (fallback list)";
-
   return `
     <select id="model-${esc(agent)}" name="model__${esc(agent)}" class="form-input">
       ${unknownOption}
       <optgroup label="Claude Code aliases">${aliasOptions}</optgroup>
-      <optgroup label="${esc(sourceLabel)}">${apiOptions}</optgroup>
+      ${providerGroups}
     </select>
   `;
 }
 
-/** Render a small banner describing where the model list came from. */
+/** Render a small banner describing the multi-provider model list + sourcing. */
 function renderModelsSource(modelsResult: ModelsResult): string {
   const ageMins = Math.floor((Date.now() - modelsResult.fetchedAt) / 60_000);
   const ageLabel = ageMins <= 0 ? "just now" : `${ageMins}m ago`;
-  if (modelsResult.source === "api") {
-    return `
-      <div class="source-banner source-ok">
-        <strong>Live:</strong> ${modelsResult.models.length} model IDs from Anthropic API (fetched ${ageLabel}).
-      </div>
-    `;
-  }
+  const counts: Record<string, number> = {};
+  for (const m of modelsResult.models) counts[m.provider] = (counts[m.provider] ?? 0) + 1;
+  const byProvider = PROVIDER_ORDER.filter((p) => counts[p]).map((p) => `${p} ${counts[p]}`).join(" · ");
+
+  const claudeLine = modelsResult.source === "api"
+    ? `Claude: live from Anthropic API`
+    : `Claude: static fallback (${esc(modelsResult.error ?? "no DREAMTEAM_MODELS_API_KEY")})`;
+  const notes = modelsResult.providerNotes.length
+    ? `<div style="margin-top:4px">⚠ ${modelsResult.providerNotes.map(esc).join(" · ")}</div>`
+    : "";
+  const cls = modelsResult.source === "api" ? "source-ok" : "source-warn";
+
   return `
-    <div class="source-banner source-warn">
-      <strong>Static list:</strong> ${esc(modelsResult.error ?? "using fallback")}. Set <code>DREAMTEAM_MODELS_API_KEY</code> in <code>.env</code> at repo root for live IDs from the API. (Do NOT use <code>ANTHROPIC_API_KEY</code> — that name makes <code>claude</code> CLI bill against API credits instead of your subscription.)
+    <div class="source-banner ${cls}">
+      <strong>${modelsResult.models.length} models</strong> across providers (${esc(byProvider)}) — fetched ${ageLabel}.
+      <div style="margin-top:4px">${claudeLine}. Ollama: live from <code>:11434</code>. Gemini &amp; Codex: curated (their CLIs can't list models).</div>
+      ${notes}
     </div>
   `;
 }
