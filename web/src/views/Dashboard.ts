@@ -1,5 +1,5 @@
 import type { EvalRun, GlobalStats } from "../db.ts";
-import { esc, pct, passBar, formatDate, agentChip } from "./html.ts";
+import { esc, pct, passBar, localDateTime, agentChip } from "./html.ts";
 
 export type PaginationInfo = {
   page: number;
@@ -70,7 +70,7 @@ export function DashboardPage(
     return `
       <a href="/evals/${encodeURIComponent(run.run_id)}" class="run-row">
         <div class="run-meta">
-          <span class="run-date">${esc(formatDate(run.timestamp))}</span>
+          <span class="run-date">${localDateTime(run.timestamp)}</span>
         </div>
         <div class="run-counts">
           <span class="p">${run.pass_count ?? 0}P</span>

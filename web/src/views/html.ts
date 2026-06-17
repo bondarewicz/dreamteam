@@ -89,7 +89,7 @@ export function truncate(s: string | null | undefined, max = 120): string {
   return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
-/** Format ISO timestamp to display date */
+/** Format ISO timestamp to a UTC display string (storage truth / no-JS fallback). */
 export function formatDate(ts: string): string {
   try {
     const d = new Date(ts);
@@ -97,4 +97,16 @@ export function formatDate(ts: string): string {
   } catch {
     return ts;
   }
+}
+
+/**
+ * Render a timestamp as a <time> element that the browser converts to the user's
+ * LOCAL timezone (DB stays UTC; UI is always local). The element ships with the
+ * UTC string as text + title, so it's correct with JS disabled; the Layout script
+ * (initLocalTime) rewrites the text to local on load and after htmx swaps.
+ * Returns HTML — do NOT wrap call sites in esc().
+ */
+export function localDateTime(ts: string): string {
+  const utc = formatDate(ts);
+  return `<time class="local-dt" datetime="${esc(ts)}" title="${esc(utc)}">${esc(utc)}</time>`;
 }

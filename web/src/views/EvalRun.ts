@@ -1,6 +1,6 @@
 import type { EvalRun, EvalResult, AgentSummary, ScenarioHistoryEntry } from "../db.ts";
 // EvalRun is also the previous baseline type
-import { esc, pct, passBar, ms, cost, formatDate, agentChip, scoreBadge, truncate, AGENT_COLORS, agentColor } from "./html.ts";
+import { esc, pct, passBar, ms, cost, localDateTime, agentChip, scoreBadge, truncate, AGENT_COLORS, agentColor } from "./html.ts";
 
 // Alphabetical order for agents
 const AGENT_ORDER = ["bird", "kobe", "magic", "mj", "pippen", "shaq"];
@@ -151,7 +151,7 @@ export function EvalRunPage(
         </div>` : ""}
         <div class="meta-item">
           <div class="meta-label">Run Date</div>
-          <div class="meta-value">${esc(formatDate(run.timestamp))}</div>
+          <div class="meta-value">${localDateTime(run.timestamp)}</div>
         </div>
         <div class="meta-item">
           <div class="meta-label">Scenarios</div>
