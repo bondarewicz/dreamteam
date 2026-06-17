@@ -20,7 +20,7 @@ import { DashboardPage } from "../web/src/views/Dashboard.ts";
 const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const OUT_DIR = path.join(REPO, "site", "evals");
 const THEME = fs.readFileSync(path.join(REPO, "web", "static", "theme.css"), "utf-8");
-const REPO_URL = "https://github.com/bondarewicz/dreamteam";
+const PKG_URL = "https://www.npmjs.com/package/@bondarewicz/dreamteam";
 
 const runs = getAllRuns();
 const stats = getGlobalStats();
@@ -34,7 +34,7 @@ const banner = `
   <div style="margin:0 0 18px;padding:12px 16px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2,var(--surface-3));font-size:13px;color:var(--text-dim)">
     <strong>Live eval scoreboard</strong> — real scores from the Dream Team eval harness, every agent graded by a pinned Coach K judge.
     Each run shows the provider/model it ran on. This is a read-only snapshot; for filters, traces and per-run drill-down run
-    <code>dreamteam web</code> locally. <a href="${REPO_URL}" style="color:var(--accent)">Source &amp; how it works →</a>
+    <code>dreamteam web</code> locally. <a href="${PKG_URL}" style="color:var(--accent)">Get it on npm →</a>
   </div>`;
 
 const html = `<!DOCTYPE html><html lang="en"><head>
@@ -43,7 +43,7 @@ const html = `<!DOCTYPE html><html lang="en"><head>
 <meta name="description" content="Public eval scoreboard: every Dream Team agent graded across Claude, Codex, Gemini and Ollama by a pinned LLM judge. Real scores, not vibes.">
 <style>${THEME}</style>
 </head><body>
-<nav><a href="../">← Dream Team</a><a href="#" style="color:var(--text)">Eval Scoreboard</a><a href="${REPO_URL}">GitHub</a></nav>
+<nav><a href="../">← Dream Team</a><a href="#" style="color:var(--text)">Eval Scoreboard</a><a href="${PKG_URL}" target="_blank" rel="noopener">npm</a></nav>
 <div class="container">${banner}${body}</div>
 <script>
 (function(){
