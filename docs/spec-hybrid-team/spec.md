@@ -13,7 +13,9 @@
 **Why not proxy:** Max (Claude) and ChatGPT-Codex are subscription-only — not reachable via `ANTHROPIC_BASE_URL` or LiteLLM proxy. A session-wide `base_url` also can't route per-agent. Proxy fails constraints 1 and 2. Decision is closed.
 
 **Phase 1 (ship):** analysis/synthesis roles delegate single-shot on any provider. Shaq stays claude-native.
-**Phase 2/3 (gated, not now): Shaq on ANY provider.** Unified principle — *one checkpoint path, N plan primitives*: each provider's native write-incapable plan mode slots into the same plan→approve→implement checkpoint we already run for Claude. codex = `--sandbox read-only`; gemini = `--approval-mode plan`; ollama = orchestrator tool-loop with write tools withheld until approval. Each ships only after a 3/3-trial instrumented proof that no write occurs before approval. Sequence: **codex → gemini → ollama** (least code we own + strongest external gate first). Nothing is "disallowed" — earlier verdict overturned by context7 evidence.
+**Shaq on ANY provider — unified principle** *(one checkpoint path, N plan primitives)*: each provider's native write-incapable plan mode slots into the same plan→approve→implement checkpoint we run for Claude. codex = `--sandbox read-only`; gemini = `--approval-mode plan`; ollama = orchestrator tool-loop with write tools withheld until approval. Each ships only after a 3/3 instrumented proof of no-write-before-approval. Sequence: **codex → gemini → ollama**.
+- **Phase 2 — codex-Shaq: ✅ SHIPPED.** Gate cleared 3/3 (`scripts/codex-readonly-gate.ts`: read-only turn-1 plan, zero writes). Two-phase dispatch live in `team-dispatch.ts --phase plan|implement`; verified end-to-end (plan 0 writes → implement wrote classify.ts + test into the sandbox).
+- **Phase 3 — gemini/ollama Shaq: still gated** (their per-provider proofs not yet run). Dispatcher refuses them.
 
 ---
 
@@ -113,7 +115,7 @@ Shared two-phase mapping (all four providers, Claude included): **Plan** (write-
 
 | Provider | Plan primitive (write-incapable) | Implement phase | Gate enforced by | Build | Ships |
 |---|---|---|---|---|---|
-| **codex** | `--sandbox read-only` | `--sandbox workspace-write` turn 2 | the OS sandbox | S7 (small: sandbox-mode flip) | **1st** |
+| **codex** | `--sandbox read-only` | `--sandbox workspace-write` turn 2 | the OS sandbox | S7 ✅ **SHIPPED** (gate 3/3) | **1st (done)** |
 | **gemini** | `--approval-mode plan -p` (TOML policy admits only `readOnlyHint` tools) | `--approval-mode auto_edit`/`--yolo`, cwd=sandbox | gemini's policy engine | S8 (small-med; `--approval-mode` param + execute cwd). `--acp` live loop deferred | **2nd** |
 | **ollama** | orchestrator tool-loop, **only read tools registered** (ollama has no fs — it emits tool_calls, we execute) | re-enter loop with Write/Bash enabled, confined to `.dt-delegated` | **our dispatcher** (write capability is ours to withhold) | S9 (**biggest** — new tool-execution runtime: loop + sandboxed Read/Grep/Write/Bash + approval-gated registry + loop bounds) | **3rd (last)** |
 

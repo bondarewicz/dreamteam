@@ -1,8 +1,14 @@
 import { test, expect } from "bun:test";
 import {
   validateContract, scrubMeteredEnv, assertSubscriptionAuth, extractJson,
-  ANALYSIS_ROLES, IMPL_ROLES, INTERACTIVE_SINGLE_SHOT_APPEND, runDelegatedTurn,
+  ANALYSIS_ROLES, IMPL_ROLES, IMPL_PROVIDERS, INTERACTIVE_SINGLE_SHOT_APPEND, runDelegatedTurn,
 } from "../team-dispatch.ts";
+
+test("IMPL_PROVIDERS: codex enabled (gate cleared), gemini/ollama still gated", () => {
+  expect(IMPL_PROVIDERS.has("codex")).toBe(true);
+  expect(IMPL_PROVIDERS.has("gemini")).toBe(false);
+  expect(IMPL_PROVIDERS.has("ollama")).toBe(false);
+});
 
 // ── extractJson: models without a registered schema often fence/preamble ─────
 test("extractJson strips ```json fences", () => {

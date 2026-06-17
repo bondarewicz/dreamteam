@@ -147,7 +147,7 @@ export function buildTrace(opts: {
  * writes survive for review. Eval callers omit opts → ephemeral tmp dir, rm in
  * finally (unchanged). Only codex writes files, so only it consumes opts.
  */
-export type BackendOpts = { workDir?: string; keepWorkDir?: boolean };
+export type BackendOpts = { workDir?: string; keepWorkDir?: boolean; sandbox?: "read-only" | "workspace-write" };
 
 export async function runProviderBackend(
   provider: Provider,
@@ -277,7 +277,10 @@ export async function runCodex(agent: string, scenarioId: string, prompt: string
   // with a "-" positional: the agent body starts with `---` frontmatter, and a positional
   // beginning with `-` would be mis-parsed as a flag (instant exit 2).
   const combined = `${agentSystemPrompt(agent)}\n\n---\n\n${prompt}`;
-  const args = ["exec", "-", "-m", modelId, "--output-last-message", outFile, "--sandbox", "workspace-write", "--skip-git-repo-check"];
+  // Sandbox mode: default workspace-write (eval + implement phase); read-only for the
+  // hybrid /team plan phase (S7 — model physically cannot write → emits a plan).
+  const sandbox = opts?.sandbox ?? "workspace-write";
+  const args = ["exec", "-", "-m", modelId, "--output-last-message", outFile, "--sandbox", sandbox, "--skip-git-repo-check"];
   if (strictSchema) {
     fs.writeFileSync(schemaFile, JSON.stringify(strictSchema));
     args.push("--output-schema", schemaFile);

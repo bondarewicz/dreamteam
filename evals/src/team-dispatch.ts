@@ -37,12 +37,16 @@ export type TurnResult = {
   cost_usd: number;          // stamped by the dispatcher AFTER auth proven (never from child)
   authMode: "subscription" | "local" | "metered" | "unknown";
   scrubbed: string[];        // metered keys removed from the child env (BR-1 audit)
+  phase?: "plan" | "implement";  // S7 two-phase impl turns
+  writtenFiles?: string[];   // sandbox-relative files the implement phase wrote (for review, BR-10)
 };
 
 /** Roles that produce a one-shot analytical artifact — delegable single-shot in Phase 1. */
 export const ANALYSIS_ROLES = new Set(["bird", "mj", "kobe", "pippen", "drexler", "magic"]);
-/** Implementation/verification roles — claude-native in Phase 1; delegation gated Phase 2/3. */
+/** Implementation/verification roles — two-phase plan→approve→implement (BR-5). */
 export const IMPL_ROLES = new Set(["shaq"]);
+/** Providers where delegated implementation is ENABLED (gate cleared). codex = Phase 2; gemini/ollama = Phase 3 (gate pending). */
+export const IMPL_PROVIDERS = new Set(["codex"]);
 
 /** S4 — interactive single-shot neutralizer for analysis roles (no tools, deliver inline, be honest about blind spots). */
 export const INTERACTIVE_SINGLE_SHOT_APPEND = [
@@ -155,8 +159,31 @@ async function acquireOllamaLock(waitMs: number): Promise<boolean> {
 }
 function releaseOllamaLock(): void { try { fs.rmSync(OLLAMA_LOCK, { force: true }); } catch { /* ignore */ } }
 
+/** Sandbox-relative list of files written under workDir (for review, BR-10). */
+function manifest(workDir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string, rel: string) => {
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === "out.txt" || e.name === "schema.json") continue; // dispatcher's own files, not the agent's
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(path.join(d, e.name), r);
+      else out.push(r);
+    }
+  };
+  walk(workDir, "");
+  return out;
+}
+
 // ── main entry ──────────────────────────────────────────────────────────────
-export type DispatchOpts = { sessionDir?: string; timeoutMs?: number; scrubbed?: string[] };
+export type DispatchOpts = {
+  sessionDir?: string;
+  timeoutMs?: number;
+  scrubbed?: string[];
+  phase?: "plan" | "implement";  // required for IMPL roles (BR-5 plan-approve-before-write)
+  approvedPlan?: string;         // required for implement phase — the human-approved plan
+};
 
 /** Run one delegated agent turn. Never throws — failures come back as { ok:false, error }. */
 export async function runDelegatedTurn(agent: string, brief: string, opts: DispatchOpts = {}): Promise<TurnResult> {
@@ -170,17 +197,30 @@ export async function runDelegatedTurn(agent: string, brief: string, opts: Dispa
   });
 
   if (provider === "claude") return base({ error: `${agent} resolves to claude — run as a native subagent, do not delegate.` });
-  if (IMPL_ROLES.has(agent)) return base({ error: `delegated implementation not enabled for '${agent}' on ${provider} (Phase 2/3, gated). Re-pin ${agent} to claude.` });
-  if (!ANALYSIS_ROLES.has(agent)) return base({ error: `agent '${agent}' is not a delegable role.` });
+  const isImpl = IMPL_ROLES.has(agent);
+  if (!isImpl && !ANALYSIS_ROLES.has(agent)) return base({ error: `agent '${agent}' is not a delegable role.` });
+  if (isImpl && !IMPL_PROVIDERS.has(provider)) return base({ error: `delegated implementation for '${agent}' on ${provider} is gated Phase 3 (not enabled). Re-pin ${agent} to claude or codex.` });
+  if (isImpl && opts.phase !== "plan" && opts.phase !== "implement") return base({ error: `'${agent}' is an implementation role — requires --phase plan|implement (plan-approve-before-write, BR-5).` });
+  if (isImpl && opts.phase === "implement" && !opts.approvedPlan?.trim()) return base({ error: `implement phase requires the human-approved plan (--plan <file>). Run --phase plan first, get sign-off, then implement.` });
 
   const auth = assertSubscriptionAuth(provider);
   if (!auth.ok) return base({ error: auth.error, authMode: auth.mode });
 
-  const timeoutMs = opts.timeoutMs ?? turnTimeoutMs(provider);
+  const phase = isImpl ? opts.phase : undefined;
+  const timeoutMs = opts.timeoutMs ?? turnTimeoutMs(provider) * (phase === "implement" ? 2 : 1);
   const sessionDir = opts.sessionDir ?? process.env.SESSION_WORKTREE ?? process.cwd();
   const safeId = `${agent}-${Date.now()}`;
   const workDir = path.join(sessionDir, ".dt-delegated", safeId);
-  const prompt = ANALYSIS_ROLES.has(agent) ? `${brief}\n\n${INTERACTIVE_SINGLE_SHOT_APPEND}` : brief;
+
+  // Prompt + sandbox mode per role/phase:
+  //  analysis      → single-shot, write-incapable intent (workspace-write moot; no file work)
+  //  impl/plan     → read-only (OS-enforced: cannot write → emits plan)         [S7 gate]
+  //  impl/implement→ workspace-write with the approved plan                      [post-approval]
+  let prompt: string;
+  let sandbox: "read-only" | "workspace-write";
+  if (!isImpl) { prompt = `${brief}\n\n${INTERACTIVE_SINGLE_SHOT_APPEND}`; sandbox = "read-only"; }
+  else if (phase === "plan") { prompt = `${brief}\n\nPLAN MODE (read-only): produce an implementation PLAN only — the files you will create/modify and the approach. Do NOT write files.`; sandbox = "read-only"; }
+  else { prompt = `${brief}\n\nAPPROVED PLAN — implement exactly this, writing the files now:\n${opts.approvedPlan}`; sandbox = "workspace-write"; }
 
   let locked = false;
   try {
@@ -188,36 +228,66 @@ export async function runDelegatedTurn(agent: string, brief: string, opts: Dispa
       locked = await acquireOllamaLock(timeoutMs);
       if (!locked) return base({ error: "ollama busy in another /team session (lock timeout). Retry, skip, or re-pin.", authMode: auth.mode });
     }
-    const raw = await runProviderBackend(provider, agent, safeId, prompt, modelId, timeoutMs, { workDir, keepWorkDir: true });
-    const sandbox = fs.existsSync(workDir) ? workDir : undefined;
-    if (raw.error) return base({ error: raw.error, authMode: auth.mode, artifactsDir: sandbox });
+    const raw = await runProviderBackend(provider, agent, safeId, prompt, modelId, timeoutMs, { workDir, keepWorkDir: true, sandbox });
+    const dir = fs.existsSync(workDir) ? workDir : undefined;
+    if (raw.error) return base({ error: raw.error, authMode: auth.mode, artifactsDir: dir, phase });
 
-    // Normalize: strip markdown fences/preamble (backends only fence-strip when a schema is registered).
     const output = extractJson(raw.agent_output);
-    const gate = validateContract(agent, output);
-    if (!gate.ok) return base({ error: `contract gate failed: ${gate.reason}`, output, authMode: auth.mode, artifactsDir: sandbox });
+    const written = dir ? manifest(dir) : [];
 
-    // cost_usd stamped here, AFTER subscription auth proven (never trusted from the child).
-    return base({ ok: true, output, authMode: auth.mode, cost_usd: 0, artifactsDir: sandbox });
+    if (phase === "plan") {
+      // Plan turn: lenient gate (non-empty plan) + assert read-only held (no writes).
+      if (!output.trim()) return base({ error: "plan phase produced an empty plan", authMode: auth.mode, artifactsDir: dir, phase });
+      if (written.length) return base({ error: `BR-5 violation: plan phase wrote ${written.length} file(s) under read-only — ${written.join(", ")}`, output, authMode: auth.mode, artifactsDir: dir, phase, writtenFiles: written });
+      return base({ ok: true, output, authMode: auth.mode, cost_usd: 0, artifactsDir: dir, phase, writtenFiles: [] });
+    }
+
+    // implement phase (or analysis): full contract gate.
+    const gate = validateContract(agent, output);
+    if (!gate.ok) return base({ error: `contract gate failed: ${gate.reason}`, output, authMode: auth.mode, artifactsDir: dir, phase, writtenFiles: written });
+
+    // BR-4 hardening (impl): any cited files_changed path must actually exist in the sandbox.
+    if (phase === "implement") {
+      try {
+        const fc = (JSON.parse(output) as any).files_changed;
+        if (Array.isArray(fc)) {
+          const missing = fc.map((f: any) => (typeof f === "string" ? f : f?.path)).filter((p: any) => typeof p === "string" && p)
+            .filter((p: string) => !fs.existsSync(path.isAbsolute(p) ? p : path.join(workDir, p)) && !written.includes(p));
+          if (missing.length) return base({ error: `cited file(s) not found in sandbox (hallucinated write?): ${missing.join(", ")}`, output, authMode: auth.mode, artifactsDir: dir, phase, writtenFiles: written });
+        }
+      } catch { /* output not parseable here is already caught by the gate */ }
+    }
+
+    return base({ ok: true, output, authMode: auth.mode, cost_usd: 0, artifactsDir: dir, phase, writtenFiles: written });
   } catch (e) {
-    return base({ error: `dispatch error: ${e instanceof Error ? e.message : String(e)}`, authMode: auth.mode });
+    return base({ error: `dispatch error: ${e instanceof Error ? e.message : String(e)}`, authMode: auth.mode, phase });
   } finally {
     if (locked) releaseOllamaLock();
   }
 }
 
-// ── CLI: bun team-dispatch.ts <agent> <briefFile> [timeoutMs] ───────────────
+// ── CLI ─────────────────────────────────────────────────────────────────────
+// Analysis:  bun team-dispatch.ts <agent> <briefFile> [--timeout ms]
+// Impl (S7): bun team-dispatch.ts <agent> <briefFile> --phase plan [--timeout ms]
+//            (human approves the plan) →
+//            bun team-dispatch.ts <agent> <briefFile> --phase implement --plan <approvedPlanFile>
 if (import.meta.main) {
   const scrubbed = scrubMeteredEnv();                       // BR-1/BR-2 — before any spawn
-  const [agent, briefFile, timeoutArg] = process.argv.slice(2);
-  if (!agent || !briefFile) {
-    console.error("usage: bun team-dispatch.ts <agent> <briefFile> [timeoutMs]");
-    process.exit(2);
-  }
+  const argv = process.argv.slice(2);
+  const flag = (n: string): string | undefined => { const i = argv.indexOf(n); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined; };
+  const positionals = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && argv[i - 1].startsWith("--")));
+  const [agent, briefFile] = positionals;
+  const phase = flag("--phase") as "plan" | "implement" | undefined;
+  const planFile = flag("--plan");
+  const timeoutMs = flag("--timeout") ? parseInt(flag("--timeout")!, 10) : undefined;
+
+  const fail = (error: string) => { console.log(JSON.stringify({ agent, ok: false, error }, null, 2)); process.exit(0); };
+  if (!agent || !briefFile) { console.error("usage: bun team-dispatch.ts <agent> <briefFile> [--phase plan|implement] [--plan <file>] [--timeout ms]"); process.exit(2); }
   let brief = "";
-  try { brief = fs.readFileSync(briefFile, "utf-8"); }
-  catch (e) { console.log(JSON.stringify({ agent, ok: false, error: `cannot read brief file ${briefFile}: ${e instanceof Error ? e.message : String(e)}` })); process.exit(0); }
-  const timeoutMs = timeoutArg ? parseInt(timeoutArg, 10) : undefined;
-  const result = await runDelegatedTurn(agent, brief, { timeoutMs, scrubbed });
+  try { brief = fs.readFileSync(briefFile, "utf-8"); } catch (e) { fail(`cannot read brief file ${briefFile}: ${e instanceof Error ? e.message : String(e)}`); }
+  let approvedPlan: string | undefined;
+  if (planFile) { try { approvedPlan = fs.readFileSync(planFile, "utf-8"); } catch (e) { fail(`cannot read plan file ${planFile}: ${e instanceof Error ? e.message : String(e)}`); } }
+
+  const result = await runDelegatedTurn(agent, brief, { timeoutMs, scrubbed, phase, approvedPlan });
   console.log(JSON.stringify(result, null, 2));
 }
