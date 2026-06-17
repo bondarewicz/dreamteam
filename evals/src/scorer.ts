@@ -10,6 +10,7 @@ import type { ClaudeAdapter, GraderResult, Score, ScoredResult, TrialResult, Raw
 import { extractJson } from "./json-extract.ts";
 import { extractField, parseScenarioMeta, extractGraders } from "./scenario-parser.ts";
 import { runAllGraders } from "./graders.ts";
+import { JUDGE_DEFENSE } from "../../scripts/prompt-defense.ts";
 
 const VALID_SCORES: Set<string> = new Set(["pass", "partial", "fail"]);
 
@@ -57,6 +58,7 @@ function buildScoringPrompt(
   fields: ScoreFields
 ): string {
   return (
+    `${JUDGE_DEFENSE}\n\n` +
     `You are Coach K scoring an agent's output against a rubric. Return ONLY valid JSON.\n\n` +
     `SCENARIO: ${scenarioId}\n` +
     `AGENT: ${agent}\n\n` +

@@ -19,6 +19,7 @@ import os from "os";
 import fs from "fs";
 import type { RawOutput } from "./types.ts";
 import { getAgentJsonSchema, getAgentStrictJsonSchema, stripNulls } from "../../schemas/agent-schemas.ts";
+import { withAgentDefense } from "../../scripts/prompt-defense.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
@@ -44,7 +45,7 @@ export function parseProvider(model?: string): { provider: Provider; modelId: st
 
 /** Whole agent .md (frontmatter + body) as the system prompt — mirrors claude --system-prompt-file. */
 export function agentSystemPrompt(agent: string): string {
-  return fs.readFileSync(path.join(AGENTS_DIR, `${agent}.md`), "utf-8");
+  return withAgentDefense(fs.readFileSync(path.join(AGENTS_DIR, `${agent}.md`), "utf-8"));
 }
 
 /**

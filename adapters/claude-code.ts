@@ -13,6 +13,7 @@ import fs from "fs";
 import { contentSha } from "../scripts/paths.ts";
 import { readModelSpec, setModelBlock } from "../scripts/frontmatter.ts";
 import { resolveModel } from "../scripts/model-tiers.ts";
+import { withAgentDefense } from "../scripts/prompt-defense.ts";
 import type { HarnessAdapter, InstallOptions, InstalledFile } from "./types.ts";
 
 const HARNESS = "claude-code";
@@ -42,7 +43,7 @@ function isSymlink(p: string): boolean {
  */
 export function renderAgentForClaude(content: string): { content: string; model: string } {
   const model = resolveModel(readModelSpec(content), "claude");
-  return { content: setModelBlock(content, `model: ${model}`), model };
+  return { content: withAgentDefense(setModelBlock(content, `model: ${model}`)), model };
 }
 
 export class ClaudeCodeAdapter implements HarnessAdapter {
