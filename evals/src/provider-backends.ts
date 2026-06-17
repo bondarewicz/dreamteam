@@ -18,7 +18,7 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 import type { RawOutput } from "./types.ts";
-import { getAgentJsonSchema } from "../../schemas/agent-schemas.ts";
+import { getAgentJsonSchema, getAgentStrictJsonSchema, stripNulls } from "../../schemas/agent-schemas.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
@@ -191,20 +191,23 @@ export async function runGemini(agent: string, scenarioId: string, prompt: strin
 // ── Codex: codex exec with native --output-schema + --output-last-message ──────
 export async function runCodex(agent: string, scenarioId: string, prompt: string, modelId: string, timeoutMs: number): Promise<RawOutput> {
   const start = Date.now();
-  const schema = jsonSchemaFor(agent);
+  // Native structured output via --output-schema: codex maps it to OpenAI strict
+  // mode, which requires every property in `required` + additionalProperties:false.
+  // getAgentStrictJsonSchema() applies that transform (optional fields → nullable);
+  // we strip the resulting nulls before returning so Zod .optional() validates.
+  const strictSchema = getAgentStrictJsonSchema(agent);
   const stem = path.join(os.tmpdir(), `dt-codex-${scenarioId.replace(/[^a-z0-9]/gi, "_")}-${start}`);
   const outFile = `${stem}.out`;
+  const schemaFile = `${stem}.schema.json`;
   // Codex has no system-prompt flag — prepend the agent body to the task. Feed via STDIN
   // with a "-" positional: the agent body starts with `---` frontmatter, and a positional
   // beginning with `-` would be mis-parsed as a flag (instant exit 2).
-  //
-  // NOTE: --output-schema is intentionally NOT used. It maps to OpenAI strict structured
-  // output, which requires every property to be in `required` + additionalProperties:false;
-  // our compact schemas have optional fields → 400 invalid_json_schema. Phase 3 adds a
-  // strict-schema transform; for now we embed the schema in the prompt + Zod re-validate.
-  let combined = `${agentSystemPrompt(agent)}\n\n---\n\n${prompt}`;
-  if (schema) combined += `\n\nIMPORTANT: Your FINAL message must be ONLY a single JSON object conforming to this JSON Schema — no prose, no markdown fences, nothing before or after:\n${JSON.stringify(schema)}`;
+  const combined = `${agentSystemPrompt(agent)}\n\n---\n\n${prompt}`;
   const args = ["exec", "-", "-m", modelId, "--output-last-message", outFile, "--sandbox", "read-only", "--skip-git-repo-check"];
+  if (strictSchema) {
+    fs.writeFileSync(schemaFile, JSON.stringify(strictSchema));
+    args.push("--output-schema", schemaFile);
+  }
   try {
     const proc = Bun.spawn(["codex", ...args], { stdin: new TextEncoder().encode(combined), stdout: "pipe", stderr: "pipe" });
     const t = setTimeout(() => { try { proc.kill(); } catch { /* dead */ } }, timeoutMs);
@@ -212,7 +215,11 @@ export async function runCodex(agent: string, scenarioId: string, prompt: string
     clearTimeout(t);
     let content = "";
     try { content = fs.readFileSync(outFile, "utf-8").trim(); } catch { /* no message */ }
-    if (schema && content) content = extractJsonText(content);
+    if (strictSchema && content) {
+      content = extractJsonText(content);
+      // Drop null-valued keys the strict schema forced in, so downstream Zod (.optional()) validates.
+      try { content = JSON.stringify(stripNulls(JSON.parse(content))); } catch { /* leave as-is */ }
+    }
     return record(agent, scenarioId, content, {
       durationMs: Date.now() - start,
       error: code !== 0 ? `codex exit ${code}` : (content ? undefined : "codex: empty last message"),
@@ -221,5 +228,6 @@ export async function runCodex(agent: string, scenarioId: string, prompt: string
     return record(agent, scenarioId, "", { durationMs: Date.now() - start, error: `codex: ${e instanceof Error ? e.message : String(e)}` });
   } finally {
     try { fs.rmSync(outFile, { force: true }); } catch { /* ignore */ }
+    try { fs.rmSync(schemaFile, { force: true }); } catch { /* ignore */ }
   }
 }
