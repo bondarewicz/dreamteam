@@ -98,7 +98,7 @@ function validatePin(value: string): { ok: true } | { ok: false; reason: string 
   return { ok: true };
 }
 
-/** Build a ModelSpec for an agent from the submitted tier__/pin__ fields. */
+/** Build a ModelSpec for an agent from the submitted tier__/provider__/pin__ fields. */
 function specFromForm(agent: string, fields: URLSearchParams): { spec: ModelSpec } | { error: string } {
   const tierRaw = (fields.get(`tier__${agent}`) ?? "deep").trim();
   if (!(TIERS as readonly string[]).includes(tierRaw)) return { error: `invalid tier '${tierRaw}'` };
@@ -110,7 +110,11 @@ function specFromForm(agent: string, fields: URLSearchParams): { spec: ModelSpec
     if (!valid.ok) return { error: `${p} pin: ${valid.reason}` };
     pin[p] = v;
   }
-  return { spec: { tier: tierRaw as Tier, pin } };
+  // Active provider — the one this agent runs on. claude (or unset) = default, omitted from frontmatter.
+  const provRaw = (fields.get(`provider__${agent}`) ?? "claude").trim();
+  if (!(PROVIDERS as readonly string[]).includes(provRaw)) return { error: `invalid provider '${provRaw}'` };
+  const provider = provRaw === "claude" ? undefined : (provRaw as Provider);
+  return { spec: provider ? { tier: tierRaw as Tier, pin, provider } : { tier: tierRaw as Tier, pin } };
 }
 
 async function renderFlash(req: Request, flash: FlashMessage): Promise<Response> {

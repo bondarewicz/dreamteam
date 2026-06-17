@@ -17,8 +17,19 @@ const models: ModelsResult = {
 
 const rows: AgentModelRow[] = [
   { agent: "bird", spec: { tier: "deep", pin: {} } },
-  { agent: "drexler", spec: { tier: "mid", pin: { ollama: "gemma4" } } },
+  { agent: "drexler", spec: { tier: "mid", pin: { ollama: "gemma4" }, provider: "ollama" } },
 ];
+
+test("provider selector present per agent; active provider preselected", () => {
+  const html = AdminModelsPage(rows, models);
+  expect((html.match(/name="provider__/g) ?? []).length).toBe(2);
+  expect(html).toContain('name="provider__bird"');
+  // bird defaults to claude
+  expect(html).toMatch(/name="provider__bird"[\s\S]*?<option value="claude" selected>/);
+  // drexler runs on ollama → highlighted active in the runs-as line
+  expect(html).toContain("rz-active");
+  expect(html).toContain("▶ Ollama");
+});
 
 test("renders a tier select + 4 pin selects per agent", () => {
   const html = AdminModelsPage(rows, models);

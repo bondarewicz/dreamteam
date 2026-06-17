@@ -39,6 +39,14 @@ function tierSelect(agent: string, current: Tier): string {
   return `<select name="tier__${esc(agent)}" class="form-input tier-input">${opts}</select>`;
 }
 
+/** Active-provider selector — the provider this agent runs on (interactively + evals). claude = default. */
+function providerSelect(agent: string, current: Provider): string {
+  const opts = PROVIDER_ORDER.map(
+    (p) => `<option value="${p}"${p === current ? " selected" : ""}>${p === "claude" ? "claude (default)" : p}</option>`,
+  ).join("");
+  return `<select name="provider__${esc(agent)}" class="form-input tier-input">${opts}</select>`;
+}
+
 /** Per-provider pin selector. Empty value = use tier default. */
 function pinSelect(agent: string, provider: Provider, spec: ModelSpec, modelsResult: ModelsResult): string {
   const current = spec.pin[provider] ?? "";
@@ -81,9 +89,11 @@ function renderModelsSource(modelsResult: ModelsResult): string {
 export function AdminModelsPage(rows: AgentModelRow[], modelsResult: ModelsResult, flash?: FlashMessage): string {
   const rowsHtml = rows
     .map((r) => {
+      const activeProvider: Provider = r.spec.provider ?? "claude";
       const resolved = PROVIDER_ORDER.map((p) => {
         const pinned = r.spec.pin[p] !== undefined;
-        return `<span class="rz${pinned ? " rz-pin" : ""}">${esc(SHORT_LABEL[p])} <b>${esc(resolveModel(r.spec, p))}</b></span>`;
+        const active = p === activeProvider;
+        return `<span class="rz${pinned ? " rz-pin" : ""}${active ? " rz-active" : ""}" title="${active ? "active provider — this agent runs here" : ""}">${active ? "▶ " : ""}${esc(SHORT_LABEL[p])} <b>${esc(resolveModel(r.spec, p))}</b></span>`;
       }).join('<span class="rz-sep">·</span>');
       const pins = PROVIDER_ORDER.map(
         (p) => `<label class="pin-row"><span class="pin-label">${esc(PROVIDER_LABELS[p])}</span>${pinSelect(r.agent, p, r.spec, modelsResult)}</label>`,
@@ -92,6 +102,7 @@ export function AdminModelsPage(rows: AgentModelRow[], modelsResult: ModelsResul
       <div class="admin-agent">
         <div class="admin-agent-head">
           <span class="agent-badge ${esc(r.agent)}">${esc(r.agent)}</span>
+          <label class="tier-wrap">runs on ${providerSelect(r.agent, activeProvider)}</label>
           <label class="tier-wrap">tier ${tierSelect(r.agent, r.spec.tier)}</label>
         </div>
         <div class="resolved-line"><span class="resolved-lead">runs as</span> ${resolved}</div>
@@ -116,7 +127,7 @@ export function AdminModelsPage(rows: AgentModelRow[], modelsResult: ModelsResul
     </div>
     <div class="page-title">
       <h1>Agent Models</h1>
-      <p>Each agent has a <strong>tier</strong> (deep / mid / fast) that resolves to a model per provider, plus optional <strong>pins</strong> to override any provider. Saving writes the nested <code>model:</code> block to <code>agents/&lt;name&gt;.md</code> — run <code>bun scripts/install.ts</code> to sync into <code>~/.claude/</code> (renders the flat Claude model).</p>
+      <p>Each agent has a <strong>provider</strong> it runs on (default Claude — used by <code>/team</code> delegation &amp; evals), a <strong>tier</strong> (deep / mid / fast) that resolves to a model per provider, and optional <strong>pins</strong> to override a provider's model. Saving writes the nested <code>model:</code> block to <code>agents/&lt;name&gt;.md</code> — run <code>dreamteam install</code> to sync into <code>~/.claude/</code> (which always renders Claude for the native <code>/&lt;agent&gt;</code> subagent path; the provider applies to <code>/team</code> + evals).</p>
     </div>
 
     ${renderModelsSource(modelsResult)}
@@ -142,6 +153,8 @@ export function AdminModelsPage(rows: AgentModelRow[], modelsResult: ModelsResul
       .rz { white-space: nowrap; }
       .rz b { color: var(--text); font-weight: 600; font-family: var(--mono, monospace); }
       .rz-pin b { color: var(--accent); }          /* overridden providers stand out */
+      .rz-active { font-weight: 700; color: var(--text); }   /* the provider this agent runs on */
+      .rz-active b { color: var(--pass, #86efac); }
       .rz-sep { color: var(--border); }
 
       /* Override disclosure — collapsed unless the agent has pins */
