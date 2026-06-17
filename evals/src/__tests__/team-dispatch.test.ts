@@ -4,10 +4,11 @@ import {
   ANALYSIS_ROLES, IMPL_ROLES, IMPL_PROVIDERS, INTERACTIVE_SINGLE_SHOT_APPEND, runDelegatedTurn,
 } from "../team-dispatch.ts";
 
-test("IMPL_PROVIDERS: codex enabled (gate cleared), gemini/ollama still gated", () => {
+test("IMPL_PROVIDERS: codex + gemini + ollama all enabled", () => {
   expect(IMPL_PROVIDERS.has("codex")).toBe(true);
-  expect(IMPL_PROVIDERS.has("gemini")).toBe(false);
-  expect(IMPL_PROVIDERS.has("ollama")).toBe(false);
+  expect(IMPL_PROVIDERS.has("gemini")).toBe(true);
+  expect(IMPL_PROVIDERS.has("ollama")).toBe(true);
+  expect(IMPL_PROVIDERS.has("claude")).toBe(false);
 });
 
 // ── extractJson: models without a registered schema often fence/preamble ─────

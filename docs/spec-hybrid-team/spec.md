@@ -14,8 +14,9 @@
 
 **Phase 1 (ship):** analysis/synthesis roles delegate single-shot on any provider. Shaq stays claude-native.
 **Shaq on ANY provider — unified principle** *(one checkpoint path, N plan primitives)*: each provider's native write-incapable plan mode slots into the same plan→approve→implement checkpoint we run for Claude. codex = `--sandbox read-only`; gemini = `--approval-mode plan`; ollama = orchestrator tool-loop with write tools withheld until approval. Each ships only after a 3/3 instrumented proof of no-write-before-approval. Sequence: **codex → gemini → ollama**.
-- **Phase 2 — codex-Shaq: ✅ SHIPPED.** Gate cleared 3/3 (`scripts/codex-readonly-gate.ts`: read-only turn-1 plan, zero writes). Two-phase dispatch live in `team-dispatch.ts --phase plan|implement`; verified end-to-end (plan 0 writes → implement wrote classify.ts + test into the sandbox).
-- **Phase 3 — gemini/ollama Shaq: still gated** (their per-provider proofs not yet run). Dispatcher refuses them.
+- **Phase 2 — codex-Shaq: ✅ SHIPPED.** Gate cleared 3/3 (`scripts/plan-gate.ts codex`: read-only turn-1 plan, zero writes). Two-phase dispatch live; verified end-to-end (plan 0 writes → implement wrote classify.ts + test into the sandbox).
+- **Phase 3 — gemini-Shaq: ✅ SHIPPED.** Gate cleared 3/3 (`scripts/plan-gate.ts gemini`). gemini's `--approval-mode plan` is NOT write-incapable headless (it wrote files 3/3) — the enforceable gate is an **OS read-only cwd + no-write framing** (writes EACCES); implement uses `--approval-mode auto_edit` in a writable sandbox. Plan-phase dispatch verified end-to-end; implement write-capability demonstrated (full two-phase dispatcher smoke pending flash-quota reset).
+- **Phase 3 — ollama-Shaq: ✅ SHIPPED.** Orchestrator tool-loop (`ollama-agent.ts`): ollama emits tool_calls, we execute them. Plan phase registers READ tools only → **constructively write-incapable** (the strongest gate: no write tool exists to call); implement phase adds write/bash, sandbox-confined (path-traversal rejected, bash cwd-pinned + scrubbed env). Gate is deterministic — unit-tested (write/bash refused in plan, confinement) rather than a live trial. Plan-loop smoke verified on qwen3.6.
 
 ---
 
@@ -116,8 +117,8 @@ Shared two-phase mapping (all four providers, Claude included): **Plan** (write-
 | Provider | Plan primitive (write-incapable) | Implement phase | Gate enforced by | Build | Ships |
 |---|---|---|---|---|---|
 | **codex** | `--sandbox read-only` | `--sandbox workspace-write` turn 2 | the OS sandbox | S7 ✅ **SHIPPED** (gate 3/3) | **1st (done)** |
-| **gemini** | `--approval-mode plan -p` (TOML policy admits only `readOnlyHint` tools) | `--approval-mode auto_edit`/`--yolo`, cwd=sandbox | gemini's policy engine | S8 (small-med; `--approval-mode` param + execute cwd). `--acp` live loop deferred | **2nd** |
-| **ollama** | orchestrator tool-loop, **only read tools registered** (ollama has no fs — it emits tool_calls, we execute) | re-enter loop with Write/Bash enabled, confined to `.dt-delegated` | **our dispatcher** (write capability is ours to withhold) | S9 (**biggest** — new tool-execution runtime: loop + sandboxed Read/Grep/Write/Bash + approval-gated registry + loop bounds) | **3rd (last)** |
+| **gemini** | **OS read-only cwd + no-write framing** (NOT `--approval-mode plan` — that writes anyway headless) | `--approval-mode auto_edit`, writable sandbox cwd, `GEMINI_CLI_TRUST_WORKSPACE=true` | OS read-only cwd (writes EACCES) | S8 ✅ **SHIPPED** (gate 3/3) | **2nd (done)** |
+| **ollama** | orchestrator tool-loop, **only read tools registered** (ollama has no fs — it emits tool_calls, we execute) | re-enter loop with Write/Bash enabled, confined to `.dt-delegated` | **our dispatcher** (write capability is ours to withhold) | S9 ✅ **SHIPPED** (`ollama-agent.ts`; gate deterministic + unit-tested) | **3rd (done)** |
 
 Why `codex exec resume` plan-then-write was refuted (Kobe CRITICAL-1): `codex exec` writes within a single turn; `-a on-request` is model-discretionary with no out-of-process approval channel; resume has no stop-before-write flag. The fix is OS-enforced read-only plan, not a model-trusted gate.
 

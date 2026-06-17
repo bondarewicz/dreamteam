@@ -230,7 +230,7 @@ field — unset/`claude` → **NATIVE**; `ollama|gemini|codex` → **DELEGATED**
 
 **Delegation scope (current):**
 - **Analysis/synthesis roles** (Bird, MJ, Kobe, Pippen, Drexler, Magic) — single-shot delegation on any provider (Delegated Turn Protocol below).
-- **Shaq (implementation)** — **claude (native) or codex (two-phase, below)**. Gemini/Ollama Shaq is still gated (Phase 3); the dispatcher refuses it. Coach K is never delegated.
+- **Shaq (implementation)** — **claude (native), or codex / gemini / ollama (two-phase, below)**. Coach K is never delegated.
 
 ### Delegated Turn Protocol (analysis/synthesis roles)
 
@@ -248,9 +248,9 @@ field — unset/`claude` → **NATIVE**; `ollama|gemini|codex` → **DELEGATED**
 4. **`ok:false` → FAIL LOUD.** Use **AskUserQuestion**: retry / skip this agent (partial team — record it) / re-pin to another subscription-or-local provider / abort. **Never** fall back to a metered API; never silently substitute Claude for a non-claude agent.
 5. The dispatcher already enforces BR-1 (scrubbed env + positive auth pre-flight), BR-4 (contract gate), BR-10 (sandbox). You do not re-implement these.
 
-### Delegated Implementation Protocol (Shaq on codex — two-phase, plan→approve→implement)
+### Delegated Implementation Protocol (Shaq on codex/gemini/ollama — two-phase, plan→approve→implement)
 
-When Shaq's `model.provider` is `codex`, you MUST run the SAME plan-approve-before-write governance you run for native Claude Shaq — split across two dispatcher calls with a human checkpoint between (the plan phase is OS-enforced read-only, so codex physically cannot write before approval):
+When Shaq's `model.provider` is `codex`, `gemini`, or `ollama`, you MUST run the SAME plan-approve-before-write governance you run for native Claude Shaq — split across two dispatcher calls (`--phase plan` then `--phase implement --plan <file>`) with a human checkpoint between. The plan phase is write-incapable per provider — codex: `--sandbox read-only`; gemini: OS read-only cwd + no-write framing (its `--approval-mode plan` is NOT a hard gate headless); ollama: orchestrator tool-loop with only READ tools registered (it has no fs — it can only ask us to act, and we withhold write tools until approval). The dispatcher handles the per-provider mechanism; the protocol is identical:
 
 1. **Plan phase (read-only):**
    ```bash

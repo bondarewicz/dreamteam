@@ -43,7 +43,7 @@ export function parseProvider(model?: string): { provider: Provider; modelId: st
 }
 
 /** Whole agent .md (frontmatter + body) as the system prompt — mirrors claude --system-prompt-file. */
-function agentSystemPrompt(agent: string): string {
+export function agentSystemPrompt(agent: string): string {
   return fs.readFileSync(path.join(AGENTS_DIR, `${agent}.md`), "utf-8");
 }
 
@@ -160,7 +160,7 @@ export async function runProviderBackend(
 ): Promise<RawOutput> {
   switch (provider) {
     case "ollama": return runOllama(agent, scenarioId, prompt, modelId, timeoutMs);
-    case "gemini": return runGemini(agent, scenarioId, prompt, modelId, timeoutMs);
+    case "gemini": return runGemini(agent, scenarioId, prompt, modelId, timeoutMs, opts);
     case "codex": return runCodex(agent, scenarioId, prompt, modelId, timeoutMs, opts);
     default: throw new Error(`runProviderBackend called for claude — handle in agent-runner.ts`);
   }
@@ -209,25 +209,36 @@ export async function runOllama(agent: string, scenarioId: string, prompt: strin
 }
 
 // ── Gemini: CLI headless (soft schema → instruction; Zod re-validates downstream) ──
-export async function runGemini(agent: string, scenarioId: string, prompt: string, modelId: string, timeoutMs: number): Promise<RawOutput> {
+export async function runGemini(agent: string, scenarioId: string, prompt: string, modelId: string, timeoutMs: number, opts?: BackendOpts): Promise<RawOutput> {
   const start = Date.now();
   const schema = jsonSchemaFor(agent);
-  let system = `${agentSystemPrompt(agent)}\n\n${SINGLE_SHOT_APPEND}`;
-  if (schema) system += `\n\nIMPORTANT: Do not narrate, summarize, or use tools. Your FINAL response must be ONLY a single JSON object that conforms to this JSON Schema — no prose, no markdown fences, nothing before or after the JSON:\n${JSON.stringify(schema)}`;
-  // Replace gemini's BUILT-IN system prompt (which turns it into an agentic, tool-looping
-  // coding assistant — the cause of empty/prose .response) with the agent's own prompt, via
-  // GEMINI_SYSTEM_MD. The model then does single-shot generation and returns the answer.
+  const impl = opts?.sandbox === "workspace-write";   // implement phase: gemini writes files
+  const readOnly = opts?.sandbox === "read-only" && !!opts?.workDir; // plan phase: OS read-only cwd
+  // Implement turns must use tools to write; analysis/plan turns are single-shot.
+  let system = impl ? agentSystemPrompt(agent) : `${agentSystemPrompt(agent)}\n\n${SINGLE_SHOT_APPEND}`;
+  if (schema && !impl) system += `\n\nIMPORTANT: Do not narrate, summarize, or use tools. Your FINAL response must be ONLY a single JSON object that conforms to this JSON Schema — no prose, no markdown fences, nothing before or after the JSON:\n${JSON.stringify(schema)}`;
+  // `--approval-mode plan` is NOT write-incapable headless; the plan gate is an OS read-only
+  // cwd + a no-write instruction. Implement uses a writable cwd + auto_edit.
+  const userPrompt = readOnly
+    ? `PLAN ONLY. You have NO write access (filesystem is read-only; write tools WILL fail). Do NOT call write_file/edit/shell. Output ONLY the plan as your response.\n\n${prompt}`
+    : prompt;
+  const approvalMode = impl ? "auto_edit" : "plan";
+  const cwd = opts?.workDir ?? process.cwd();
   const sysFile = path.join(os.tmpdir(), `dt-gemini-${scenarioId.replace(/[^a-z0-9]/gi, "_")}-${start}.system.md`);
+  let chmodded = false;
   try {
+    if (opts?.workDir) fs.mkdirSync(opts.workDir, { recursive: true });
     fs.writeFileSync(sysFile, system);
-    const proc = Bun.spawn(["gemini", "-p", prompt, "-m", modelId, "-o", "json", "--approval-mode", "plan"], {
-      env: { ...process.env, GEMINI_SYSTEM_MD: sysFile },
-      stdout: "pipe",
-      stderr: "pipe",
+    if (readOnly) { fs.chmodSync(opts!.workDir!, 0o555); chmodded = true; } // hard write gate (EACCES)
+    const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), GEMINI_SYSTEM_MD: sysFile };
+    if (opts?.workDir) childEnv.GEMINI_CLI_TRUST_WORKSPACE = "true"; // else plan mode is silently downgraded (exit 55)
+    const proc = Bun.spawn(["gemini", "-p", userPrompt, "-m", modelId, "-o", "json", "--approval-mode", approvalMode], {
+      cwd, env: childEnv, stdout: "pipe", stderr: "pipe",
     });
     const t = setTimeout(() => { try { proc.kill(); } catch { /* dead */ } }, timeoutMs);
     const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     clearTimeout(t);
+    if (chmodded) { try { fs.chmodSync(opts!.workDir!, 0o755); } catch { /* ignore */ } chmodded = false; }
     // Parse the ENVELOPE by first brace only — do NOT run fence stripping here: the
     // gemini envelope is clean JSON, but its `.response` value may itself contain a
     // ```json fence, which fence-aware extraction would wrongly grab instead.
@@ -250,6 +261,7 @@ export async function runGemini(agent: string, scenarioId: string, prompt: strin
     return record(agent, scenarioId, "", { durationMs, error,
       trace: buildTrace({ provider: "gemini", model: modelId, userPrompt: prompt, responseText: "", inputTokens: 0, outputTokens: 0, durationMs, error }) });
   } finally {
+    if (chmodded) { try { fs.chmodSync(opts!.workDir!, 0o755); } catch { /* ignore */ } }
     try { fs.rmSync(sysFile, { force: true }); } catch { /* ignore */ }
   }
 }

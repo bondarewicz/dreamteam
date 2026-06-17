@@ -22,7 +22,8 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import { resolveEffectiveModel } from "./agent-runner.ts";
-import { parseProvider, runProviderBackend } from "./provider-backends.ts";
+import { parseProvider, runProviderBackend, agentSystemPrompt } from "./provider-backends.ts";
+import { runOllamaAgentLoop } from "./ollama-agent.ts";
 import { validateAgentOutput, getAgentSchema } from "../../schemas/agent-schemas.ts";
 
 export type TurnResult = {
@@ -45,8 +46,8 @@ export type TurnResult = {
 export const ANALYSIS_ROLES = new Set(["bird", "mj", "kobe", "pippen", "drexler", "magic"]);
 /** Implementation/verification roles — two-phase plan→approve→implement (BR-5). */
 export const IMPL_ROLES = new Set(["shaq"]);
-/** Providers where delegated implementation is ENABLED (gate cleared). codex = Phase 2; gemini/ollama = Phase 3 (gate pending). */
-export const IMPL_PROVIDERS = new Set(["codex"]);
+/** Providers where delegated implementation is ENABLED. codex + gemini (plan gate 3/3); ollama (constructive tool-loop gate). */
+export const IMPL_PROVIDERS = new Set(["codex", "gemini", "ollama"]);
 
 /** S4 — interactive single-shot neutralizer for analysis roles (no tools, deliver inline, be honest about blind spots). */
 export const INTERACTIVE_SINGLE_SHOT_APPEND = [
@@ -228,12 +229,19 @@ export async function runDelegatedTurn(agent: string, brief: string, opts: Dispa
       locked = await acquireOllamaLock(timeoutMs);
       if (!locked) return base({ error: "ollama busy in another /team session (lock timeout). Retry, skip, or re-pin.", authMode: auth.mode });
     }
-    const raw = await runProviderBackend(provider, agent, safeId, prompt, modelId, timeoutMs, { workDir, keepWorkDir: true, sandbox });
+    // ollama implementation = orchestrator tool-loop (we execute tools; write tools
+    // withheld until the implement phase). Everything else = single-shot backend.
+    let output: string, written: string[], rawErr: string | undefined, gateViol = false;
+    if (provider === "ollama" && isImpl) {
+      const loop = await runOllamaAgentLoop({ modelId, system: agentSystemPrompt(agent), brief: prompt, phase: phase!, worktree: sessionDir, sandbox: workDir, timeoutMs });
+      output = extractJson(loop.output); written = loop.writtenFiles; rawErr = loop.error; gateViol = loop.gateViolation;
+    } else {
+      const raw = await runProviderBackend(provider, agent, safeId, prompt, modelId, timeoutMs, { workDir, keepWorkDir: true, sandbox });
+      output = extractJson(raw.agent_output); written = fs.existsSync(workDir) ? manifest(workDir) : []; rawErr = raw.error;
+    }
     const dir = fs.existsSync(workDir) ? workDir : undefined;
-    if (raw.error) return base({ error: raw.error, authMode: auth.mode, artifactsDir: dir, phase });
-
-    const output = extractJson(raw.agent_output);
-    const written = dir ? manifest(dir) : [];
+    if (rawErr) return base({ error: rawErr, authMode: auth.mode, artifactsDir: dir, phase, writtenFiles: written });
+    if (gateViol) return base({ error: "BR-5 violation: a write/bash tool was attempted before approval (plan phase)", output, authMode: auth.mode, artifactsDir: dir, phase, writtenFiles: written });
 
     if (phase === "plan") {
       // Plan turn: lenient gate (non-empty plan) + assert read-only held (no writes).
