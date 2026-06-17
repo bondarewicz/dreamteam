@@ -15,6 +15,35 @@ import fs from "fs";
 import type { ClaudeAdapter, RawOutput } from "./types.ts";
 import { extractPrompt } from "./scenario-parser.ts";
 import { runAgentWithSchema } from "./schema-runner.ts";
+import { parseProvider, runProviderBackend } from "./provider-backends.ts";
+import { readModelSpec } from "../../scripts/frontmatter.ts";
+import { resolveModel, PROVIDERS, type Provider } from "../../scripts/model-tiers.ts";
+
+const AGENTS_DIR = path.join(path.resolve(path.dirname(new URL(import.meta.url).pathname), "../.."), "agents");
+
+/**
+ * The model to actually run for an agent, in precedence order:
+ *   1. explicit --model (exact id, e.g. "claude-opus-4-6" or "ollama/qwen3.6")
+ *   2. --provider X  → resolve the agent's tier for provider X (prefixed for non-claude dispatch)
+ *   3. neither       → resolve the agent's tier for claude (bare id)
+ * Reads the REPO agent spec, so tier/pin changes take effect without reinstall.
+ */
+export function resolveEffectiveModel(agent: string, model?: string, provider?: string): string {
+  if (model && model.trim()) return model.trim();
+  let spec;
+  try {
+    spec = readModelSpec(fs.readFileSync(path.join(AGENTS_DIR, `${agent}.md`), "utf-8"));
+  } catch {
+    return ""; // no spec file → let the claude path fall back to the installed agent default
+  }
+  // Precedence: explicit --provider (CLI) → the agent's declared `model.provider`
+  // (interactive default for hybrid /team) → claude.
+  const prov: Provider = (PROVIDERS as readonly string[]).includes(provider ?? "")
+    ? (provider as Provider)
+    : (spec.provider ?? "claude");
+  const resolved = resolveModel(spec, prov);
+  return prov === "claude" ? resolved : `${prov}/${resolved}`;
+}
 
 const EVAL_MODE_APPEND =
   "EVAL MODE: You are running in a headless evaluation. Do NOT enter plan mode. Do NOT call EnterPlanMode. Do NOT wait for approval. Execute the task directly and produce your complete final output immediately.";
@@ -235,7 +264,8 @@ export async function runAgentScenario(
   adapter: ClaudeAdapter,
   timeoutMs: number,
   trials: number,
-  model?: string
+  model?: string,
+  provider?: string
 ): Promise<string> {
   const rawOutput =
     trial === 0
@@ -257,12 +287,23 @@ export async function runAgentScenario(
     console.error(`  WARN: empty prompt extracted for ${agent}/${scenarioId}`);
   }
 
-  // Per-agent dispatch: Bird uses the schema-enforced path; all others use --agent.
+  // Resolve the effective model from the agent's repo spec (tier/pins), unless an
+  // exact --model was given. Then dispatch on the provider prefix: claude (bare id)
+  // keeps the existing claude -p path; others run via provider-backends.
+  const effectiveModel = resolveEffectiveModel(agent, model, provider);
+  const { provider: prov, modelId } = parseProvider(effectiveModel);
   let record: RawOutput;
-  if (agent === "bird") {
-    record = await runBirdAgentCall(scenarioId, prompt, timeoutMs, model);
+  if (prov === "claude") {
+    // Per-agent dispatch: Bird uses the schema-enforced path; all others use --agent.
+    // effectiveModel is now always an explicit claude id (repo-sourced), so the
+    // --agent path passes --model rather than relying on the installed file.
+    if (agent === "bird") {
+      record = await runBirdAgentCall(scenarioId, prompt, timeoutMs, effectiveModel || undefined);
+    } else {
+      record = await runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs, effectiveModel || undefined);
+    }
   } else {
-    record = await runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs, model);
+    record = await runProviderBackend(prov, agent, scenarioId, prompt, modelId, timeoutMs);
   }
 
   fs.writeFileSync(rawOutput, JSON.stringify(record, null, 2), "utf-8");

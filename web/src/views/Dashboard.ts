@@ -1,5 +1,5 @@
 import type { EvalRun, GlobalStats } from "../db.ts";
-import { esc, pct, passBar, formatDate, agentChip } from "./html.ts";
+import { esc, pct, passBar, localDateTime, agentChip } from "./html.ts";
 
 export type PaginationInfo = {
   page: number;
@@ -67,11 +67,17 @@ export function DashboardPage(
       badgesHtml = agents.map(a => agentChip(a)).join("");
     }
 
+    const runModelFull = (() => {
+      try { return (JSON.parse(run.meta ?? "{}") as { model?: string }).model ?? ""; }
+      catch { return ""; }
+    })();
+    // Drop the "provider/" prefix on the dashboard to save space (full value in title).
+    const runModel = runModelFull.includes("/") ? runModelFull.slice(runModelFull.indexOf("/") + 1) : runModelFull;
+
     return `
       <a href="/evals/${encodeURIComponent(run.run_id)}" class="run-row">
-        <div class="run-meta">
-          <span class="run-date">${esc(formatDate(run.timestamp))}</span>
-        </div>
+        <span class="run-date">${localDateTime(run.timestamp)}</span>
+        <span class="run-model" title="${esc(runModelFull)}">${esc(runModel)}</span>
         <div class="run-counts">
           <span class="p">${run.pass_count ?? 0}P</span>
           <span class="pa">${run.partial_count ?? 0}p</span>

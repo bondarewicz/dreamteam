@@ -32,6 +32,7 @@ function parseArgs(argv: string[]): PipelineOptions & { help: boolean } {
     timeoutPerPhase: 0,
     repoRoot: "",
     model: "",
+    provider: "",
     help: false,
   };
 
@@ -58,6 +59,9 @@ function parseArgs(argv: string[]): PipelineOptions & { help: boolean } {
       case "--model":
         opts.model = argv[++i] ?? "";
         break;
+      case "--provider":
+        opts.provider = argv[++i] ?? "";
+        break;
       case "--dry-run":
         opts.dryRun = true;
         break;
@@ -80,6 +84,16 @@ function parseArgs(argv: string[]): PipelineOptions & { help: boolean } {
     process.exit(1);
   }
 
+  const validProviders = new Set(["", "claude", "ollama", "gemini", "codex"]);
+  if (!validProviders.has(opts.provider)) {
+    console.error(`Error: --provider must be one of: claude|ollama|gemini|codex`);
+    process.exit(1);
+  }
+  if (opts.provider && opts.model) {
+    console.error(`Error: pass either --model (exact id) or --provider (resolve tier), not both`);
+    process.exit(1);
+  }
+
   return opts;
 }
 
@@ -91,7 +105,9 @@ function printHelp() {
   --scenario PAT        Run only scenarios matching glob pattern or agent/scenario-id
   --phase PHASE         agents|graders|score|all (default: all)
   --trials N            Run each scenario N times (default: 1)
-  --model ID            Override model for agent runs (e.g. claude-opus-4-6). Judge stays on default.
+  --model ID            Exact model for agent runs (e.g. claude-opus-4-6, ollama/qwen3.6). Judge stays on default.
+  --provider NAME       Resolve each agent's tier to this provider's model (claude|ollama|gemini|codex).
+                        Mutually exclusive with --model. Default (neither): agent tier → claude.
   --dry-run             Show what would run without executing
   --timeout-per-phase N Timeout in seconds per phase (default: 300/600)`);
 }

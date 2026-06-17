@@ -11,6 +11,7 @@ import { discoverScenarios } from "./discovery.ts";
 import { runConcurrent } from "./concurrency.ts";
 import { runAgentScenario } from "./agent-runner.ts";
 import { triggerMigration } from "./report.ts";
+import { resultsDir as resolveResultsDir } from "../../scripts/paths.ts";
 import { scoreScenarioAllTrials } from "./scorer.ts";
 import { assembleFinalResult } from "./assembler.ts";
 import { extractGraders } from "./scenario-parser.ts";
@@ -61,7 +62,8 @@ async function phaseAgents(
       adapter,
       timeoutMs,
       options.trials,
-      options.model
+      options.model,
+      options.provider
     );
   });
 
@@ -190,7 +192,8 @@ async function phaseAssemble(
   allScenariosTotal: number,
   trials: number,
   repoRoot: string,
-  model?: string
+  model?: string,
+  provider?: string
 ): Promise<string> {
   const scoredDir = path.join(rawDir, "scored");
   const finalOutput = path.join(resultsDir, `${runDatetime}.json`);
@@ -209,7 +212,8 @@ async function phaseAssemble(
     allScenariosTotal,
     trials,
     repoRoot,
-    model
+    model,
+    provider
   );
 
   fs.writeFileSync(finalOutput, JSON.stringify(final, null, 2), "utf-8");
@@ -239,8 +243,8 @@ export async function runPipeline(
   options: PipelineOptions,
   adapter: ClaudeAdapter
 ): Promise<PipelineResult> {
-  const evalsDir = path.join(options.repoRoot, "evals");
-  const resultsDir = path.join(options.repoRoot, "evals", "results");
+  const evalsDir = path.join(options.repoRoot, "evals"); // scenarios live in the repo/assets
+  const resultsDir = resolveResultsDir();                 // writable → ~/.dreamteam/workspace
 
   // Discover scenarios
   const { scenarios, allScenariosTotal } = discoverScenarios(
@@ -273,7 +277,7 @@ export async function runPipeline(
   console.log(`  Phase        : ${options.phase}`);
   console.log(`  Parallel     : ${options.parallel}`);
   console.log(`  Trials       : ${options.trials}`);
-  console.log(`  Model        : ${options.model || "(agent default)"} ${options.model ? "[judge unchanged]" : ""}`);
+  console.log(`  Model        : ${options.model || (options.provider ? `(tier → ${options.provider})` : "(agent tier → claude)")} ${options.model || options.provider ? "[judge unchanged]" : ""}`);
   console.log(`  Scenarios    : ${total}`);
   console.log();
 
@@ -348,7 +352,8 @@ export async function runPipeline(
       allScenariosTotal,
       options.trials,
       options.repoRoot,
-      options.model
+      options.model,
+      options.provider
     );
 
     return {

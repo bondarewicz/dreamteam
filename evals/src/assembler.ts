@@ -122,7 +122,8 @@ export function assembleFinalResult(
   allScenariosTotal: number,
   trials: number,
   repoRoot: string,
-  model?: string
+  model?: string,
+  provider?: string
 ): FinalResult {
   const runId = `eval/run-${runDatetime}`;
   const results = loadScoredResults(scoredDir, runId);
@@ -140,6 +141,14 @@ export function assembleFinalResult(
   const agentSummaries = computeAgentSummaries(results);
   const repoCommit = getRepoCommit(repoRoot);
   const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+
+  // What ran, for the UI: explicit --model wins; else --provider (agents resolve
+  // their tier for that provider); else the default (each agent's tier → claude).
+  const modelLabel = model?.trim()
+    ? model.trim()
+    : provider?.trim()
+      ? `${provider.trim()} (tier)`
+      : "claude (tier)";
 
   return {
     run_id: runId,
@@ -161,7 +170,7 @@ export function assembleFinalResult(
       trials,
       notes:
         "Preliminary scoring by Coach K. Human review pending via web app at localhost:3000.",
-      ...(model ? { model } : {}),
+      model: modelLabel,
     },
   };
 }

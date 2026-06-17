@@ -252,6 +252,90 @@ export function getAgentJsonSchema(agentName: string): object | undefined {
   return z.toJSONSchema(schema);
 }
 
+// ---------------------------------------------------------------------------
+// OpenAI strict structured-output transform (for codex --output-schema)
+//
+// OpenAI's strict mode imposes rules our compact schemas don't satisfy as-is:
+//   1. every object must set additionalProperties:false
+//   2. every object's `required` must list ALL of its properties
+//      (no truly-optional fields)
+// We express "optional" the strict-mode way: a field that was NOT in the
+// original `required` becomes nullable (its type gains "null") but is still
+// listed in `required`. The model may then emit null for an absent field.
+//
+// This is a PURE transform — fully unit-testable, no network. Codex output is
+// null-stripped before Zod validation (Zod .optional() accepts undefined, not
+// null), so the downstream contract is unchanged.
+// ---------------------------------------------------------------------------
+
+type JsonSchemaNode = Record<string, any>;
+
+/** Make a property schema accept null (strict-mode "optional"). */
+function makeNullable(node: JsonSchemaNode): JsonSchemaNode {
+  if (Array.isArray(node.type)) {
+    return node.type.includes("null") ? node : { ...node, type: [...node.type, "null"] };
+  }
+  if (typeof node.type === "string") {
+    return { ...node, type: [node.type, "null"] };
+  }
+  // No concrete type (anyOf/oneOf/enum-only) — express null via anyOf.
+  return { anyOf: [node, { type: "null" }] };
+}
+
+/**
+ * Transform a JSON Schema into OpenAI strict structured-output form. Recurses
+ * into object properties and array items. Non-mutating (returns a new tree).
+ */
+export function toOpenAIStrictSchema(schema: object): object {
+  const walk = (node: JsonSchemaNode): JsonSchemaNode => {
+    if (!node || typeof node !== "object") return node;
+
+    // Array → recurse into items.
+    if (node.type === "array" && node.items) {
+      return { ...node, items: walk(node.items) };
+    }
+
+    // Object → all-required + additionalProperties:false; non-required → nullable.
+    if (node.type === "object" && node.properties) {
+      const originalRequired: string[] = Array.isArray(node.required) ? node.required : [];
+      const props: JsonSchemaNode = {};
+      for (const [key, child] of Object.entries(node.properties as JsonSchemaNode)) {
+        const walked = walk(child);
+        props[key] = originalRequired.includes(key) ? walked : makeNullable(walked);
+      }
+      return {
+        ...node,
+        properties: props,
+        required: Object.keys(node.properties),
+        additionalProperties: false,
+      };
+    }
+
+    return node;
+  };
+  return walk(schema as JsonSchemaNode);
+}
+
+/** Strict-mode JSON Schema for codex --output-schema, or undefined if no schema. */
+export function getAgentStrictJsonSchema(agentName: string): object | undefined {
+  const base = getAgentJsonSchema(agentName);
+  return base ? toOpenAIStrictSchema(base) : undefined;
+}
+
+/** Recursively drop null-valued keys so Zod .optional() (undefined, not null) validates. */
+export function stripNulls<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => stripNulls(v)) as unknown as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (v === null) continue;
+      out[k] = stripNulls(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 /**
  * Validate agent output against the registered Zod schema.
  * Returns a typed result object.

@@ -1,160 +1,142 @@
 # Dream Team
 
-A squad of specialized Claude Code agents — each owns one job (domain rules, architecture, implementation, quality, scope, synthesis) — plus a `/team` orchestrator that runs them as a pipeline from problem statement to reviewed, spec-backed code. Install once into `~/.claude/`, use in every project. The agents are named after the 1992 USA Basketball Dream Team; the personas are a framing device, the roles are real.
+A squad of specialized AI agents — each owns one job (domain rules, architecture, implementation, quality, scope, synthesis) — plus a `/team` orchestrator that runs them as a pipeline from problem statement to reviewed, spec-backed code. **Put any agent on any provider — Claude, Codex, Gemini, or Ollama — for both the eval corpus *and* live `/team` sessions, each on your own subscription (no metered API). And every agent's behavior is schema-enforced and graded against that corpus — not vibes.**
 
-> **New here? Start at the site → [bondarewicz.github.io/dreamteam](https://bondarewicz.github.io/dreamteam/)** — it walks the roster, the playbook, and the evals visually. This README is the technical reference: how the pieces actually fit together.
+Install once, use in every project. The agents are named after the 1992 USA Basketball Dream Team; the personas are a framing device, the roles are real.
 
-## Repository layout
+> **New here? Start at [bondarewicz.github.io/dreamteam](https://bondarewicz.github.io/dreamteam/)** — it walks the roster, the playbook, and the evals visually. This README is the technical reference.
 
-| Path | What's in it |
-|------|--------------|
-| `agents/` | One markdown file per agent — YAML frontmatter (config) + body (system prompt). The source of truth. |
-| `commands/` | Slash commands (`/team`, `/bird`, `/REDACTED`, …) that wrap the agents. |
-| `schemas/` | Zod registry (`agent-schemas.ts`) — the typed output contract enforced at the process boundary. |
-| `evals/` | Scenario suites per agent + the TypeScript eval pipeline (`evals/src/`). |
-| `scripts/` | Install/sync (`install.ts`), eval baselines (`baseline-eval.ts`, `select-baseline.ts`), hooks, site build. |
-| `web/` | Bun server + SQLite that serves eval results for human review. |
-| `site/` | The GitHub Pages source (static; deployed by `.github/workflows/deploy-site.yml`). |
-| `docs/` | Specs (`spec-<topic>/`) and design notes, including `spec-schema-enforcement/`. |
-
-## How an agent is defined
-
-Each agent is a single markdown file, `agents/<name>.md`: YAML frontmatter is the config, the body is the system prompt (Team Protocol, escalation rules, output schema).
-
-```yaml
----
-name: bird
-model: claude-opus-4-8     # pinned build, not a floating alias
-tools: Read, Grep, Glob, Bash, Skill
-maxTurns: 50
-# memory: user            # (kobe, magic) — learns across sessions
----
-```
-
-| Agent | Command | Role | Model | Tools |
-|-------|---------|------|-------|-------|
-| **bird** | `/bird` | Domain Authority & Final Arbiter | `claude-opus-4-8` | Read, Grep, Glob, Bash |
-| **mj** | `/mj` | Strategic Systems Architect | `claude-opus-4-8` | + WebFetch, WebSearch, Context7, Honeycomb |
-| **shaq** | `/shaq` | Primary Code Executor | `claude-sonnet-4-6` | All except Task |
-| **kobe** | `/kobe` | Quality & Risk Enforcer | `claude-opus-4-8` | + Edit |
-| **pippen** | `/pippen` | Stability, Integration & Defense | `claude-opus-4-8` | Read, Grep, Glob, Bash, Honeycomb |
-| **magic** | `/magic` | Context Synthesizer & Team Glue | `claude-sonnet-4-6` | + Write, Edit |
-| **drexler** | `/drexler` | Deletion-Bias Enforcer | `claude-sonnet-4-6` | Read, Grep, Glob, Bash |
-
-Coach K (the orchestrator) runs on `claude-opus-4-7`. Models are pinned to specific builds so eval baselines vary only the model version. `maxTurns` is a hard ceiling: shaq runs at `100` (writes code and iterates), drexler at `30` (search-only), the rest at `50`. Per-agent thinking/effort is **not** exposed in frontmatter — to change effective effort, pick a heavier/lighter model or tighten the prompt.
-
-Every agent body enforces four shared contracts: an **output schema** Coach K validates before handoffs, an **escalation protocol** (stop and ask, never guess), a **confidence assessment** (self-reported confidence + assumptions), and the **turn budget** above.
-
-## Install & sync
+## Install
 
 ```bash
-git clone <this-repo> ~/Github/Bondarewicz/dreamteam
-cd ~/Github/Bondarewicz/dreamteam
-bun scripts/install.ts
+bun add -g @bondarewicz/dreamteam@beta     # beta channel (npm/pnpm work too)
+dreamteam install                           # provision the agents into your harness
+dreamteam doctor                            # check which providers are reachable
 ```
 
-`install.ts` backs up any existing files, then copies `agents/*` → `~/.claude/agents/` and `commands/*` → `~/.claude/commands/`. **Edit the repo source, never `~/.claude/` directly** — that's the copy. Re-run `install.ts` after any edit and restart Claude Code.
+`dreamteam install` copies the agents + commands into Claude Code (`~/.claude/`), records a manifest in `~/.dreamteam/`, and merges hooks/MCP add-if-missing. Re-run after upgrades. Eval results and the web DB live in `~/.dreamteam/workspace/` (never the repo).
 
-Full Team mode needs the experimental flag in `~/.claude/settings.json`:
+## Prerequisites
 
-```json
-{ "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" } }
+Dream Team is **Bun-only** and brings nothing of its own — each provider is a tool you already have:
+
+| Prerequisite | Needed for | Notes |
+|---|---|---|
+| **[Bun](https://bun.sh)** ≥ 1.1 | everything | the CLI runs on Bun |
+| **[Claude Code](https://claude.com/claude-code)** (Pro/Max) | interactive `/team`, **and the eval judge** | the orchestrator + judge run on Claude; sanctioned subscription use |
+| **[Ollama](https://ollama.com)** *(optional)* | running agents on local models (evals **and** `/team`) | `ollama serve` + a pulled model (e.g. `qwen3.6`); local, free |
+| **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** *(optional)* | running agents on Gemini (evals **and** `/team`) | logged in (`~/.gemini`); free tier — no `GEMINI_API_KEY` (that meters) |
+| **[Codex CLI](https://github.com/openai/codex)** *(optional)* | running agents on GPT-class (evals **and** `/team`) | `codex login` (ChatGPT subscription) — no `OPENAI_API_KEY` (that meters) |
+
+`dreamteam doctor` reports presence + auth for each. You only need the providers you intend to use — Claude Code alone is enough for interactive `/team`.
+
+## The CLI
+
+```text
+dreamteam install [--harness claude-code] [--dry-run]   provision agents/commands
+dreamteam uninstall                                      remove exactly what was installed
+dreamteam status                                         versions, manifest, drift
+dreamteam doctor                                         Claude / Ollama / Gemini / Codex reachability
+dreamteam list                                           roster + commands
+dreamteam eval [...]                                     run the eval pipeline (passthrough)
+dreamteam web [--port N]                                 serve the eval report + admin at :3000
 ```
+
+## The roster
+
+| Agent | Command | Role | Default model |
+|-------|---------|------|---------------|
+| **bird** | `/bird` | Domain Authority & Final Arbiter | `claude-opus-4-8` |
+| **mj** | `/mj` | Strategic Systems Architect | `claude-opus-4-8` |
+| **shaq** | `/shaq` | Primary Code Executor | `claude-sonnet-4-6` |
+| **kobe** | `/kobe` | Quality & Risk Enforcer | `claude-opus-4-8` |
+| **pippen** | `/pippen` | Stability, Integration & Defense | `claude-opus-4-8` |
+| **magic** | `/magic` | Context Synthesizer & Team Glue | `claude-sonnet-4-6` |
+| **drexler** | `/drexler` | Deletion-Bias Enforcer | `claude-sonnet-4-6` |
+
+Coach K (the orchestrator) runs on Claude/Max and is never delegated. Each agent's `model:` frontmatter is a **tier** (deep/mid/fast) plus an optional **provider** + per-provider pins — the default is Claude, but set `provider: codex|gemini|ollama` to run that agent elsewhere (interactively in `/team` and in evals). Evals can also override per-run via `--model`/`--provider` (see below). Every agent body enforces four contracts: an **output schema** validated before handoffs, an **escalation protocol** (stop and ask, never guess), a **confidence assessment**, and a **turn budget** (`maxTurns`).
+
+Each agent is one markdown file, `agents/<name>.md` — YAML frontmatter (config) + body (system prompt). The repo is the source of truth; **edit the repo, run `dreamteam install`, never edit `~/.claude/` directly.**
 
 ## Orchestration — `/team`
 
-Coach K curates a focused brief per agent (not a dump of all prior output) and runs one of three modes:
+`/team` runs **inside Claude Code**. Coach K curates a focused brief per agent (not a dump of prior output) and runs one of three modes:
 
-- **Quick Fix (subagents)** — sequential pipeline for bugs/small features: **you author intake** → Bird → Shaq → Kobe + Drexler (parallel) → Magic synthesises the spec → **you sign off**. If Kobe finds bugs or Drexler finds bloat, Shaq fixes and reviewers re-verify — no fix is skipped.
-- **PR Review (parallel subagents)** — Bird + MJ + Kobe review the diff in parallel; Coach K synthesizes to `docs/PR-<number>-review.md`. All `gh` commands are READ-ONLY.
-- **Full Team (agent teams)** — independent sessions for new features: **intake** → Phase 1 Bird + MJ (concurrent) → Magic handoff brief → Coach K checkpoint + your approval → Shaq implements → Kobe + Pippen + Drexler review (parallel) → Magic consolidates → **you sign off**. Sessions run in isolated git worktrees; checkpoints are saved to disk so earlier work survives. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; falls back to Quick Fix if disabled.
+- **Quick Fix** — sequential pipeline for bugs/small features: you author intake → Bird → Shaq → Kobe + Drexler (parallel) → Magic synthesises → you sign off. Fixes loop until reviewers re-verify.
+- **PR Review** — Bird + MJ + Kobe review a diff in parallel; Coach K synthesizes to `docs/PR-<n>-review.md`. All `gh` is read-only.
+- **Full Team** — independent sessions in isolated git worktrees for new features; checkpoints saved to disk. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; falls back to Quick Fix.
 
-**Git safety:** no agent ever commits or pushes — you control all git operations. Every run drops a checkpoint in `docs/checkpoint-<topic>.md` and an HTML retro in `reports/retros/` (escalations, confidence, fix-verify loops).
+**Git safety:** no agent commits or pushes — you control git. Every run drops a checkpoint and an HTML retro in `~/.dreamteam/workspace/`.
+
+### Any agent on any provider — interactively
+
+`/team` is **hybrid multi-provider**, not Claude-only. Coach K orchestrates on Claude (Max) and never moves; each agent runs on the provider you declare in its frontmatter:
+
+```yaml
+model:
+  tier: deep            # deep | mid | fast — resolves to a model per provider
+  provider: codex       # claude (default) | codex | gemini | ollama
+```
+
+When an agent is pinned off-Claude, Coach K **delegates that turn to the provider's own first-party CLI** (`codex exec`, `gemini`, ollama `/api/chat`) on its native subscription/local runtime, then folds the structured result back into the same brief → checkpoint → reviewer loop. **No proxy, no `ANTHROPIC_BASE_URL`, no metered API** — Max stays Max, ChatGPT-Codex stays your ChatGPT sub, Gemini/Ollama on their own auth.
+
+Implementation agents (Shaq) get a real **plan → you approve → implement** gate on every provider, with the plan phase made *physically write-incapable* per provider (codex `--sandbox read-only`, gemini OS read-only cwd, ollama withheld write-tools). Each provider's gate is proven by an instrumented eval before it ships. Analysis/synthesis agents (Bird, MJ, Kobe, Pippen, Drexler, Magic) delegate single-shot. See `docs/spec-hybrid-team/`.
 
 ### Spec-driven development
 
-A `/team` session produces a multi-authored spec under `docs/spec-<topic>/`, and that spec is the contract. Each agent writes its own artifact in its own voice:
-
-| File | Author | Contents |
-|------|--------|----------|
-| `intake.md` | **you** | Problem statement, out of scope, constraints (Coach K drafts from your one-liner; you confirm) |
-| `domain.md` | Bird | Acceptance criteria |
-| `architecture.md` | MJ | Decisions + NFRs |
-| `operations.md` | Pippen | Readiness criteria |
-| `scope.md` | Drexler | What was deliberately kept out |
-| `review.md` | Kobe | Quality findings |
-| `spec.md` | Magic | The synthesis — terminology normalised across sections, contradictions flagged not silently resolved |
-
-You sign off on `spec.md` before the session ends; reject it and it's re-synthesised. The `scripts/check-plan.ts` hook advises (never blocks) when `Edit`/`Write` runs with no `intake.md` present.
+A `/team` session produces a multi-authored spec under `docs/spec-<topic>/` — `intake.md` (you), `domain.md` (Bird), `architecture.md` (MJ), `operations.md` (Pippen), `scope.md` (Drexler), `review.md` (Kobe), `spec.md` (Magic, the synthesis). You sign off on `spec.md` before the session ends.
 
 ## Schema enforcement
 
-Agent outputs are typed at the **process boundary**, not by prompt convention. Coach K dispatches a worker as a headless subprocess that carries its own schema:
+Agent outputs are typed at the **process boundary**, not by prompt convention:
 
 ```
 claude -p --system-prompt-file agents/<name>.md --json-schema <flat schema> --output-format json
 ```
 
-The CLI validates the result against the schema and re-prompts on mismatch, surfacing the validated object in `structured_output`. Two findings drive the design (see `docs/spec-schema-enforcement/`):
+The model is forced to a flat JSON schema; the result is re-validated with Zod (`schemas/agent-schemas.ts`) and re-prompted on mismatch. Findings: `structured_output` populates reliably only for **flat** schemas (hoist nesting to prefixed top-level keys), and `--system-prompt-file` binds the validator where `--agent` does not. See `docs/spec-schema-enforcement/`.
 
-- `structured_output` populates reliably only for **flat** schemas — hoist wrapper objects to top-level prefixed keys and you keep every field. Depth is the limiter, not field count.
-- The `--agent <name>` path doesn't bind the validator (GitHub #20625, closed); `--system-prompt-file` does.
+## Cross-provider evals — the moat
 
-`schemas/agent-schemas.ts` is the single Zod registry; a code-level Zod normalization layer (`evals/src/normalize-output.ts`) is the deterministic safety net.
+Every code-touching agent has a scenario suite under `evals/<agent>/` (capability, edge-case, escalation, adversarial). Each scenario declares `prompt` / `expected_behavior` / `failure_modes` / `scoring_rubric`. The pipeline is a deterministic TypeScript CLI: it runs each agent, applies zero-LLM graders, then scores each output against its rubric with a pinned **Coach K judge**.
 
-## Evals
-
-Every code-touching agent has a scenario suite under `evals/<agent>/` — happy paths, edge cases, escalation cases, adversarial inputs. Each scenario file declares four fields:
-
-```
-prompt:            the input given to the agent
-expected_behavior: what correct output looks like (observable, not vague)
-failure_modes:     specific anti-patterns
-scoring_rubric:    pass / partial / fail criteria
-```
-
-The pipeline is a deterministic TypeScript CLI (`evals/src/cli.ts`), not in-context orchestration. Per run it: ① spawns each agent in parallel (`claude -p`), ② runs zero-LLM deterministic graders, ③ scores each output against its rubric with a pinned Coach K judge, ④ writes results to the web viewer's SQLite DB.
+The same agent, same scenario, same judge — graded on any provider by changing `--model` (exact id) or `--provider` (resolve each agent's tier for that provider):
 
 ```bash
-/eval                                         # run + auto-score, then open the web app for review
-bun evals/src/cli.ts --trials 3               # run directly; --trials samples each scenario N times
-bun evals/src/cli.ts --model claude-opus-4-7  # A/B a model under test without editing frontmatter
+dreamteam eval --agent bird --model claude-opus-4-8         # exact Claude model (Max)
+dreamteam eval --agent bird --model ollama/qwen3.6          # exact Ollama model (local :11434)
+dreamteam eval --agent bird --provider gemini              # bird's tier → Gemini's model
+dreamteam eval --agent shaq --provider codex               # shaq's tier → Codex (codex exec)
+dreamteam eval --trials 3                                   # sample each scenario N times
 ```
 
-`--model` affects only the agents under test; the scoring judge stays on the default so comparisons share a baseline.
-
-**Web viewer** — `web/` serves results from `data/dreamteam.db` and auto-imports JSON from `evals/results/` on first run:
+`--model` routes on the `provider/` prefix (bare id = Claude); `--provider` resolves each agent's tier/pin for that provider (the two are mutually exclusive). Either affects only the agents under test — **the judge stays on Claude** so comparisons share a baseline. Cost: Claude = Max, Ollama = local/free, Gemini = free tier, Codex = ChatGPT subscription. The run's resolved model is recorded and shown per run in the dashboard.
 
 ```bash
-cd web && bun install && bun run start    # http://localhost:3000
-bun run dev                               # hot reload
+dreamteam web        # http://localhost:3000 — eval report, /admin/models (per-provider picker),
+                     # /admin/providers, sessions. Reads ~/.dreamteam/workspace.
 ```
-
-Scenarios can also be exported to [Anthropic Workbench](https://platform.claude.com/workbench) via `bun evals/src/workbench-export.ts <agent>`. See `evals/README.md`.
-
-### Baseline eval (model bake-off)
-
-All scenarios × 3 models burns a Max plan's weekly limit in one sitting, so the baseline runs a **subset of scenarios where models actually diverge** — ranked by the pass/partial/fail entropy of each scenario across past runs (always-green guardrails and all-fail floors separate nothing and are dropped). `scripts/baseline-eval.ts` validates every id before spending a token, pins the judge to Sonnet for a constant scoring baseline, and runs models sequentially with a Sonnet canary that aborts the moment a run trips the session limit — so a hit cap costs one model, not the whole window.
-
-```bash
-bun scripts/baseline-eval.ts              # all 3 models (Sonnet canary first), trials 2
-bun scripts/baseline-eval.ts --dry-run    # validate the subset, spend zero quota
-bun scripts/baseline-eval.ts --list       # print the subset and exit
-bun scripts/select-baseline.ts            # re-derive the ranked discriminator subset
-```
-
-Trials default to 2 — a single trial undersamples and makes scenarios look falsely unanimous across models.
 
 ## MCP tools
 
-Agents are granted tools liberally, so **any MCP server connected to Claude Code just works** — no per-agent wiring. For example, MJ and Shaq pull version-specific library docs from [Context7](https://context7.com) before writing code, and the team reads/writes [Miro](https://miro.com) boards. Add servers the usual way; keys live in `~/.claude.json` (User scope), never the repo:
+Agents are granted tools liberally, so **any MCP server connected to Claude Code just works** — no per-agent wiring. MJ/Shaq pull library docs from [Context7](https://context7.com); the team reads/writes [Miro](https://miro.com). Keys live in `~/.claude.json` (User scope), never the repo:
 
 ```bash
 claude mcp add --transport http context7 https://mcp.context7.com/mcp --header "CONTEXT7_API_KEY: <key>" -s user
-claude mcp add --transport http miro https://mcp.miro.com
 ```
 
-`/REDACTED` builds a [Brandolini](https://leanpub.com/introducing_REDACTED)-style REDACTED directly on a Miro board using the canonical colour notation and build order (`as-is` / `to-be` / `both`, or `--recipe` to print the notation reference). It returns the board URL plus a summary, saved to `docs/eventstorms/` if that directory exists (Miro URLs rot; a checked-in summary survives).
+`/REDACTED` builds a [Brandolini](https://leanpub.com/introducing_REDACTED)-style REDACTED on a Miro board (`as-is` / `to-be` / `both`).
+
+## Contributing / development
+
+```bash
+git clone https://github.com/bondarewicz/dreamteam ~/Github/Bondarewicz/dreamteam
+cd ~/Github/Bondarewicz/dreamteam && bun install
+bun scripts/install.ts        # alias for `dreamteam install` from source
+bun test                      # eval-harness + web suites
+```
+
+Releases publish from CI: push to a branch → `1.0.1-beta.g<sha>` on the npm `beta` tag (OIDC provenance); merge to `main` → stable `latest`. See `RELEASING.md`.
 
 ## License
 

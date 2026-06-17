@@ -8,6 +8,7 @@ import { migrate } from "./src/migrate.ts";
 import {
   dashboardHandler,
   evalRunHandler,
+  evalRunDeleteHandler,
   evalResultsFragment,
   traceHandler,
   newEvalRunHandler,
@@ -32,7 +33,7 @@ import {
   draftDryRunHandler,
   draftPromoteHandler,
 } from "./src/routes/scenarios.ts";
-import { adminModelsHandler, adminModelsSaveHandler } from "./src/routes/admin.ts";
+import { adminModelsHandler, adminModelsSaveHandler, adminProvidersHandler, adminProvidersTestHandler } from "./src/routes/admin.ts";
 import {
   sessionsListHandler, sessionDetailHandler, evaluateSessionHandler,
   judgePromptHandler, judgePromptSaveHandler,
@@ -61,6 +62,7 @@ router.get("/evals/new", newEvalRunHandler);
 router.get("/evals/live", evalRunLiveHandler);
 router.get("/evals/:runId", evalRunHandler);
 router.get("/evals/:runId/results", evalResultsFragment);
+router.post("/evals/:runId/delete", evalRunDeleteHandler);
 router.get("/evals/:runId/trace/:resultId", traceHandler);
 router.post("/api/eval-runs", startEvalRunHandler);
 router.get("/api/eval-runs/live", evalRunsSSEHandler);
@@ -68,6 +70,8 @@ router.get("/api/eval-runs/live", evalRunsSSEHandler);
 // Admin — agent model/version editor
 router.get("/admin/models", adminModelsHandler);
 router.post("/admin/models", adminModelsSaveHandler);
+router.get("/admin/providers", adminProvidersHandler);
+router.post("/admin/providers/test", adminProvidersTestHandler);
 
 // Sessions — rehydrated Claude Code sessions across all projects
 router.get("/sessions", sessionsListHandler);
