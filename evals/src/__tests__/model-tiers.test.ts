@@ -60,6 +60,18 @@ test("renderModelSpecYaml omits pin block when no pins", () => {
   expect(renderModelSpecYaml({ tier: "fast", pin: {} })).toBe("model:\n  tier: fast");
 });
 
+test("model.provider (interactive default) parses + round-trips, validated against known providers", () => {
+  expect(parseModelSpec({ tier: "mid", provider: "ollama", pin: { ollama: "gemma4" } }))
+    .toEqual({ tier: "mid", provider: "ollama", pin: { ollama: "gemma4" } });
+  // unknown provider is dropped (not asserted as routing)
+  expect(parseModelSpec({ tier: "mid", provider: "bogus", pin: {} }).provider).toBeUndefined();
+  // round-trips through render → parse
+  const spec = { tier: "deep" as const, provider: "gemini" as const, pin: {} };
+  const yaml = renderModelSpecYaml(spec);
+  expect(yaml).toContain("provider: gemini");
+  expect(parseModelSpec((Bun.YAML.parse(yaml) as any).model)).toEqual(spec);
+});
+
 // ── frontmatter ────────────────────────────────────────────────────────────
 const NESTED = `---
 name: bird

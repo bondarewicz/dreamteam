@@ -209,6 +209,45 @@ Use the **AskUserQuestion** tool to ask the user:
 
 ---
 
+## STEP 2b: Provider Routing & Delegation (Hybrid — applies to every workflow)
+
+Each agent can run on a different provider (Claude/Codex/Gemini/Ollama) on its own
+native subscription — Coach K stays Claude/Max and orchestrates. **Before spawning ANY
+agent, decide native vs delegated** (full design: `docs/spec-hybrid-team/spec.md`).
+
+**Routing decision (per agent, before each spawn):**
+```bash
+# Resolve the agent's effective provider via the ONE routing authority (no parallel table).
+bun "$DREAMTEAM_REPO/scripts/print-provider.ts" <agent>   # prints "claude" or "ollama|gemini|codex"
+```
+If no helper is available, the rule is: read the agent's `model.provider` frontmatter
+field — unset/`claude` → **NATIVE**; `ollama|gemini|codex` → **DELEGATED**.
+
+- **NATIVE (provider = claude):** spawn the normal `Task`/`Agent` subagent exactly as today. Runs on Max. Plan mode, message bus, live repo — all intact. **This is unchanged `/team`.**
+- **DELEGATED (provider ≠ claude):** do NOT spawn a Claude subagent. Instead run the agent's turn via the dispatcher (below). Coach K + the orchestration (briefs, checkpoints, reviewer loop) stay native — only the agent's *execution* is delegated.
+
+**NEVER set `ANTHROPIC_BASE_URL` or any proxy.** Delegation is a sibling CLI process on the provider's own auth. A session-wide base-url would re-bill Max to the metered API (the ruled-out proxy).
+
+**Phase 1 scope (current):** only **analysis/synthesis roles** (Bird, MJ, Kobe, Pippen, Drexler, Magic) may be delegated. **Shaq (implementation) must be Claude** — if `model.provider` for Shaq is non-claude, the dispatcher refuses and you must re-pin Shaq to claude (delegated implementation is gated Phase 2/3; see spec §5). Coach K is never delegated.
+
+### Delegated Turn Protocol
+
+1. **Build the same brief** you'd give the native subagent (task + curated upstream artifacts — BR-9). Write it to a file:
+   ```bash
+   BRIEF=$(mktemp); cat > "$BRIEF" <<'EOF'
+   <the curated brief for this agent>
+   EOF
+   ```
+2. **Dispatch** (the dispatcher resolves the provider, enforces subscription-only auth, runs in a session-scoped sandbox, and validates the contract):
+   ```bash
+   bun "$DREAMTEAM_REPO/evals/src/team-dispatch.ts" <agent> "$BRIEF" | tee /tmp/turn.json
+   ```
+3. **Read the `TurnResult` JSON.** `ok:true` → use `.output` (validated contract JSON) exactly as you'd use a native subagent's result — it folds into the same reviewer loop + human checkpoints. `.artifactsDir` (codex/ollama impl, Phase 2+) holds sandboxed file writes for review; **never apply them until a human approves at the checkpoint**.
+4. **`ok:false` → FAIL LOUD.** Use **AskUserQuestion**: retry / skip this agent (partial team — record it) / re-pin to another subscription-or-local provider / abort. **Never** fall back to a metered API; never silently substitute Claude for a non-claude agent.
+5. The dispatcher already enforces BR-1 (scrubbed env + positive auth pre-flight), BR-4 (contract gate), BR-10 (sandbox). You do not re-implement these.
+
+---
+
 ## STEP 3A: QUICK FIX — Subagent Workflow
 
 For focused, well-understood changes. 4 subagents, sequential, within this session.

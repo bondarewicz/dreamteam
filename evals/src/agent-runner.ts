@@ -36,7 +36,11 @@ export function resolveEffectiveModel(agent: string, model?: string, provider?: 
   } catch {
     return ""; // no spec file → let the claude path fall back to the installed agent default
   }
-  const prov: Provider = (PROVIDERS as readonly string[]).includes(provider ?? "") ? (provider as Provider) : "claude";
+  // Precedence: explicit --provider (CLI) → the agent's declared `model.provider`
+  // (interactive default for hybrid /team) → claude.
+  const prov: Provider = (PROVIDERS as readonly string[]).includes(provider ?? "")
+    ? (provider as Provider)
+    : (spec.provider ?? "claude");
   const resolved = resolveModel(spec, prov);
   return prov === "claude" ? resolved : `${prov}/${resolved}`;
 }

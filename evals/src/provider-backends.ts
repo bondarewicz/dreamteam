@@ -141,6 +141,14 @@ export function buildTrace(opts: {
 }
 
 /** Dispatch to the right non-claude backend. (Claude is handled in agent-runner.ts.) */
+/**
+ * opts (Phase-3B hybrid /team, S3): the interactive caller supplies a
+ * session-scoped sandbox dir and suppresses teardown so a delegated turn's file
+ * writes survive for review. Eval callers omit opts → ephemeral tmp dir, rm in
+ * finally (unchanged). Only codex writes files, so only it consumes opts.
+ */
+export type BackendOpts = { workDir?: string; keepWorkDir?: boolean };
+
 export async function runProviderBackend(
   provider: Provider,
   agent: string,
@@ -148,11 +156,12 @@ export async function runProviderBackend(
   prompt: string,
   modelId: string,
   timeoutMs: number,
+  opts?: BackendOpts,
 ): Promise<RawOutput> {
   switch (provider) {
     case "ollama": return runOllama(agent, scenarioId, prompt, modelId, timeoutMs);
     case "gemini": return runGemini(agent, scenarioId, prompt, modelId, timeoutMs);
-    case "codex": return runCodex(agent, scenarioId, prompt, modelId, timeoutMs);
+    case "codex": return runCodex(agent, scenarioId, prompt, modelId, timeoutMs, opts);
     default: throw new Error(`runProviderBackend called for claude — handle in agent-runner.ts`);
   }
 }
@@ -246,7 +255,7 @@ export async function runGemini(agent: string, scenarioId: string, prompt: strin
 }
 
 // ── Codex: codex exec with native --output-schema + --output-last-message ──────
-export async function runCodex(agent: string, scenarioId: string, prompt: string, modelId: string, timeoutMs: number): Promise<RawOutput> {
+export async function runCodex(agent: string, scenarioId: string, prompt: string, modelId: string, timeoutMs: number, opts?: BackendOpts): Promise<RawOutput> {
   const start = Date.now();
   // Native structured output via --output-schema: codex maps it to OpenAI strict
   // mode, which requires every property in `required` + additionalProperties:false.
@@ -258,7 +267,10 @@ export async function runCodex(agent: string, scenarioId: string, prompt: string
   // read-only sandbox makes them give up and report an empty implementation (→
   // judged fail). workspace-write + an isolated cwd lets them complete like the
   // claude path, without polluting the repo (the dir is removed afterward).
-  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-codex-"));
+  // Interactive caller (hybrid /team) supplies a session-scoped workDir + keepWorkDir
+  // so writes survive for review; eval caller gets the ephemeral default.
+  const workDir = opts?.workDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "dt-codex-"));
+  if (opts?.workDir) fs.mkdirSync(workDir, { recursive: true });
   const outFile = path.join(workDir, "out.txt");
   const schemaFile = path.join(workDir, "schema.json");
   // Codex has no system-prompt flag — prepend the agent body to the task. Feed via STDIN
@@ -295,6 +307,9 @@ export async function runCodex(agent: string, scenarioId: string, prompt: string
     return record(agent, scenarioId, "", { durationMs, error,
       trace: buildTrace({ provider: "codex", model: modelId, userPrompt: prompt, responseText: "", inputTokens: 0, outputTokens: 0, durationMs, error }) });
   } finally {
-    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    // Interactive caller keeps the sandbox (keepWorkDir) for review; eval caller tears it down.
+    if (!opts?.keepWorkDir) {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   }
 }

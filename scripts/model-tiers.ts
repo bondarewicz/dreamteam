@@ -49,6 +49,12 @@ export const TIER_DEFAULTS: Record<Provider, Record<Tier, string>> = {
 export type ModelSpec = {
   tier: Tier;
   pin: Partial<Record<Provider, string>>;
+  /**
+   * The agent's declared provider for interactive use (hybrid /team). When set,
+   * it's the default provider below CLI overrides (--model / --provider). Unset =
+   * claude. Evals override per-run via --provider; this is the per-agent default.
+   */
+  provider?: Provider;
 };
 
 /** Infer a tier from a bare Claude model id (opus → deep, sonnet → mid, haiku → fast). */
@@ -81,7 +87,8 @@ export function parseModelSpec(raw: unknown): ModelSpec {
       const v = rawPin[p];
       if (typeof v === "string" && v.trim()) pin[p] = v.trim();
     }
-    return { tier, pin };
+    const provider = (PROVIDERS as readonly string[]).includes(obj.provider as string) ? (obj.provider as Provider) : undefined;
+    return provider ? { tier, pin, provider } : { tier, pin };
   }
   return { tier: "deep", pin: {} };
 }
@@ -94,6 +101,7 @@ export function resolveModel(spec: ModelSpec, provider: Provider): string {
 /** Serialize a ModelSpec back to YAML lines for the frontmatter `model:` block. */
 export function renderModelSpecYaml(spec: ModelSpec): string {
   const lines = ["model:", `  tier: ${spec.tier}`];
+  if (spec.provider) lines.push(`  provider: ${spec.provider}`);
   const pinned = PROVIDERS.filter((p) => spec.pin[p]);
   if (pinned.length) {
     lines.push("  pin:");
