@@ -14,6 +14,8 @@
  */
 import path from "path";
 import fs from "fs";
+import { readModelSpec } from "./frontmatter.ts";
+import { resolveModel } from "./model-tiers.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
@@ -27,11 +29,8 @@ const checkOnly = process.argv.includes("--check");
 function readAgentModel(agent: string): string {
   const fp = path.join(AGENTS_DIR, `${agent}.md`);
   const content = fs.readFileSync(fp, "utf-8");
-  const match = content.match(/^model:\s*(.+)$/m);
-  if (!match) {
-    throw new Error(`No 'model:' field found in ${fp}`);
-  }
-  return match[1].trim();
+  // Site displays the Claude model the agent runs interactively (resolve tier/pins).
+  return resolveModel(readModelSpec(content), "claude");
 }
 
 function rewriteModelForAgent(html: string, agent: string, model: string): { html: string; changed: boolean; current: string } {

@@ -13,6 +13,8 @@ import path from "path";
 import fs from "fs";
 import { z } from "zod";
 import { getAgentSchema, getAgentJsonSchema } from "../../schemas/agent-schemas.ts";
+import { readModelSpec } from "../../scripts/frontmatter.ts";
+import { resolveModel } from "../../scripts/model-tiers.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -45,8 +47,9 @@ export function parseAgentFrontmatter(mdPath: string): AgentFrontmatter {
   const fmMatch = /^---\s*\n([\s\S]*?)\n---/.exec(content);
   const fmText = fmMatch ? fmMatch[1] : content;
 
-  const modelMatch = /^model:\s*(.+)$/m.exec(fmText);
-  const model = modelMatch ? modelMatch[1].trim() : DEFAULT_MODEL;
+  // Model is a harness-neutral spec (tier + pins); this is the claude -p path,
+  // so resolve it for the claude provider (tier default unless claude-pinned).
+  const model = resolveModel(readModelSpec(content), "claude") || DEFAULT_MODEL;
 
   // tools: may be a comma-separated string or YAML list
   const toolsMatch = /^tools:\s*(.+)$/m.exec(fmText);

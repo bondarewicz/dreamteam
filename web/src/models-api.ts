@@ -30,8 +30,8 @@ const FALLBACK_MODEL_IDS = [
 ];
 
 /** Curated lists for providers whose CLI can't enumerate models (kept key-free). */
-const GEMINI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"];
-const CODEX_MODELS = ["gpt-5.5"]; // gpt-5-codex 400s on ChatGPT accounts; gpt-5.5 verified
+const GEMINI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const CODEX_MODELS = ["gpt-5.5", "gpt-5.4-mini"]; // ChatGPT account: only these two accepted (others 400)
 
 export type Provider = "claude" | "ollama" | "gemini" | "codex";
 

@@ -11,6 +11,8 @@
 import path from "path";
 import fs from "fs";
 import { contentSha } from "../scripts/paths.ts";
+import { readModelSpec, setModelBlock } from "../scripts/frontmatter.ts";
+import { resolveModel } from "../scripts/model-tiers.ts";
 import type { HarnessAdapter, InstallOptions, InstalledFile } from "./types.ts";
 
 const HARNESS = "claude-code";
@@ -31,20 +33,16 @@ function isSymlink(p: string): boolean {
 }
 
 /**
- * Claude Code can't use a provider-prefixed model id (`ollama/…`, `gemini/…`,
- * `codex/…`) interactively — `--model` expects a bare Claude model name or
- * alias. A non-Claude pin can be set per-agent via /admin/models (for
- * cross-provider evals); if one reaches the Claude install it would break
- * `/team`. So for the Claude Code install only, drop a provider-prefixed
- * `model:` line — the agent falls back to the session default. The repo file
- * (the eval source of truth) is never modified. Bare ids / aliases pass through.
+ * Render an agent's harness-neutral `model:` spec (tier + per-provider pins)
+ * into the flat `model: <claude-id>` that Claude Code expects. Claude Code can't
+ * use a tier word or a provider-prefixed id (`ollama/…`) interactively — its
+ * `--model` wants a bare Claude model name. resolveModel() picks the agent's
+ * explicit claude pin if set, else the tier's claude default. The repo file (the
+ * cross-provider source of truth) is never modified — only the installed copy.
  */
-export function sanitizeAgentForClaude(content: string, agent = ""): { content: string; dropped?: string } {
-  const m = content.match(/^model:[ \t]*(.+)$/m);
-  if (m && m[1].trim().includes("/")) {
-    return { content: content.replace(/^model:[ \t]*.+\r?\n?/m, ""), dropped: m[1].trim() };
-  }
-  return { content };
+export function renderAgentForClaude(content: string): { content: string; model: string } {
+  const model = resolveModel(readModelSpec(content), "claude");
+  return { content: setModelBlock(content, `model: ${model}`), model };
 }
 
 export class ClaudeCodeAdapter implements HarnessAdapter {
@@ -105,15 +103,16 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
         const d = path.join(dst, filename);
         const name = filename.replace(/\.md$/, "");
         let body = fs.readFileSync(s, "utf-8");
+        let note = "";
         if (kind === "agent") {
-          const sani = sanitizeAgentForClaude(body, name);
-          if (sani.dropped) console.log(`  ~ ${name}: non-Claude model pin '${sani.dropped}' dropped for Claude Code (falls back to default)`);
-          body = sani.content;
+          const rendered = renderAgentForClaude(body);
+          body = rendered.content;
+          note = ` (model: ${rendered.model})`;
         }
         const sha = contentSha(body);
         if (!dryRun) fs.writeFileSync(d, body);
         installed.push({ path: d, sha, harness: HARNESS });
-        console.log(`  + ${kind}: ${name}`);
+        console.log(`  + ${kind}: ${name}${note}`);
       }
     }
 
