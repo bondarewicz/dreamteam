@@ -71,7 +71,7 @@ function record(
   agent: string,
   scenarioId: string,
   output: string,
-  meta: { inputTokens?: number; outputTokens?: number; costUsd?: number; durationMs: number; error?: string },
+  meta: { inputTokens?: number; outputTokens?: number; costUsd?: number; durationMs: number; error?: string; trace?: unknown[] },
 ): RawOutput {
   const inputTokens = meta.inputTokens ?? 0;
   const outputTokens = meta.outputTokens ?? 0;
@@ -86,10 +86,41 @@ function record(
     output_tokens: outputTokens,
     cost_usd: meta.costUsd ?? 0,
     timestamp: nowTs(),
-    trace: [],
+    trace: meta.trace ?? [],
   };
   if (meta.error) rec.error = meta.error;
   return rec;
+}
+
+/**
+ * Synthesize a Claude-style trace (system → user → assistant → result) for a
+ * single-shot/agentic provider call, so the web trace viewer renders it the same
+ * as a claude run. `reasoning` (e.g. codex's agentic stdout) becomes a thinking block.
+ */
+export function buildTrace(opts: {
+  provider: Provider;
+  model: string;
+  userPrompt: string;
+  responseText: string;
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number;
+  costUsd?: number;
+  reasoning?: string;
+  error?: string;
+}): unknown[] {
+  const usage = { input_tokens: opts.inputTokens, output_tokens: opts.outputTokens };
+  const content: Array<Record<string, unknown>> = [];
+  if (opts.reasoning?.trim()) content.push({ type: "thinking", thinking: opts.reasoning.trim().slice(0, 20000) });
+  content.push({ type: "text", text: opts.responseText || (opts.error ? `(no output — ${opts.error})` : "(empty response)") });
+  return [
+    { type: "system", subtype: "init", provider: opts.provider, model: opts.model,
+      system: `${opts.provider} backend · model=${opts.model} · single request (agent system prompt sent separately)` },
+    { type: "user", message: { role: "user", content: [{ type: "text", text: opts.userPrompt }] } },
+    { type: "assistant", message: { role: "assistant", model: opts.model, content, usage } },
+    { type: "result", stop_reason: opts.error ? "error" : "end_turn", num_turns: 1,
+      duration_ms: opts.durationMs, usage, total_cost_usd: opts.costUsd ?? 0 },
+  ];
 }
 
 /** Dispatch to the right non-claude backend. (Claude is handled in agent-runner.ts.) */
@@ -136,14 +167,18 @@ export async function runOllama(agent: string, scenarioId: string, prompt: strin
       error?: string;
     };
     const content = json.message?.content ?? "";
+    const inTok = json.prompt_eval_count ?? 0, outTok = json.eval_count ?? 0;
+    const err = resp.ok ? (json.error ? `ollama: ${json.error}` : undefined) : `ollama HTTP ${resp.status}`;
+    const durationMs = Date.now() - start;
     return record(agent, scenarioId, content, {
-      inputTokens: json.prompt_eval_count ?? 0,
-      outputTokens: json.eval_count ?? 0,
-      durationMs: Date.now() - start,
-      error: resp.ok ? (json.error ? `ollama: ${json.error}` : undefined) : `ollama HTTP ${resp.status}`,
+      inputTokens: inTok, outputTokens: outTok, durationMs, error: err,
+      trace: buildTrace({ provider: "ollama", model: modelId, userPrompt: prompt, responseText: content, inputTokens: inTok, outputTokens: outTok, durationMs, error: err }),
     });
   } catch (e) {
-    return record(agent, scenarioId, "", { durationMs: Date.now() - start, error: `ollama: ${e instanceof Error ? e.message : String(e)}` });
+    const error = `ollama: ${e instanceof Error ? e.message : String(e)}`;
+    const durationMs = Date.now() - start;
+    return record(agent, scenarioId, "", { durationMs, error,
+      trace: buildTrace({ provider: "ollama", model: modelId, userPrompt: prompt, responseText: "", inputTokens: 0, outputTokens: 0, durationMs, error }) });
   }
 }
 
@@ -176,13 +211,18 @@ export async function runGemini(agent: string, scenarioId: string, prompt: strin
     const resp = typeof env.response === "string" ? env.response : "";
     const content = schema ? extractJsonText(resp) : resp;
     const tokens = (env.stats as any)?.models?.[modelId]?.tokens?.total ?? 0;
+    const outTok = typeof tokens === "number" ? tokens : 0;
+    const err = code !== 0 ? `gemini exit ${code}` : (resp ? undefined : "gemini: empty response");
+    const durationMs = Date.now() - start;
     return record(agent, scenarioId, content, {
-      outputTokens: typeof tokens === "number" ? tokens : 0,
-      durationMs: Date.now() - start,
-      error: code !== 0 ? `gemini exit ${code}` : (resp ? undefined : "gemini: empty response"),
+      outputTokens: outTok, durationMs, error: err,
+      trace: buildTrace({ provider: "gemini", model: modelId, userPrompt: prompt, responseText: content, inputTokens: 0, outputTokens: outTok, durationMs, error: err }),
     });
   } catch (e) {
-    return record(agent, scenarioId, "", { durationMs: Date.now() - start, error: `gemini: ${e instanceof Error ? e.message : String(e)}` });
+    const error = `gemini: ${e instanceof Error ? e.message : String(e)}`;
+    const durationMs = Date.now() - start;
+    return record(agent, scenarioId, "", { durationMs, error,
+      trace: buildTrace({ provider: "gemini", model: modelId, userPrompt: prompt, responseText: "", inputTokens: 0, outputTokens: 0, durationMs, error }) });
   } finally {
     try { fs.rmSync(sysFile, { force: true }); } catch { /* ignore */ }
   }
@@ -216,7 +256,8 @@ export async function runCodex(agent: string, scenarioId: string, prompt: string
   try {
     const proc = Bun.spawn(["codex", ...args], { cwd: workDir, stdin: new TextEncoder().encode(combined), stdout: "pipe", stderr: "pipe" });
     const t = setTimeout(() => { try { proc.kill(); } catch { /* dead */ } }, timeoutMs);
-    const [, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    // Codex's stdout is its agentic transcript (reasoning + file actions) — keep it as the trace's reasoning.
+    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     clearTimeout(t);
     let content = "";
     try { content = fs.readFileSync(outFile, "utf-8").trim(); } catch { /* no message */ }
@@ -225,12 +266,17 @@ export async function runCodex(agent: string, scenarioId: string, prompt: string
       // Drop null-valued keys the strict schema forced in, so downstream Zod (.optional()) validates.
       try { content = JSON.stringify(stripNulls(JSON.parse(content))); } catch { /* leave as-is */ }
     }
+    const err = code !== 0 ? `codex exit ${code}` : (content ? undefined : "codex: empty last message");
+    const durationMs = Date.now() - start;
     return record(agent, scenarioId, content, {
-      durationMs: Date.now() - start,
-      error: code !== 0 ? `codex exit ${code}` : (content ? undefined : "codex: empty last message"),
+      durationMs, error: err,
+      trace: buildTrace({ provider: "codex", model: modelId, userPrompt: prompt, responseText: content, inputTokens: 0, outputTokens: 0, durationMs, costUsd: 0, reasoning: stdout.trim(), error: err }),
     });
   } catch (e) {
-    return record(agent, scenarioId, "", { durationMs: Date.now() - start, error: `codex: ${e instanceof Error ? e.message : String(e)}` });
+    const error = `codex: ${e instanceof Error ? e.message : String(e)}`;
+    const durationMs = Date.now() - start;
+    return record(agent, scenarioId, "", { durationMs, error,
+      trace: buildTrace({ provider: "codex", model: modelId, userPrompt: prompt, responseText: "", inputTokens: 0, outputTokens: 0, durationMs, error }) });
   } finally {
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
