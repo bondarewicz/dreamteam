@@ -62,7 +62,8 @@ async function phaseAgents(
       adapter,
       timeoutMs,
       options.trials,
-      options.model
+      options.model,
+      options.provider
     );
   });
 
@@ -274,7 +275,7 @@ export async function runPipeline(
   console.log(`  Phase        : ${options.phase}`);
   console.log(`  Parallel     : ${options.parallel}`);
   console.log(`  Trials       : ${options.trials}`);
-  console.log(`  Model        : ${options.model || "(agent default)"} ${options.model ? "[judge unchanged]" : ""}`);
+  console.log(`  Model        : ${options.model || (options.provider ? `(tier → ${options.provider})` : "(agent tier → claude)")} ${options.model || options.provider ? "[judge unchanged]" : ""}`);
   console.log(`  Scenarios    : ${total}`);
   console.log();
 

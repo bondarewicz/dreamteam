@@ -196,20 +196,25 @@ export async function runCodex(agent: string, scenarioId: string, prompt: string
   // getAgentStrictJsonSchema() applies that transform (optional fields → nullable);
   // we strip the resulting nulls before returning so Zod .optional() validates.
   const strictSchema = getAgentStrictJsonSchema(agent);
-  const stem = path.join(os.tmpdir(), `dt-codex-${scenarioId.replace(/[^a-z0-9]/gi, "_")}-${start}`);
-  const outFile = `${stem}.out`;
-  const schemaFile = `${stem}.schema.json`;
+  // Run in a throwaway working dir with a WRITABLE sandbox: codex's harness is
+  // agentic, so implementation agents (e.g. shaq) actually apply file patches. A
+  // read-only sandbox makes them give up and report an empty implementation (→
+  // judged fail). workspace-write + an isolated cwd lets them complete like the
+  // claude path, without polluting the repo (the dir is removed afterward).
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-codex-"));
+  const outFile = path.join(workDir, "out.txt");
+  const schemaFile = path.join(workDir, "schema.json");
   // Codex has no system-prompt flag — prepend the agent body to the task. Feed via STDIN
   // with a "-" positional: the agent body starts with `---` frontmatter, and a positional
   // beginning with `-` would be mis-parsed as a flag (instant exit 2).
   const combined = `${agentSystemPrompt(agent)}\n\n---\n\n${prompt}`;
-  const args = ["exec", "-", "-m", modelId, "--output-last-message", outFile, "--sandbox", "read-only", "--skip-git-repo-check"];
+  const args = ["exec", "-", "-m", modelId, "--output-last-message", outFile, "--sandbox", "workspace-write", "--skip-git-repo-check"];
   if (strictSchema) {
     fs.writeFileSync(schemaFile, JSON.stringify(strictSchema));
     args.push("--output-schema", schemaFile);
   }
   try {
-    const proc = Bun.spawn(["codex", ...args], { stdin: new TextEncoder().encode(combined), stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn(["codex", ...args], { cwd: workDir, stdin: new TextEncoder().encode(combined), stdout: "pipe", stderr: "pipe" });
     const t = setTimeout(() => { try { proc.kill(); } catch { /* dead */ } }, timeoutMs);
     const [, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     clearTimeout(t);
@@ -227,7 +232,6 @@ export async function runCodex(agent: string, scenarioId: string, prompt: string
   } catch (e) {
     return record(agent, scenarioId, "", { durationMs: Date.now() - start, error: `codex: ${e instanceof Error ? e.message : String(e)}` });
   } finally {
-    try { fs.rmSync(outFile, { force: true }); } catch { /* ignore */ }
-    try { fs.rmSync(schemaFile, { force: true }); } catch { /* ignore */ }
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 }
