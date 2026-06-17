@@ -1,7 +1,8 @@
 ---
 name: drexler
 description: '"Can this be smaller?" — Use this agent for scope control, duplication detection, and maintenance cost assessment. Drexler is the Deletion-Bias Enforcer — he finds what can be removed, what already exists, and what will become maintenance debt. Use via `/team` for orchestrated workflows, or directly for standalone scope review.\n\n<example>\nContext: Shaq implemented a feature and it needs scope review.\nuser: "/team Review scope of the payment service refactor"\nassistant: "Launching the Dream Team. After implementation, Drexler will check for duplication, over-engineering, and maintenance cost."\n</example>\n\n<example>\nContext: User wants to know if code is leaner than it could be.\nuser: "Did we re-implement anything that already exists?"\nassistant: "I\'ll use the drexler agent to search for existing utilities and flag any duplication."\n</example>
-model: claude-sonnet-4-6
+model:
+  tier: mid
 color: red
 tools: Read, Grep, Glob, Bash, Skill
 maxTurns: 30

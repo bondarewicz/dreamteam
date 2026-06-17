@@ -3,7 +3,7 @@ import {
   getAgentSummaries, getAgentSummariesAlpha, getDistinctAgents,
   getPreviousBaselineRun, getAllRunsAsc, getPersistentNonPassScenarios,
   getAgentsForAllRuns, getAgentsForRuns, getRunsPage, getGlobalStats,
-  getPhaseResultIds
+  getPhaseResultIds, deleteRun
 } from "../db.ts";
 import type { ScenarioHistoryEntry } from "../db.ts";
 import { Layout, maybeLayout } from "../views/Layout.ts";
@@ -15,8 +15,24 @@ import { NewEvalRunPage, type ScenarioGroup } from "../views/NewEvalRun.ts";
 import { getAvailableModels } from "../models-api.ts";
 import { EvalRunLivePage } from "../views/EvalRunLive.ts";
 import { startEvalRun, getActiveRun, createSSEResponse } from "../sse.ts";
+import { resultsDir } from "../../../scripts/paths.ts";
 import path from "path";
+import fs from "node:fs";
 import { readdirSync } from "node:fs";
+
+/**
+ * Delete the on-disk artifacts for a run: the assembled <date>.json and the
+ * raw/<date>/ dir. run_id "eval/run-<date>" → date is the trailing segment
+ * minus the "run-" prefix. Best-effort (missing files are fine).
+ */
+function deleteRunDiskArtifacts(runId: string): void {
+  const date = (runId.split("/").pop() ?? runId).replace(/^run-/, "");
+  if (!/^[\w.-]+$/.test(date)) return; // guard against path traversal
+  const base = resultsDir();
+  for (const target of [path.join(base, `${date}.json`), path.join(base, "raw", date)]) {
+    try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
 
 function html(content: string, status = 200): Response {
   return new Response(content, {
@@ -83,6 +99,16 @@ export function evalRunHandler(req: Request, params: Record<string, string>): Re
     persistentNonPass, phaseResultIds
   );
   return html(maybeLayout(req, run.run_id, body, "/evals"));
+}
+
+/** POST /evals/:runId/delete — remove a run (DB rows + on-disk artifacts), redirect home. */
+export function evalRunDeleteHandler(_req: Request, params: Record<string, string>): Response {
+  const runId = params.runId;
+  if (!runId) return html("Not Found", 404);
+  if (!getRun(runId)) return html("Not Found", 404);
+  deleteRun(runId);
+  deleteRunDiskArtifacts(runId);
+  return new Response(null, { status: 303, headers: { Location: "/" } });
 }
 
 /** GET /evals/:runId/results — HTMX fragment for filtered results table */

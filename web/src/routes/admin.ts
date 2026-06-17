@@ -11,7 +11,15 @@ import path from "path";
 import fs from "fs";
 import { Layout, maybeLayout } from "../views/Layout.ts";
 import { AdminModelsPage, type AgentModelRow, type FlashMessage } from "../views/Admin.ts";
+import { ProvidersPage, PingResultFragment } from "../views/Providers.ts";
 import { getAvailableModels } from "../models-api.ts";
+import { checkProviders, type ProviderId } from "../../../scripts/doctor.ts";
+import { pingProvider } from "../../../scripts/provider-ping.ts";
+import { readConfig } from "../../../scripts/paths.ts";
+import { readModelSpec, setModelBlock } from "../../../scripts/frontmatter.ts";
+import { renderModelSpecYaml, PROVIDERS, TIERS, type ModelSpec, type Provider, type Tier } from "../../../scripts/model-tiers.ts";
+
+const KNOWN_PROVIDER_IDS: ProviderId[] = ["claude", "ollama", "gemini", "codex"];
 
 function html(content: string, status = 200): Response {
   return new Response(content, {
@@ -31,18 +39,11 @@ function listAgentFiles(): string[] {
     .sort();
 }
 
-/** Read the `model:` frontmatter value from an agent file, or "" if missing. */
-function readAgentModel(filePath: string): string {
-  const content = fs.readFileSync(filePath, "utf-8");
-  const match = content.match(/^model:\s*(.+)$/m);
-  return match ? match[1].trim() : "";
-}
-
 function loadRows(): AgentModelRow[] {
   return listAgentFiles().map((fname) => {
     const agent = fname.replace(/\.md$/, "");
-    const model = readAgentModel(path.join(AGENTS_DIR, fname));
-    return { agent, currentModel: model };
+    const spec = readModelSpec(fs.readFileSync(path.join(AGENTS_DIR, fname), "utf-8"));
+    return { agent, spec };
   });
 }
 
@@ -56,31 +57,64 @@ export async function adminModelsHandler(req: Request, _params: Record<string, s
   return html(maybeLayout(req, "Agent Models", body, "/admin/models"));
 }
 
-/** Rewrite the `model:` line (or insert after `name:`) in an agent file. */
-function writeAgentModel(filePath: string, newModel: string): void {
-  const content = fs.readFileSync(filePath, "utf-8");
-  const modelLineRe = /^model:\s*.+$/m;
-  let next: string;
-  if (modelLineRe.test(content)) {
-    next = content.replace(modelLineRe, `model: ${newModel}`);
-  } else {
-    // Insert a model line after the first `name:` line within the frontmatter.
-    next = content.replace(/^name:\s*.+$/m, (m) => `${m}\nmodel: ${newModel}`);
-  }
-  fs.writeFileSync(filePath, next, "utf-8");
+/** GET /admin/providers — doctor-in-the-browser (read-only reachability). */
+export async function adminProvidersHandler(req: Request, _params: Record<string, string>): Promise<Response> {
+  const checks = await checkProviders();
+  const cfg = readConfig();
+  const manifest = { present: !!cfg, count: cfg?.installed.length ?? 0 };
+  const body = ProvidersPage(checks, manifest);
+  return html(maybeLayout(req, "Providers", body, "/admin/models"));
 }
 
-/** Validate a model string — reject empty, multi-line, or obviously malformed input. */
-function validateModelValue(value: string): { ok: true } | { ok: false; reason: string } {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return { ok: false, reason: "model cannot be empty" };
-  if (/\s/.test(trimmed)) return { ok: false, reason: "model must not contain whitespace" };
-  if (trimmed.length > 100) return { ok: false, reason: "model value too long" };
-  // Allow identifiers like `claude-opus-4-7`, `opus`, `opusplan`, `claude-sonnet-4-5-20250929`
-  if (!/^[a-zA-Z0-9._:\-\[\]]+$/.test(trimmed)) {
-    return { ok: false, reason: "model contains invalid characters" };
+/** POST /admin/providers/test — live round-trip probe for one provider (htmx fragment). */
+export async function adminProvidersTestHandler(req: Request, _params: Record<string, string>): Promise<Response> {
+  let provider = "", model: string | undefined;
+  const ct = req.headers.get("content-type") ?? "";
+  try {
+    if (ct.includes("application/json")) {
+      const body = (await req.json()) as { provider?: string; model?: string };
+      provider = (body.provider ?? "").trim();
+      model = body.model?.trim() || undefined;
+    } else {
+      const params = new URLSearchParams(await req.text());
+      provider = (params.get("provider") ?? "").trim();
+      model = params.get("model")?.trim() || undefined;
+    }
+  } catch { /* fall through to validation */ }
+
+  if (!KNOWN_PROVIDER_IDS.includes(provider as ProviderId)) {
+    return html(`<span class="ping-badge ping-err">live ✗</span> <span class="ping-fail">unknown provider: ${provider.replace(/[<>&]/g, "")}</span>`, 400);
   }
+
+  const result = await pingProvider(provider as ProviderId, model);
+  return html(PingResultFragment(result));
+}
+
+/** Validate a single pin model id — bare token, no whitespace/slashes. */
+function validatePin(value: string): { ok: true } | { ok: false; reason: string } {
+  if (value.length > 100) return { ok: false, reason: "value too long" };
+  if (/\s/.test(value)) return { ok: false, reason: "must not contain whitespace" };
+  if (!/^[a-zA-Z0-9._:\-]+$/.test(value)) return { ok: false, reason: "invalid characters (bare model id only)" };
   return { ok: true };
+}
+
+/** Build a ModelSpec for an agent from the submitted tier__/provider__/pin__ fields. */
+function specFromForm(agent: string, fields: URLSearchParams): { spec: ModelSpec } | { error: string } {
+  const tierRaw = (fields.get(`tier__${agent}`) ?? "deep").trim();
+  if (!(TIERS as readonly string[]).includes(tierRaw)) return { error: `invalid tier '${tierRaw}'` };
+  const pin: Partial<Record<Provider, string>> = {};
+  for (const p of PROVIDERS) {
+    const v = (fields.get(`pin__${agent}__${p}`) ?? "").trim();
+    if (!v) continue; // empty = tier default
+    const valid = validatePin(v);
+    if (!valid.ok) return { error: `${p} pin: ${valid.reason}` };
+    pin[p] = v;
+  }
+  // Active provider — the one this agent runs on. claude (or unset) = default, omitted from frontmatter.
+  const provRaw = (fields.get(`provider__${agent}`) ?? "claude").trim();
+  if (!(PROVIDERS as readonly string[]).includes(provRaw)) return { error: `invalid provider '${provRaw}'` };
+  const provider = provRaw === "claude" ? undefined : (provRaw as Provider);
+  return { spec: provider ? { tier: tierRaw as Tier, pin, provider } : { tier: tierRaw as Tier, pin } };
 }
 
 async function renderFlash(req: Request, flash: FlashMessage): Promise<Response> {
@@ -93,75 +127,41 @@ async function renderFlash(req: Request, flash: FlashMessage): Promise<Response>
   );
 }
 
-/** POST /admin/models */
+/** POST /admin/models — write each agent's nested model block (tier + pins). */
 export async function adminModelsSaveHandler(req: Request, _params: Record<string, string>): Promise<Response> {
-  const contentType = req.headers.get("content-type") ?? "";
-  const incoming: Record<string, string> = {};
-
+  let fields: URLSearchParams;
   try {
-    if (contentType.includes("application/x-www-form-urlencoded")) {
-      const text = await req.text();
-      const params = new URLSearchParams(text);
-      for (const [k, v] of params.entries()) {
-        if (k.startsWith("model__")) incoming[k.slice("model__".length)] = v;
-      }
-    } else if (contentType.includes("application/json")) {
-      const body = (await req.json()) as Record<string, unknown>;
-      const models = body.models;
-      if (models && typeof models === "object" && !Array.isArray(models)) {
-        for (const [k, v] of Object.entries(models as Record<string, unknown>)) {
-          if (typeof v === "string") incoming[k] = v;
-        }
-      }
-    }
+    fields = new URLSearchParams(await req.text());
   } catch (err) {
-    return renderFlash(req, {
-      kind: "error",
-      message: `Could not parse request body: ${err instanceof Error ? err.message : String(err)}`,
-    });
+    return renderFlash(req, { kind: "error", message: `Could not parse request body: ${err instanceof Error ? err.message : String(err)}` });
   }
 
   const agentFiles = new Map(listAgentFiles().map((f) => [f.replace(/\.md$/, ""), f] as const));
-  const changes: Array<{ agent: string; from: string; to: string }> = [];
+  const changes: string[] = [];
 
-  for (const [agent, newModel] of Object.entries(incoming)) {
-    const fname = agentFiles.get(agent);
-    if (!fname) {
-      return renderFlash(req, { kind: "error", message: `Unknown agent: ${agent}` });
-    }
-    const validation = validateModelValue(newModel);
-    if (!validation.ok) {
-      return renderFlash(req, {
-        kind: "error",
-        message: `Invalid model for ${agent}: ${validation.reason}`,
-      });
-    }
+  for (const [agent, fname] of agentFiles) {
+    if (!fields.has(`tier__${agent}`)) continue; // agent not in this form submission
+    const built = specFromForm(agent, fields);
+    if ("error" in built) return renderFlash(req, { kind: "error", message: `${agent}: ${built.error}` });
+
     const filePath = path.join(AGENTS_DIR, fname);
-    const current = readAgentModel(filePath);
-    const trimmed = newModel.trim();
-    if (current !== trimmed) {
-      changes.push({ agent, from: current, to: trimmed });
-    }
+    const content = fs.readFileSync(filePath, "utf-8");
+    const before = renderModelSpecYaml(readModelSpec(content));
+    const afterYaml = renderModelSpecYaml(built.spec);
+    if (before === afterYaml) continue; // unchanged
+
+    fs.writeFileSync(filePath, setModelBlock(content, afterYaml), "utf-8");
+    const pinStr = Object.entries(built.spec.pin).map(([p, m]) => `${p}=${m}`).join(",");
+    changes.push(`${agent}: ${built.spec.tier}${pinStr ? ` (${pinStr})` : ""}`);
   }
 
   if (changes.length === 0) {
-    return renderFlash(req, {
-      kind: "success",
-      message: "No changes — all agents already match the submitted models.",
-    });
+    return renderFlash(req, { kind: "success", message: "No changes — all agents already match the submitted specs." });
   }
-
-  for (const { agent, to } of changes) {
-    writeAgentModel(path.join(AGENTS_DIR, agentFiles.get(agent)!), to);
-  }
-
-  const summary = changes
-    .map((c) => `${c.agent}: ${c.from || "(unset)"} → ${c.to}`)
-    .join(", ");
 
   return renderFlash(req, {
     kind: "success",
-    message: `Saved ${changes.length} agent spec(s) to agents/*.md: ${summary}. Next: run \`bun scripts/install.ts\` to sync into ~/.claude/, and \`bun scripts/build-site.ts\` to refresh site/index.html.`,
+    message: `Saved ${changes.length} agent spec(s): ${changes.join("; ")}. Next: run \`bun scripts/install.ts\` to sync into ~/.claude/ (renders the flat Claude model), and \`bun scripts/build-site.ts\` to refresh the site.`,
   });
 }
 

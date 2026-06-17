@@ -14,6 +14,7 @@ import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
 import type { SessionDetail, SessionRecord } from "./sessions-source.ts";
+import { JUDGE_DEFENSE } from "../../scripts/prompt-defense.ts";
 
 export const POLICY_VERSION = "1";
 
@@ -155,7 +156,8 @@ Return ONLY valid JSON, no prose, exactly this shape:
 }
 
 export function getJudgePrompt(): string {
-  return assembleJudgePrompt(getJudgeConfig());
+  // Defense is hard-prepended (not part of the editable config) so it can't be edited away.
+  return `${JUDGE_DEFENSE}\n\n${assembleJudgePrompt(getJudgeConfig())}`;
 }
 export function judgePromptVersion(): string {
   return createHash("sha256").update(getJudgePrompt()).digest("hex").slice(0, 12);

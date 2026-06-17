@@ -5,8 +5,9 @@
 import { Database } from "bun:sqlite";
 import path from "path";
 import fs from "fs";
+import { resultsDir } from "../../scripts/paths.ts";
 
-const RESULTS_DIR = path.join(import.meta.dir, "../../evals/results");
+const RESULTS_DIR = resultsDir(); // ~/.dreamteam/workspace/evals/results (was <repo>/evals/results)
 const RAW_DIR = path.join(RESULTS_DIR, "raw");
 
 type RawOutput = {

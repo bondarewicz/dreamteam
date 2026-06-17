@@ -1,6 +1,7 @@
 /**
  * Live eval run progress page — /evals/live
  */
+import { localDateTime } from "./html.ts";
 
 export function EvalRunLivePage(
   runInProgress: boolean,
@@ -24,7 +25,7 @@ export function EvalRunLivePage(
   }
 
   const startedStr = startedAt
-    ? new Date(startedAt).toISOString().replace("T", " ").slice(0, 19) + " UTC"
+    ? localDateTime(new Date(startedAt).toISOString())
     : "";
 
   return `

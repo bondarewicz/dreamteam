@@ -164,6 +164,8 @@ export interface PipelineOptions {
   timeoutPerPhase: number;
   repoRoot: string;
   model?: string;
+  /** Resolve each agent's model from its tier for this provider (when --model is not given). */
+  provider?: string;
 }
 
 export interface DiscoveredScenario {

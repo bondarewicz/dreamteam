@@ -1,9 +1,11 @@
 import { Database } from "bun:sqlite";
-import path from "path";
 import fs from "fs";
+import { workspaceDir, dbPath } from "../../scripts/paths.ts";
 
-const DATA_DIR = path.join(import.meta.dir, "../../data");
-const DB_PATH = path.join(DATA_DIR, "dreamteam.db");
+// Writable user workspace (~/.dreamteam/workspace) — was <repo>/data. Lets the
+// shipped web read a DB outside the read-only package.
+const DATA_DIR = workspaceDir();
+const DB_PATH = dbPath();
 
 let _db: Database | null = null;
 
@@ -166,6 +168,17 @@ export function getRunsPage(page: number, pageSize: number): RunsPage {
 export function getRun(runId: string): EvalRun | null {
   const db = getDb();
   return db.query("SELECT * FROM eval_runs WHERE run_id = ?").get(runId) as EvalRun | null;
+}
+
+/** Delete a run and all its results/summaries from the DB (transactional). */
+export function deleteRun(runId: string): void {
+  const db = getDb();
+  const tx = db.transaction((id: string) => {
+    db.run("DELETE FROM eval_results WHERE run_id = ?", [id]);
+    db.run("DELETE FROM agent_summaries WHERE run_id = ?", [id]);
+    db.run("DELETE FROM eval_runs WHERE run_id = ?", [id]);
+  });
+  tx(runId);
 }
 
 export function getRunResults(runId: string, agent?: string, score?: string): EvalResult[] {
