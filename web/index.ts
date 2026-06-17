@@ -8,6 +8,7 @@ import { migrate } from "./src/migrate.ts";
 import {
   dashboardHandler,
   evalRunHandler,
+  evalRunDeleteHandler,
   evalResultsFragment,
   traceHandler,
   newEvalRunHandler,
@@ -61,6 +62,7 @@ router.get("/evals/new", newEvalRunHandler);
 router.get("/evals/live", evalRunLiveHandler);
 router.get("/evals/:runId", evalRunHandler);
 router.get("/evals/:runId/results", evalResultsFragment);
+router.post("/evals/:runId/delete", evalRunDeleteHandler);
 router.get("/evals/:runId/trace/:resultId", traceHandler);
 router.post("/api/eval-runs", startEvalRunHandler);
 router.get("/api/eval-runs/live", evalRunsSSEHandler);

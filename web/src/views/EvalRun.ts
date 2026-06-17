@@ -369,6 +369,19 @@ export function EvalRunPage(
       </details>
     </div>
     ${footerHtml}
+    <div class="danger-zone">
+      <form method="POST" action="/evals/${runIdEncoded}/delete"
+            onsubmit="return confirm('Delete this run permanently?\\n\\n${esc(run.run_id)}\\n\\nThis removes it from the database and deletes its files on disk. This cannot be undone.');">
+        <button type="submit" class="delete-run-btn">Delete this run</button>
+        <span class="danger-hint">Removes the run from the DB and its results/raw files on disk. Cannot be undone.</span>
+      </form>
+    </div>
+    <style>
+      .danger-zone { margin: 32px 0 16px; padding: 16px 18px; border: 1px solid rgba(239,68,68,0.35); border-radius: 8px; background: rgba(239,68,68,0.05); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+      .delete-run-btn { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.5); border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+      .delete-run-btn:hover { background: rgba(239,68,68,0.28); color: #fff; }
+      .danger-hint { font-size: 12px; color: var(--text-muted); }
+    </style>
     <script>
     function setActiveScore(btn, score) {
       document.querySelectorAll('.filter-btn').forEach(b => {

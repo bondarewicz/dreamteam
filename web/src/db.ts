@@ -170,6 +170,17 @@ export function getRun(runId: string): EvalRun | null {
   return db.query("SELECT * FROM eval_runs WHERE run_id = ?").get(runId) as EvalRun | null;
 }
 
+/** Delete a run and all its results/summaries from the DB (transactional). */
+export function deleteRun(runId: string): void {
+  const db = getDb();
+  const tx = db.transaction((id: string) => {
+    db.run("DELETE FROM eval_results WHERE run_id = ?", [id]);
+    db.run("DELETE FROM agent_summaries WHERE run_id = ?", [id]);
+    db.run("DELETE FROM eval_runs WHERE run_id = ?", [id]);
+  });
+  tx(runId);
+}
+
 export function getRunResults(runId: string, agent?: string, score?: string): EvalResult[] {
   const db = getDb();
   let sql = "SELECT * FROM eval_results WHERE run_id = ? AND (scenario_type IS NULL OR scenario_type != 'team-phase')";
