@@ -65,6 +65,30 @@ function cmdStatus(): number {
   return 0;
 }
 
+async function cmdRepair(): Promise<number> {
+  const cfg = readConfig();
+  if (!cfg) {
+    console.log("Not installed (no ~/.dreamteam/config.json). Run: dreamteam install");
+    return 1;
+  }
+  // Detect drift/missing against the manifest (same check as status).
+  let drift = 0, missing = 0;
+  for (const f of cfg.installed) {
+    try {
+      if (contentSha(fs.readFileSync(f.path, "utf-8")) !== f.sha) { drift++; console.log(`  ~ drift: ${f.path}`); }
+    } catch { missing++; console.log(`  ! missing: ${f.path}`); }
+  }
+  if (!drift && !missing) {
+    console.log("Nothing to repair — all installed files match the manifest.");
+    return 0;
+  }
+  console.log(`\nRepairing ${drift} drifted + ${missing} missing file(s) — re-syncing from source…`);
+  const res = await provision({ harnesses: cfg.harnesses.join(","), dryRun: false });
+  console.log(`\nRepair complete — re-synced ${res.installed.length} files across: ${res.harnesses.join(", ")}.`);
+  console.log("Start a new Claude Code session to pick up the repaired agents.");
+  return 0;
+}
+
 async function cmdDoctor(): Promise<number> {
   console.log("Dream Team doctor — provider reachability\n");
   const checks = await checkProviders();
@@ -123,6 +147,7 @@ function usage(): void {
   install [--harness ${knownHarnesses().join("|")}|all] [--dry-run]
   uninstall
   status            installed files, versions, drift vs manifest
+  repair            re-sync drifted/missing installed files from source
   doctor            Claude / Ollama / Gemini reachability
   list              roster + commands
   eval [...]        passthrough to evals/src/cli.ts
@@ -136,6 +161,7 @@ switch (cmd) {
   case "install": code = await cmdInstall(rest); break;
   case "uninstall": code = await cmdUninstall(); break;
   case "status": code = cmdStatus(); break;
+  case "repair": code = await cmdRepair(); break;
   case "doctor": code = await cmdDoctor(); break;
   case "list": code = cmdList(); break;
   case "eval": code = await cmdEval(rest); break;
