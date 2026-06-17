@@ -67,10 +67,16 @@ export function DashboardPage(
       badgesHtml = agents.map(a => agentChip(a)).join("");
     }
 
+    const runModel = (() => {
+      try { return (JSON.parse(run.meta ?? "{}") as { model?: string }).model ?? ""; }
+      catch { return ""; }
+    })();
+
     return `
       <a href="/evals/${encodeURIComponent(run.run_id)}" class="run-row">
         <div class="run-meta">
           <span class="run-date">${localDateTime(run.timestamp)}</span>
+          ${runModel ? `<span class="run-model" style="font-family:var(--mono,monospace);font-size:11px;color:var(--text-muted)">${esc(runModel)}</span>` : ""}
         </div>
         <div class="run-counts">
           <span class="p">${run.pass_count ?? 0}P</span>

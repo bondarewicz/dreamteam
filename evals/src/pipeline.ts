@@ -192,7 +192,8 @@ async function phaseAssemble(
   allScenariosTotal: number,
   trials: number,
   repoRoot: string,
-  model?: string
+  model?: string,
+  provider?: string
 ): Promise<string> {
   const scoredDir = path.join(rawDir, "scored");
   const finalOutput = path.join(resultsDir, `${runDatetime}.json`);
@@ -211,7 +212,8 @@ async function phaseAssemble(
     allScenariosTotal,
     trials,
     repoRoot,
-    model
+    model,
+    provider
   );
 
   fs.writeFileSync(finalOutput, JSON.stringify(final, null, 2), "utf-8");
@@ -350,7 +352,8 @@ export async function runPipeline(
       allScenariosTotal,
       options.trials,
       options.repoRoot,
-      options.model
+      options.model,
+      options.provider
     );
 
     return {
