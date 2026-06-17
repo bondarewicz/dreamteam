@@ -76,10 +76,8 @@ export function DashboardPage(
 
     return `
       <a href="/evals/${encodeURIComponent(run.run_id)}" class="run-row">
-        <div class="run-meta">
-          <span class="run-date">${localDateTime(run.timestamp)}</span>
-          ${runModelFull ? `<span class="run-model" title="${esc(runModelFull)}" style="font-family:var(--mono,monospace);font-size:11px;color:var(--text-muted)">${esc(runModel)}</span>` : ""}
-        </div>
+        <span class="run-date">${localDateTime(run.timestamp)}</span>
+        <span class="run-model" title="${esc(runModelFull)}">${esc(runModel)}</span>
         <div class="run-counts">
           <span class="p">${run.pass_count ?? 0}P</span>
           <span class="pa">${run.partial_count ?? 0}p</span>
