@@ -1,6 +1,6 @@
 # Dream Team
 
-A squad of specialized AI agents — each owns one job (domain rules, architecture, implementation, quality, scope, synthesis) — plus a `/team` orchestrator that runs them as a pipeline from problem statement to reviewed, spec-backed code. **The differentiator: every agent's behavior is schema-enforced and graded against a domain corpus across four model providers — Claude, Ollama, Gemini, and Codex — not vibes.**
+A squad of specialized AI agents — each owns one job (domain rules, architecture, implementation, quality, scope, synthesis) — plus a `/team` orchestrator that runs them as a pipeline from problem statement to reviewed, spec-backed code. **Put any agent on any provider — Claude, Codex, Gemini, or Ollama — for both the eval corpus *and* live `/team` sessions, each on your own subscription (no metered API). And every agent's behavior is schema-enforced and graded against that corpus — not vibes.**
 
 Install once, use in every project. The agents are named after the 1992 USA Basketball Dream Team; the personas are a framing device, the roles are real.
 
@@ -24,9 +24,9 @@ Dream Team is **Bun-only** and brings nothing of its own — each provider is a 
 |---|---|---|
 | **[Bun](https://bun.sh)** ≥ 1.1 | everything | the CLI runs on Bun |
 | **[Claude Code](https://claude.com/claude-code)** (Pro/Max) | interactive `/team`, **and the eval judge** | the orchestrator + judge run on Claude; sanctioned subscription use |
-| **[Ollama](https://ollama.com)** *(optional)* | cross-provider evals on local models | `ollama serve` + a pulled model (e.g. `qwen3.6`); local, free |
-| **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** *(optional)* | cross-provider evals on Gemini | logged in / `GEMINI_API_KEY`; free tier |
-| **[Codex CLI](https://github.com/openai/codex)** *(optional)* | cross-provider evals on GPT-class | `codex login` (ChatGPT subscription); first-party CLI |
+| **[Ollama](https://ollama.com)** *(optional)* | running agents on local models (evals **and** `/team`) | `ollama serve` + a pulled model (e.g. `qwen3.6`); local, free |
+| **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** *(optional)* | running agents on Gemini (evals **and** `/team`) | logged in (`~/.gemini`); free tier — no `GEMINI_API_KEY` (that meters) |
+| **[Codex CLI](https://github.com/openai/codex)** *(optional)* | running agents on GPT-class (evals **and** `/team`) | `codex login` (ChatGPT subscription) — no `OPENAI_API_KEY` (that meters) |
 
 `dreamteam doctor` reports presence + auth for each. You only need the providers you intend to use — Claude Code alone is enough for interactive `/team`.
 
@@ -54,7 +54,7 @@ dreamteam web [--port N]                                 serve the eval report +
 | **magic** | `/magic` | Context Synthesizer & Team Glue | `claude-sonnet-4-6` |
 | **drexler** | `/drexler` | Deletion-Bias Enforcer | `claude-sonnet-4-6` |
 
-Coach K (the orchestrator) runs on `claude-opus-4-7`. Default models are pinned builds (eval baselines vary only the model version). The default model is what each agent uses **interactively**; evals can target any provider/model via `--model` (see below). Every agent body enforces four contracts: an **output schema** validated before handoffs, an **escalation protocol** (stop and ask, never guess), a **confidence assessment**, and a **turn budget** (`maxTurns`).
+Coach K (the orchestrator) runs on Claude/Max and is never delegated. Each agent's `model:` frontmatter is a **tier** (deep/mid/fast) plus an optional **provider** + per-provider pins — the default is Claude, but set `provider: codex|gemini|ollama` to run that agent elsewhere (interactively in `/team` and in evals). Evals can also override per-run via `--model`/`--provider` (see below). Every agent body enforces four contracts: an **output schema** validated before handoffs, an **escalation protocol** (stop and ask, never guess), a **confidence assessment**, and a **turn budget** (`maxTurns`).
 
 Each agent is one markdown file, `agents/<name>.md` — YAML frontmatter (config) + body (system prompt). The repo is the source of truth; **edit the repo, run `dreamteam install`, never edit `~/.claude/` directly.**
 
@@ -68,7 +68,19 @@ Each agent is one markdown file, `agents/<name>.md` — YAML frontmatter (config
 
 **Git safety:** no agent commits or pushes — you control git. Every run drops a checkpoint and an HTML retro in `~/.dreamteam/workspace/`.
 
-> **Other providers, interactively?** `/team` defaults to Claude Code on Claude. It *can* be routed to Ollama/Gemini/OpenAI via `ANTHROPIC_BASE_URL` + an Anthropic-compatible proxy (e.g. LiteLLM) — advanced/best-effort (it bypasses the Max subscription, and local-model tool-use quality varies). The **proven** cross-provider path today is evals.
+### Any agent on any provider — interactively
+
+`/team` is **hybrid multi-provider**, not Claude-only. Coach K orchestrates on Claude (Max) and never moves; each agent runs on the provider you declare in its frontmatter:
+
+```yaml
+model:
+  tier: deep            # deep | mid | fast — resolves to a model per provider
+  provider: codex       # claude (default) | codex | gemini | ollama
+```
+
+When an agent is pinned off-Claude, Coach K **delegates that turn to the provider's own first-party CLI** (`codex exec`, `gemini`, ollama `/api/chat`) on its native subscription/local runtime, then folds the structured result back into the same brief → checkpoint → reviewer loop. **No proxy, no `ANTHROPIC_BASE_URL`, no metered API** — Max stays Max, ChatGPT-Codex stays your ChatGPT sub, Gemini/Ollama on their own auth.
+
+Implementation agents (Shaq) get a real **plan → you approve → implement** gate on every provider, with the plan phase made *physically write-incapable* per provider (codex `--sandbox read-only`, gemini OS read-only cwd, ollama withheld write-tools). Each provider's gate is proven by an instrumented eval before it ships. Analysis/synthesis agents (Bird, MJ, Kobe, Pippen, Drexler, Magic) delegate single-shot. See `docs/spec-hybrid-team/`.
 
 ### Spec-driven development
 
@@ -88,17 +100,17 @@ The model is forced to a flat JSON schema; the result is re-validated with Zod (
 
 Every code-touching agent has a scenario suite under `evals/<agent>/` (capability, edge-case, escalation, adversarial). Each scenario declares `prompt` / `expected_behavior` / `failure_modes` / `scoring_rubric`. The pipeline is a deterministic TypeScript CLI: it runs each agent, applies zero-LLM graders, then scores each output against its rubric with a pinned **Coach K judge**.
 
-The same agent, same scenario, same judge — graded on any provider by changing `--model`:
+The same agent, same scenario, same judge — graded on any provider by changing `--model` (exact id) or `--provider` (resolve each agent's tier for that provider):
 
 ```bash
-dreamteam eval --agent bird --model claude-opus-4-8       # Claude (claude -p, Max)
-dreamteam eval --agent bird --model ollama/qwen3.6        # Ollama (local :11434)
-dreamteam eval --agent bird --model gemini/gemini-2.5-flash  # Gemini CLI
-dreamteam eval --agent bird --model codex/gpt-5.5         # Codex (codex exec)
-dreamteam eval --trials 3                                 # sample each scenario N times
+dreamteam eval --agent bird --model claude-opus-4-8         # exact Claude model (Max)
+dreamteam eval --agent bird --model ollama/qwen3.6          # exact Ollama model (local :11434)
+dreamteam eval --agent bird --provider gemini              # bird's tier → Gemini's model
+dreamteam eval --agent shaq --provider codex               # shaq's tier → Codex (codex exec)
+dreamteam eval --trials 3                                   # sample each scenario N times
 ```
 
-`--model` routes on the `provider/` prefix (bare id = Claude). It affects only the agents under test — **the judge stays on Claude** so comparisons share a baseline. Cost: Claude = Max, Ollama = local/free, Gemini = free tier, Codex = ChatGPT subscription.
+`--model` routes on the `provider/` prefix (bare id = Claude); `--provider` resolves each agent's tier/pin for that provider (the two are mutually exclusive). Either affects only the agents under test — **the judge stays on Claude** so comparisons share a baseline. Cost: Claude = Max, Ollama = local/free, Gemini = free tier, Codex = ChatGPT subscription. The run's resolved model is recorded and shown per run in the dashboard.
 
 ```bash
 dreamteam web        # http://localhost:3000 — eval report, /admin/models (per-provider picker),
