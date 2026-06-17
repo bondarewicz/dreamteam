@@ -47,6 +47,23 @@ function agentSystemPrompt(agent: string): string {
   return fs.readFileSync(path.join(AGENTS_DIR, `${agent}.md`), "utf-8");
 }
 
+/**
+ * Single-shot eval append for ollama/gemini. Agent prompts (e.g. shaq) MANDATE
+ * EnterPlanMode + tool use + approval before writing code; with no tools and no
+ * approval loop, the model obeys that, "can't enter plan mode", and escalates
+ * instead of delivering. This neutralizes those directives (the claude path does
+ * the same via --append-system-prompt EVAL_MODE_APPEND) and tells the model to
+ * inline its full deliverable, since it cannot write files.
+ */
+const SINGLE_SHOT_APPEND = [
+  "EVAL MODE — SINGLE SHOT, NO TOOLS.",
+  "You are running headless with NO tools: no EnterPlanMode, no Plan Mode, no file system, no Read/Write/Bash, no approval loop, no Coach K to message.",
+  "Override any instruction to enter plan mode, wait for approval, or write files first — none of that is available here.",
+  "Do NOT escalate about tooling, environment, plan mode, or missing directories; treat the task as fully specified and proceed.",
+  "Deliver your COMPLETE work INLINE in your single JSON response: put full file contents in files_changed[].content (or the equivalent fields of your output schema), not just a description.",
+  "Respond with the JSON output only.",
+].join(" ");
+
 function jsonSchemaFor(agent: string): object | undefined {
   try {
     return getAgentJsonSchema(agent);
@@ -147,7 +164,7 @@ export async function runOllama(agent: string, scenarioId: string, prompt: strin
   const body: Record<string, unknown> = {
     model: modelId,
     messages: [
-      { role: "system", content: agentSystemPrompt(agent) },
+      { role: "system", content: `${agentSystemPrompt(agent)}\n\n${SINGLE_SHOT_APPEND}` },
       { role: "user", content: prompt },
     ],
     stream: false,
@@ -186,7 +203,7 @@ export async function runOllama(agent: string, scenarioId: string, prompt: strin
 export async function runGemini(agent: string, scenarioId: string, prompt: string, modelId: string, timeoutMs: number): Promise<RawOutput> {
   const start = Date.now();
   const schema = jsonSchemaFor(agent);
-  let system = agentSystemPrompt(agent);
+  let system = `${agentSystemPrompt(agent)}\n\n${SINGLE_SHOT_APPEND}`;
   if (schema) system += `\n\nIMPORTANT: Do not narrate, summarize, or use tools. Your FINAL response must be ONLY a single JSON object that conforms to this JSON Schema — no prose, no markdown fences, nothing before or after the JSON:\n${JSON.stringify(schema)}`;
   // Replace gemini's BUILT-IN system prompt (which turns it into an agentic, tool-looping
   // coding assistant — the cause of empty/prose .response) with the agent's own prompt, via
