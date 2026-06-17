@@ -218,7 +218,7 @@ agent, decide native vs delegated** (full design: `docs/spec-hybrid-team/spec.md
 **Routing decision (per agent, before each spawn):**
 ```bash
 # Resolve the agent's effective provider via the ONE routing authority (no parallel table).
-bun "$DREAMTEAM_REPO/scripts/print-provider.ts" <agent>   # prints "claude" or "ollama|gemini|codex"
+bun "$DREAMTEAM_ROOT/scripts/print-provider.ts" <agent>   # prints "claude" or "ollama|gemini|codex"
 ```
 If no helper is available, the rule is: read the agent's `model.provider` frontmatter
 field — unset/`claude` → **NATIVE**; `ollama|gemini|codex` → **DELEGATED**.
@@ -242,7 +242,7 @@ field — unset/`claude` → **NATIVE**; `ollama|gemini|codex` → **DELEGATED**
    ```
 2. **Dispatch** (the dispatcher resolves the provider, enforces subscription-only auth, runs in a session-scoped sandbox, and validates the contract):
    ```bash
-   bun "$DREAMTEAM_REPO/evals/src/team-dispatch.ts" <agent> "$BRIEF" | tee /tmp/turn.json
+   bun "$DREAMTEAM_ROOT/evals/src/team-dispatch.ts" <agent> "$BRIEF" | tee /tmp/turn.json
    ```
 3. **Read the `TurnResult` JSON.** `ok:true` → use `.output` (validated contract JSON) exactly as you'd use a native subagent's result — it folds into the same reviewer loop + human checkpoints. `.artifactsDir` (codex/ollama impl, Phase 2+) holds sandboxed file writes for review; **never apply them until a human approves at the checkpoint**.
 4. **`ok:false` → FAIL LOUD.** Use **AskUserQuestion**: retry / skip this agent (partial team — record it) / re-pin to another subscription-or-local provider / abort. **Never** fall back to a metered API; never silently substitute Claude for a non-claude agent.
@@ -254,13 +254,13 @@ When Shaq's `model.provider` is `codex`, `gemini`, or `ollama`, you MUST run the
 
 1. **Plan phase (read-only):**
    ```bash
-   bun "$DREAMTEAM_REPO/evals/src/team-dispatch.ts" shaq "$BRIEF" --phase plan > /tmp/plan.json
+   bun "$DREAMTEAM_ROOT/evals/src/team-dispatch.ts" shaq "$BRIEF" --phase plan > /tmp/plan.json
    ```
    The dispatcher runs codex `--sandbox read-only` → emits a plan, **zero writes** (it fails the turn if any write occurs). Extract `.output` to a file, e.g. `/tmp/plan.txt`.
 2. **Human approval checkpoint (MANDATORY):** surface the plan via **AskUserQuestion** — approve / revise / abort — exactly as the native Shaq plan-mode checkpoint. Do NOT proceed without go-ahead.
 3. **Implement phase (workspace-write, with the approved plan):**
    ```bash
-   bun "$DREAMTEAM_REPO/evals/src/team-dispatch.ts" shaq "$BRIEF" --phase implement --plan /tmp/plan.txt > /tmp/impl.json
+   bun "$DREAMTEAM_ROOT/evals/src/team-dispatch.ts" shaq "$BRIEF" --phase implement --plan /tmp/plan.txt > /tmp/impl.json
    ```
    codex writes the files into the session sandbox (`.artifactsDir`); `.writtenFiles` lists them. The dispatcher verifies cited `files_changed` paths actually exist (no hallucinated writes).
 4. **Review + promote:** diff `.artifactsDir`/`.writtenFiles`, run them through the reviewer loop + checkpoint, and **promote into the worktree only on approval** (BR-10). Never auto-apply.
