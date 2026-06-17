@@ -14,6 +14,7 @@ import path from "path";
 import fs from "fs";
 import { assetsDir, readConfig, contentSha, dataDir } from "../scripts/paths.ts";
 import { provision, unprovision, knownHarnesses } from "../adapters/provision.ts";
+import { checkProviders } from "../scripts/doctor.ts";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -64,53 +65,20 @@ function cmdStatus(): number {
   return 0;
 }
 
-async function bin(name: string, args: string[]): Promise<{ ok: boolean; detail: string }> {
-  try {
-    const proc = Bun.spawn([name, ...args], { stdout: "pipe", stderr: "pipe" });
-    const out = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    return { ok: code === 0, detail: out.trim().split("\n")[0] ?? "" };
-  } catch {
-    return { ok: false, detail: "not on PATH" };
-  }
-}
-
-async function reachable(url: string): Promise<boolean> {
-  try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(3000) });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
 async function cmdDoctor(): Promise<number> {
   console.log("Dream Team doctor — provider reachability\n");
-  const rows: Array<[string, boolean, string]> = [];
-
-  const claude = await bin("claude", ["--version"]);
-  rows.push(["Claude Code (claude)", claude.ok, claude.ok ? claude.detail : "install: https://claude.ai/code"]);
-
-  const ollamaUp = await reachable("http://localhost:11434/api/tags");
-  rows.push(["Ollama (:11434)", ollamaUp, ollamaUp ? "serving" : "start: `ollama serve`"]);
-
-  const gemini = await bin("gemini", ["--version"]);
-  const geminiAuth = !!process.env.GEMINI_API_KEY || fs.existsSync(path.join(process.env.HOME ?? "~", ".gemini"));
-  rows.push(["Gemini CLI (gemini)", gemini.ok && geminiAuth, gemini.ok ? (geminiAuth ? gemini.detail : "installed, but no GEMINI_API_KEY / ~/.gemini auth") : "not on PATH"]);
-
-  const codex = await bin("codex", ["--version"]);
-  const codexAuth = fs.existsSync(path.join(process.env.HOME ?? "~", ".codex")) || !!process.env.OPENAI_API_KEY || !!process.env.CODEX_API_KEY;
-  rows.push(["Codex CLI (codex)", codex.ok && codexAuth, codex.ok ? (codexAuth ? codex.detail : "installed, but not logged in (`codex login`) / no API key") : "not on PATH"]);
-
-  let allOk = true;
-  for (const [label, ok, detail] of rows) {
-    console.log(`  ${ok ? "✓" : "✗"} ${label.padEnd(24)} ${detail}`);
-    if (!ok) allOk = false;
+  const checks = await checkProviders();
+  for (const c of checks) {
+    console.log(`  ${c.ok ? "✓" : "✗"} ${c.label.padEnd(28)} ${c.detail}`);
   }
   const cfg = readConfig();
   console.log(`\n  install manifest: ${cfg ? `present (${cfg.installed.length} files)` : "missing — run dreamteam install"}`);
-  console.log(allOk ? "\nAll providers reachable." : "\nSome providers unavailable (only those you intend to use need to pass).");
-  return allOk ? 0 : 0; // non-fatal: not everyone uses all three
+  const requiredOk = checks.filter((c) => c.required).every((c) => c.ok);
+  console.log(requiredOk
+    ? "\nClaude Code present — interactive /team and the judge will work."
+    : "\nClaude Code missing — install it (interactive /team and the eval judge run on Claude).");
+  console.log("Optional providers (Ollama/Gemini/Codex) only need to pass if you eval on them.");
+  return 0; // non-fatal: not everyone uses all providers
 }
 
 function cmdList(): number {

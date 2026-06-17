@@ -24,6 +24,7 @@ const PAGE_SIZE = 25;
 function ADMIN_SUBNAV(active: string): string {
   const items = [
     { href: "/admin/models", label: "Agent Models" },
+    { href: "/admin/providers", label: "Providers" },
     { href: "/admin/session-judge", label: "Session Judge Prompt" },
     { href: "/admin/session-judge/calibration", label: "Judge Calibration" },
   ];

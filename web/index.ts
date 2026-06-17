@@ -32,7 +32,7 @@ import {
   draftDryRunHandler,
   draftPromoteHandler,
 } from "./src/routes/scenarios.ts";
-import { adminModelsHandler, adminModelsSaveHandler } from "./src/routes/admin.ts";
+import { adminModelsHandler, adminModelsSaveHandler, adminProvidersHandler, adminProvidersTestHandler } from "./src/routes/admin.ts";
 import {
   sessionsListHandler, sessionDetailHandler, evaluateSessionHandler,
   judgePromptHandler, judgePromptSaveHandler,
@@ -68,6 +68,8 @@ router.get("/api/eval-runs/live", evalRunsSSEHandler);
 // Admin — agent model/version editor
 router.get("/admin/models", adminModelsHandler);
 router.post("/admin/models", adminModelsSaveHandler);
+router.get("/admin/providers", adminProvidersHandler);
+router.post("/admin/providers/test", adminProvidersTestHandler);
 
 // Sessions — rehydrated Claude Code sessions across all projects
 router.get("/sessions", sessionsListHandler);

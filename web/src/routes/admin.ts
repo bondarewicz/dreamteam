@@ -11,7 +11,13 @@ import path from "path";
 import fs from "fs";
 import { Layout, maybeLayout } from "../views/Layout.ts";
 import { AdminModelsPage, type AgentModelRow, type FlashMessage } from "../views/Admin.ts";
+import { ProvidersPage, PingResultFragment } from "../views/Providers.ts";
 import { getAvailableModels } from "../models-api.ts";
+import { checkProviders, type ProviderId } from "../../../scripts/doctor.ts";
+import { pingProvider } from "../../../scripts/provider-ping.ts";
+import { readConfig } from "../../../scripts/paths.ts";
+
+const KNOWN_PROVIDER_IDS: ProviderId[] = ["claude", "ollama", "gemini", "codex"];
 
 function html(content: string, status = 200): Response {
   return new Response(content, {
@@ -54,6 +60,39 @@ export async function adminModelsHandler(req: Request, _params: Record<string, s
   ]);
   const body = AdminModelsPage(rows, modelsResult);
   return html(maybeLayout(req, "Agent Models", body, "/admin/models"));
+}
+
+/** GET /admin/providers — doctor-in-the-browser (read-only reachability). */
+export async function adminProvidersHandler(req: Request, _params: Record<string, string>): Promise<Response> {
+  const checks = await checkProviders();
+  const cfg = readConfig();
+  const manifest = { present: !!cfg, count: cfg?.installed.length ?? 0 };
+  const body = ProvidersPage(checks, manifest);
+  return html(maybeLayout(req, "Providers", body, "/admin/models"));
+}
+
+/** POST /admin/providers/test — live round-trip probe for one provider (htmx fragment). */
+export async function adminProvidersTestHandler(req: Request, _params: Record<string, string>): Promise<Response> {
+  let provider = "", model: string | undefined;
+  const ct = req.headers.get("content-type") ?? "";
+  try {
+    if (ct.includes("application/json")) {
+      const body = (await req.json()) as { provider?: string; model?: string };
+      provider = (body.provider ?? "").trim();
+      model = body.model?.trim() || undefined;
+    } else {
+      const params = new URLSearchParams(await req.text());
+      provider = (params.get("provider") ?? "").trim();
+      model = params.get("model")?.trim() || undefined;
+    }
+  } catch { /* fall through to validation */ }
+
+  if (!KNOWN_PROVIDER_IDS.includes(provider as ProviderId)) {
+    return html(`<span class="ping-badge ping-err">live ✗</span> <span class="ping-fail">unknown provider: ${provider.replace(/[<>&]/g, "")}</span>`, 400);
+  }
+
+  const result = await pingProvider(provider as ProviderId, model);
+  return html(PingResultFragment(result));
 }
 
 /** Rewrite the `model:` line (or insert after `name:`) in an agent file. */

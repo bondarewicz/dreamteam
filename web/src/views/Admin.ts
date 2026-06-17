@@ -121,6 +121,7 @@ export function AdminModelsPage(
   return `
     <div class="filters" style="margin-bottom:20px">
       <a class="filter-btn active" href="/admin/models" style="text-decoration:none">Agent Models</a>
+      <a class="filter-btn" href="/admin/providers" style="text-decoration:none">Providers</a>
       <a class="filter-btn" href="/admin/session-judge" style="text-decoration:none">Session Judge Prompt</a>
       <a class="filter-btn" href="/admin/session-judge/calibration" style="text-decoration:none">Judge Calibration</a>
     </div>
