@@ -1,39 +1,40 @@
 # Releasing `@bondarewicz/dreamteam`
 
-Beta from a branch (npm dist-tag `beta`), tested in the open, promoted to stable
-(`latest`) only on merge to `main`. Betas never become what a plain
-`bun add -g @bondarewicz/dreamteam` resolves to.
+**Releases are automatic.** Merge (or push) a conventional-commit `feat:`/`fix:` to
+`main` and CI publishes a new version — no version bump, no release PR, no manual tags.
 
-| Channel | Version | Published with | Installed with |
-|---------|---------|----------------|----------------|
-| **Beta** (any non-`main` branch) | `2.0.0-beta.<N>` | `npm publish --tag beta` | `bun add -g @bondarewicz/dreamteam@beta` |
-| **Stable** (`main`) | `2.0.0` | `npm publish` *(→ `latest`)* | `bun add -g @bondarewicz/dreamteam` |
+## How it works — `.github/workflows/release.yml`
 
-Semver `-beta.N` is excluded from `^`/`~` ranges, and the `beta` dist-tag keeps it off
-`latest`. Until the first stable ships there is **no `latest`** — install `@beta` explicitly.
+On every push to `main`, `scripts/next-version.ts` reads the conventional-commit
+subjects since the last `v*` tag and picks the bump:
 
-## CI (the normal path) — `.github/workflows/release.yml`
+| Commit / squash subject on `main` | Result |
+|---|---|
+| `feat:` / `feat(scope):` | **minor** → publish |
+| `fix:` | **patch** → publish |
+| `feat!:` / `fix!:` / `BREAKING CHANGE:` footer | **major** → publish |
+| `chore:` `docs:` `ci:` `test:` `refactor:` `style:` | **no release** (workflow runs, finds nothing, exits) |
 
-- Push to `feat/distribution` (or any non-`main` branch) → publishes `…-beta.<run_number>`
-  to the `beta` tag.
-- Push to `main` → publishes the stable version to `latest`.
-- Both run with OIDC **provenance** and are gated on the **unit/integration suite** (`bun test`).
-- `workflow_dispatch` with `dry_run: true` packs without publishing.
+Then CI runs the LLM-free test gate, publishes to npm `latest` (OIDC trusted
+publishing), tags `vX.Y.Z`, and cuts a GitHub Release with auto-generated notes.
 
-### One-time setup (before the first CI publish)
-1. **Claim the name + enable trusted publishing.** On npmjs.com create/own the
-   `@bondarewicz` scope. Either (a) add a **Trusted Publisher** for this repo+workflow
-   (no token needed — preferred), or (b) create a granular **automation token** and add it
-   as the repo secret `NPM_TOKEN` (the workflow reads `NODE_AUTH_TOKEN`).
-2. **2FA:** trusted publishing / automation tokens bypass the interactive OTP that would
-   otherwise block CI.
+**The version of record is git tags + npm, not `package.json`** — that field is a
+managed placeholder (`0.0.0-managed`). CI sets the real version in the workspace at
+publish time, so the published tarball (and every installed user's `dreamteam status`)
+is always correct. There is **no release-please** and **no release PR**.
 
-## The eval gate is LOCAL (important)
+## What you do
 
-CI runs the LLM-free `bun test` suite. It does **not** run the behavioral eval
-(`bun evals/src/cli.ts --trials 3`) — that needs Claude/Max auth CI lacks, and
-`ANTHROPIC_API_KEY` would bill the API (which we avoid). **Before triggering a release,
-run the eval gate locally:**
+1. Land changes via PR (main is protected) — or push directly (you have admin bypass).
+2. Use a conventional-commit **PR title / squash subject**: that's what CI reads
+   (`feat(cli): …`, `fix: …`). chore/docs/ci subjects ship nothing.
+3. Merge → it publishes. Watch the `release` workflow run to confirm.
+
+## Run the eval gate LOCALLY first (important)
+
+CI runs only `bun test`. It does NOT run the behavioral eval (needs Claude/Max auth CI
+lacks; `ANTHROPIC_API_KEY` would bill the API). Before merging changes to agent/command
+specs:
 
 ```bash
 bun evals/src/cli.ts --trials 3        # behavioral gate (Max-backed judge)
@@ -41,26 +42,16 @@ bun test                               # same suite CI runs
 bun pack:check                         # inspect tarball contents/size
 ```
 
-## Manual beta (fallback, no CI)
+## Beta channel (non-`main` branches)
 
-```bash
-npm login                              # once, as the package owner
-bun version:beta                       # 2.0.0 → 2.0.0-beta.0 (then .1, .2, …)
-bun publish:beta                       # npm publish --tag beta --access public
-# test the REAL published artifact in a clean shell:
-bun add -g @bondarewicz/dreamteam@beta
-dreamteam doctor && dreamteam install && dreamteam web
-# iterate: bun version:beta → bun publish:beta → retest
-```
+Push any non-`main` branch → publishes `<last-version>-beta.g<sha>` to the `beta`
+dist-tag. Install with `bun add -g @bondarewicz/dreamteam@beta`.
 
-## Promote to stable (on merge to `main`)
+## Dry run
 
-```bash
-# after feat/distribution → main:
-npm version 2.0.0 --no-git-tag-version # drop the -beta suffix (or bump as needed)
-# CI on main publishes latest automatically; or manually:
-bun publish:stable
-```
+`workflow_dispatch` on `release.yml` with `dry_run: true` packs without publishing.
 
-Optionally clean up: `npm dist-tag rm @bondarewicz/dreamteam beta` once a stable `latest`
-exists, or `npm deprecate '@bondarewicz/dreamteam@<beta range>' 'superseded by 2.0.0'`.
+## One-time setup (already done)
+
+npm trusted publishing (OIDC) for this repo + workflow (or the `NPM_TOKEN` secret). 2FA
+is bypassed for trusted publishing / automation tokens.

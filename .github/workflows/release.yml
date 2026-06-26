@@ -1,16 +1,18 @@
 name: release
 
-# Beta from any non-main branch (e.g. feat/distribution) → npm dist-tag `beta`.
-# Stable from main → dist-tag `latest`. PUBLIC package so people can install it.
-# No provenance though: npm only verifies provenance for PUBLIC source repos, and
-# this repo is private — publishing with --provenance fails with E422. So the
-# package is public + unattested while the repo stays private.
+# AUTO-RELEASE ON MERGE (Option 1). Every push to main derives the next version
+# from conventional commits since the last v* tag (feat→minor, fix→patch,
+# breaking→major; chore/docs/ci/test → no release) via scripts/next-version.ts,
+# then publishes to npm `latest`, tags it, and cuts a GitHub Release with generated
+# notes. No release-please, no release PR, no version bump committed back to main —
+# the version of record is git tags + npm; package.json is a managed placeholder.
 #
-# GATE: the unit/integration suite (bun test) runs here — it's LLM-free and CI-safe.
-# The BEHAVIORAL eval gate (`bun evals/src/cli.ts --trials 3`) is NOT run in CI: it
-# needs Claude/Max auth that CI doesn't have, and ANTHROPIC_API_KEY would bill the API
-# (the repo deliberately avoids that). Run it LOCALLY before triggering a release —
-# see RELEASING.md.
+# Non-main branches publish a sha-stamped `beta`. PUBLIC package, no provenance
+# (npm only attests PUBLIC source repos; this repo is private → --provenance E422).
+#
+# GATE: the LLM-free unit/integration suite (bun test) runs here. The BEHAVIORAL
+# eval gate (bun evals/src/cli.ts --trials 3) is NOT run in CI (needs Max auth; the
+# API would bill). Run it LOCALLY before merging a release — see RELEASING.md.
 
 on:
   push:
@@ -23,22 +25,20 @@ on:
         default: false
 
 permissions:
-  contents: write # create the GitHub Release + tag on stable
-  id-token: write # OIDC provenance
+  contents: write # create the GitHub Release + tag
+  id-token: write # OIDC trusted publishing
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Surface npm publishes in the repo's Deployments (beta vs latest). npm OIDC
-    # trusted-publishing matches on repo + workflow file, not environment, so this
-    # is additive. github-pages stays its own environment in deploy-site.yml.
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'npm-latest' || 'npm-beta' }}
       url: https://www.npmjs.com/package/@bondarewicz/dreamteam
     steps:
       - uses: actions/checkout@v7
         with:
-          persist-credentials: false # publish is via OIDC; GH Release uses GH_TOKEN env, not git creds
+          fetch-depth: 0 # full history + tags for conventional-commit versioning
+          persist-credentials: false # npm publish via OIDC; GH Release uses GH_TOKEN
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -63,45 +63,57 @@ jobs:
       - name: Pack sanity (contents + size)
         run: npm pack --dry-run
 
-      - name: Resolve beta version (commit sha)
-        if: github.ref != 'refs/heads/main'
+      # ── main: auto-version from conventional commits ──────────────────────────
+      - name: Compute next version (main)
+        id: ver
+        if: github.ref == 'refs/heads/main'
         run: |
-          BASE=$(node -p "require('./package.json').version.split('-')[0]")
-          SHA=$(git rev-parse --short=7 HEAD)
-          VER="${BASE}-beta.g${SHA}"
-          echo "Publishing ${VER}"
-          npm version "${VER}" --no-git-tag-version
-
-      - name: Publish beta (non-main → tag beta)
-        # No --provenance: the GitHub repo is private, and npm only verifies
-        # provenance for PUBLIC source repos (publish fails with E422 otherwise).
-        if: github.ref != 'refs/heads/main' && inputs.dry_run != true
-        run: npm publish --tag beta --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NEXT=$(bun scripts/next-version.ts)
+          if [ -z "$NEXT" ]; then
+            echo "No releasable commits since the last tag — nothing to publish."
+          else
+            echo "Next version: ${NEXT}"
+            npm version "${NEXT}" --no-git-tag-version
+          fi
+          echo "next=${NEXT}" >> "$GITHUB_OUTPUT"
 
       - name: Publish stable (main → tag latest)
-        if: github.ref == 'refs/heads/main' && inputs.dry_run != true
-        # Skip if this version is already on npm (e.g. a docs/cleanup merge with no
-        # version bump) — npm rejects republishing a version, which would fail the run.
+        if: github.ref == 'refs/heads/main' && steps.ver.outputs.next != '' && inputs.dry_run != true
         run: |
-          VER=$(node -p "require('./package.json').version")
+          VER="${{ steps.ver.outputs.next }}"
           if npm view "@bondarewicz/dreamteam@${VER}" version >/dev/null 2>&1; then
-            echo "v${VER} already on npm — skipping publish (no version bump)."
+            echo "v${VER} already on npm — skipping (re-run safety)."
           else
             npm publish --access public
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: GitHub Release (main → tag the published version)
-        if: github.ref == 'refs/heads/main' && inputs.dry_run != true
+      - name: GitHub Release + tag (main)
+        if: github.ref == 'refs/heads/main' && steps.ver.outputs.next != '' && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VER=$(node -p "require('./package.json').version")
+          VER="${{ steps.ver.outputs.next }}"
           if gh release view "v${VER}" >/dev/null 2>&1; then
             echo "Release v${VER} already exists — skipping."
           else
             gh release create "v${VER}" --title "v${VER}" --generate-notes --target "$GITHUB_SHA"
           fi
+
+      # ── non-main: sha-stamped beta off the last released version ───────────────
+      - name: Resolve beta version (commit sha)
+        if: github.ref != 'refs/heads/main'
+        run: |
+          BASE=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null | sed 's/^v//')
+          BASE=${BASE:-0.0.0}
+          SHA=$(git rev-parse --short=7 HEAD)
+          VER="${BASE}-beta.g${SHA}"
+          echo "Publishing ${VER}"
+          npm version "${VER}" --no-git-tag-version
+
+      - name: Publish beta (non-main → tag beta)
+        if: github.ref != 'refs/heads/main' && inputs.dry_run != true
+        run: npm publish --tag beta --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
