@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/bondarewicz/dreamteam/compare/v1.1.0...v1.2.0) (2026-06-26)
+
+
+### Features
+
+* **cli:** add `dreamteam upgrade` command — updates the global package then re-syncs `~/.claude` (the step `install` can't do) ([2706eaa](https://github.com/bondarewicz/dreamteam/commit/2706eaa))
+
 ## [1.1.0](https://github.com/bondarewicz/dreamteam/compare/dreamteam-v1.0.2...dreamteam-v1.1.0) (2026-06-26)
 
 
