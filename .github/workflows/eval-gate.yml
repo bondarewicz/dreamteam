@@ -1,0 +1,67 @@
+name: Eval Gate
+
+# s24 production pattern WITHOUT metered API spend. Agent/command spec changes must
+# clear the --trials 3 eval gate before merge — but the evals run LOCALLY on the
+# maintainer's Claude Max subscription (the eval harness shells out to `claude -p`),
+# never via a paid ANTHROPIC_API_KEY in CI. CI's job is therefore only to:
+#   1. compute exactly which agents/commands changed and the local commands to run, and
+#   2. BLOCK the PR until a human certifies the gate passed by adding the `evals-cleared`
+#      label (added after running locally + reviewing in the web app, the source of truth).
+# Zero tokens are spent here. The deterministic checks (tests, unicode, site-sync) run in
+# test.yml on every PR, so they are not duplicated.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main]
+    paths:
+      - "agents/**"
+      - "commands/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Eval gate (local-run certification)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Compute eval-gate scope + write PR summary
+        id: scope
+        run: |
+          BASE="origin/${{ github.base_ref }}"
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" 2>/dev/null || true
+          CHANGED=$(git diff --name-only "$BASE"...HEAD 2>/dev/null || git diff --name-only HEAD~1...HEAD)
+          echo "$CHANGED" | bun scripts/eval-gate-scope.ts > scope.json
+          cat scope.json
+          REQUIRED=$(bun -e 'console.log(JSON.parse(require("fs").readFileSync("scope.json","utf8")).required)')
+          echo "required=$REQUIRED" >> "$GITHUB_OUTPUT"
+
+      # Block ONLY when specs changed AND the human has not yet certified a local pass.
+      - name: Require local-eval certification (evals-cleared label)
+        if: github.event_name == 'pull_request' && steps.scope.outputs.required == 'true'
+        env:
+          CLEARED: ${{ contains(github.event.pull_request.labels.*.name, 'evals-cleared') }}
+        run: |
+          if [ "$CLEARED" = "true" ]; then
+            echo "✅ 'evals-cleared' label present — maintainer certified the local eval gate passed."
+            exit 0
+          fi
+          echo "::error::Agent/command specs changed. Run the eval gate LOCALLY on your Max subscription (see the job summary for the exact commands), review the run in the web app, then add the 'evals-cleared' label to this PR. No API tokens are spent in CI."
+          exit 1

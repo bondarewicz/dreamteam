@@ -40,6 +40,21 @@ async function phaseAgents(
   console.log(`=== Phase 1: Agent Runs (parallel=${options.parallel}${trialsLabel}) ===`);
   fs.mkdirSync(rawDir, { recursive: true });
 
+  // Defense against cross-run contamination: scenarios write scratch to `.tmp/`
+  // (gitignored), and a leftover dir from a prior run gets "found" and verified
+  // instead of implemented (the scenario-14 failure). Scratch-writing agents now
+  // also get an isolated cwd (agent-runner.ts), but wipe the shared repo `.tmp/`
+  // once at run start as belt-and-suspenders for any non-isolated writes.
+  if (!options.dryRun) {
+    const sharedTmp = path.join(process.cwd(), ".tmp");
+    try {
+      fs.rmSync(sharedTmp, { recursive: true, force: true });
+      console.log(`  cleaned stale scratch: ${sharedTmp}`);
+    } catch {
+      // best-effort — a missing or busy .tmp must not abort the run
+    }
+  }
+
   const timeoutMs =
     options.timeoutPerPhase > 0 ? options.timeoutPerPhase * 1000 : 300 * 1000;
 

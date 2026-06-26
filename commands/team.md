@@ -209,6 +209,24 @@ Use the **AskUserQuestion** tool to ask the user:
 
 ---
 
+## STEP 2a: Model Cascade for your own discovery work (s21)
+
+The named roles carry deliberate tiers (`deep` = Opus for Bird/MJ/Kobe/Pippen judgment;
+`mid` = Sonnet for Shaq/Magic/Drexler) — **do not change those here.** This rule is about
+the *throwaway discovery subagents YOU (Coach K) spawn* while orchestrating: "does a
+`PaymentService` already exist?", "list every file that imports X", "which test runner
+does this repo use?". That work is mechanical retrieval, not reasoning.
+
+Spawn those at the **`fast` tier (Haiku)** — `Agent({ model: "claude-haiku-4-5", … })` or
+the `Explore` subagent type. The cascade: start cheap for retrieval, and only escalate a
+*specific* question to a higher tier when Haiku's answer is genuinely ambiguous or the
+decision is costly to get wrong. Cost is dominated by input tokens multiplied across every
+call, so keeping discovery on Haiku and reserving Opus for the named roles' judgment is
+free quality — the retrieval is identical, the bill is a fraction. Never put a *decision*
+(domain correctness, architecture, risk) on the cheap tier; never put *retrieval* on Opus.
+
+---
+
 ## STEP 2b: Provider Routing & Delegation (Hybrid — applies to every workflow)
 
 Each agent can run on a different provider (Claude/Codex/Gemini/Ollama) on its own
@@ -743,15 +761,48 @@ Use **delegate mode** so you stay focused on coordination and don't implement an
 
 Spawn Bird and MJ simultaneously. They work in parallel and exchange findings via messages.
 
-**Tasks to create:**
-1. **Domain Analysis** (assigned to Bird) — no dependencies
-2. **Architecture Design** (assigned to MJ) — no dependencies (concurrent with Bird)
-3. **Context Curation** (assigned to Magic) — blocked by tasks 1 and 2
-4. **Checkpoint & Plan Approval** (assigned to Coach K) — blocked by task 3
-5. **Implementation** (unassigned) — blocked by task 4
-6. **Quality Review** (unassigned) — blocked by task 5
-7. **Stability Review** (unassigned) — blocked by task 5
-8. **Synthesis** (unassigned) — blocked by tasks 6 and 7
+#### Build the Task Graph FIRST (explicit DAG, not prose)
+
+Before spawning any agent, materialize the phase plan as a real task graph with
+`TaskCreate` + `TaskUpdate` (`blocks`/`blockedBy` edges). This is not bookkeeping —
+it is the orchestration contract: an agent reads its own `blockedBy` via `TaskGet`
+(Shaq, Kobe, Pippen, Drexler all do this in their Team Protocol) and refuses to start
+until every blocker is `completed`. Encoding dependencies as data — instead of trusting
+yourself to follow prose phase ordering — is what prevents the classic failures: a
+reviewer starting before code exists, or synthesis running on half the inputs.
+
+The graph is a **diamond** (s07): analysis fans out, implementation is the waist,
+review fans out again, synthesis converges.
+
+```
+        ┌─ #1 Domain (Bird) ─┐                          ┌─ #6 Quality (Kobe) ──┐
+ start ─┤                    ├─ #3 Curate ─ #4 Checkpoint ─ #5 Implement (Shaq) ─┤                       ├─ #8 Synthesis (Magic)
+        └─ #2 Arch (MJ) ─────┘   (Magic)     (Coach K)                          ├─ #7 Stability (Pippen)┤
+                                                                                 └─ (Drexler scope) ─────┘
+```
+
+Create the nodes (status defaults to `pending`), then wire the edges:
+
+```
+#1 Domain Analysis        → owner Bird    · blockedBy: []           · blocks: [#3]
+#2 Architecture Design    → owner MJ      · blockedBy: []           · blocks: [#3]   (concurrent with #1)
+#3 Context Curation       → owner Magic   · blockedBy: [#1,#2]      · blocks: [#4]
+#4 Checkpoint & Approval  → owner Coach K · blockedBy: [#3]         · blocks: [#5]
+#5 Implementation         → owner Shaq    · blockedBy: [#4]         · blocks: [#6,#7]
+#6 Quality Review         → owner Kobe    · blockedBy: [#5]         · blocks: [#8]
+#7 Stability Review       → owner Pippen  · blockedBy: [#5]         · blocks: [#8]
+#8 Synthesis              → owner Magic   · blockedBy: [#6,#7]      · blocks: []
+```
+
+(Drexler's scope review runs in the #6/#7 review fan-out and also blocks #8.)
+
+**Traversal rule (how you decide what to spawn):** never spawn by reading this doc
+top-to-bottom. Instead, repeatedly: scan for `pending` tasks whose every `blockedBy`
+is `completed` → spawn those (in parallel when there is more than one) → mark
+`completed` as agents report back → re-scan. A node becomes ready the moment its
+blockers clear, which is exactly why #1/#2 and #6/#7 run concurrently with no special
+casing. If a task fails, its dependents stay blocked — the blast radius is visible in
+the graph rather than hidden in a phase you skipped.
 
 #### Spawn Bird:
 
@@ -827,6 +878,44 @@ After spawning Bird and MJ, wait for the FIRST MESSAGE from each agent as the ha
 **Wait for both Bird and MJ to complete before proceeding to Phase 1b.**
 
 Log completions with individual findings as part of your coordination notes.
+
+#### Liveness during a phase (heartbeat + reclaim — applies to EVERY concurrent phase)
+
+The join gate above proves an agent *started*. It does not prove the agent is still
+alive 8 minutes later. A backgrounded agent can wedge (a stuck tool call, a provider
+hang) and emit nothing — and "silent" is indistinguishable from "still working hard."
+Do not wait on a silent agent indefinitely. Run this liveness loop for every
+`run_in_background: true` phase (Phase 1 Bird+MJ, Phase 4 Kobe+Pippen+Drexler):
+
+1. **Track last-contact per agent.** Every message received (status, handoff, escalation)
+   resets that agent's clock. A long-running agent should emit a brief progress
+   heartbeat periodically; its Team Protocol already routes status to you.
+2. **Silence threshold.** If an agent has sent NO message for ~3 minutes, send it a
+   `SendMessage` status ping: "Still active? Reply with current step." A live agent
+   answers within a turn.
+3. **Reclaim on no-heartbeat.** If the ping goes unanswered for another ~2 minutes,
+   treat the agent as crashed: leave its task `blockedBy`-intact but mark its in-flight
+   work reclaimable, send a `shutdown_request`, wait for (or time out) the completion
+   notification, then **respawn it ONCE** with the identical task + brief. Re-use the
+   same `name`/`team_name` so the graph node is unchanged.
+4. **Escalate after one failed reclaim.** If the respawned agent also goes silent past
+   the threshold, stop and surface to the user — do not burn the session looping. Two
+   strikes is a real harness/provider fault, not a transient.
+
+#### Fallback for delegated (non-Claude) agents
+
+When an agent's turn is DELEGATED (provider ≠ claude — see STEP 2b) and it fails, first
+classify the failure the same way the eval harness does (`scripts/error-recovery.ts`:
+transient | user_actionable | permanent):
+- **transient** (timeout, 5xx, rate limit) → retry the delegated turn once with backoff.
+- **still failing, or user_actionable** (auth/quota/CLI missing) → **fall back to the
+  agent's Claude tier** for this turn (resolve via the routing authority, provider
+  `claude`) so the session is never blocked by one provider being down. Note the
+  fallback in your coordination log. Unlike the eval harness — where a cross-provider
+  fallback would corrupt the per-provider comparison and is therefore forbidden — the
+  interactive session's goal is to finish the user's work, so degrading to Claude is correct.
+- **permanent** (the model produced a wrong/contract-violating answer) → do NOT silently
+  retry; route through the normal escalation/reviewer loop.
 
 ### Phase 1 Spec Artifacts: domain.md + architecture.md (Full Team — SDD)
 

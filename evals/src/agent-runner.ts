@@ -12,10 +12,12 @@
 
 import path from "path";
 import fs from "fs";
+import os from "os";
 import type { ClaudeAdapter, RawOutput } from "./types.ts";
 import { extractPrompt } from "./scenario-parser.ts";
 import { runAgentWithSchema } from "./schema-runner.ts";
 import { parseProvider, runProviderBackend } from "./provider-backends.ts";
+import { withTransientRetry, classifyError } from "./error-recovery.ts";
 import { readModelSpec } from "../../scripts/frontmatter.ts";
 import { resolveModel, PROVIDERS, type Provider } from "../../scripts/model-tiers.ts";
 
@@ -47,6 +49,16 @@ export function resolveEffectiveModel(agent: string, model?: string, provider?: 
 
 const EVAL_MODE_APPEND =
   "EVAL MODE: You are running in a headless evaluation. Do NOT enter plan mode. Do NOT call EnterPlanMode. Do NOT wait for approval. Execute the task directly and produce your complete final output immediately.";
+
+/**
+ * Agents whose scenarios write scratch implementation files (per shaq.md, to `.tmp/`).
+ * Each run for these gets an isolated, ephemeral cwd so the scenario's hardcoded
+ * `.tmp/<topic>/…` paths resolve inside a throwaway dir — never the shared repo
+ * `.tmp/`. Without this, leftover files from a prior run (or a sibling parallel
+ * trial) get "found" and verified instead of implemented (the scenario-14 failure).
+ * Analysis/review agents read the real repo, so they keep the inherited cwd.
+ */
+const SCRATCH_WRITING_AGENTS = new Set(["shaq", "developer"]);
 
 /**
  * Parse NDJSON stream from claude --output-format stream-json.
@@ -130,6 +142,14 @@ export async function runSingleAgentCall(
   let trace: unknown[] = [];
   let errorNote = "";
 
+  // Scratch-writing agents get a fresh, isolated cwd per run (removed in finally),
+  // so their `.tmp/…` writes can never collide across runs or parallel trials.
+  let scratchCwd: string | undefined;
+  if (SCRATCH_WRITING_AGENTS.has(agent)) {
+    const safeId = scenarioId.replace(/[^a-z0-9]/gi, "_");
+    scratchCwd = fs.mkdtempSync(path.join(os.tmpdir(), `dt-eval-${agent}-${safeId}-`));
+  }
+
   try {
     const args = [
       "-p",
@@ -145,7 +165,7 @@ export async function runSingleAgentCall(
       args.push("--model", model);
     }
 
-    const { stdout, exitCode } = await adapter.run(args, prompt, timeoutMs);
+    const { stdout, exitCode } = await adapter.run(args, prompt, timeoutMs, scratchCwd);
 
     if (exitCode !== 0) {
       errorNote = `claude exited non-zero (exit ${exitCode})`;
@@ -169,6 +189,14 @@ export async function runSingleAgentCall(
     const msg = e instanceof Error ? e.message : String(e);
     errorNote = `claude invocation error: ${msg}`;
     agentOutput = "";
+  } finally {
+    if (scratchCwd) {
+      try {
+        fs.rmSync(scratchCwd, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup — an orphaned tmp dir is harmless
+      }
+    }
   }
 
   const durationMs = Date.now() - startMs;
@@ -292,19 +320,32 @@ export async function runAgentScenario(
   // keeps the existing claude -p path; others run via provider-backends.
   const effectiveModel = resolveEffectiveModel(agent, model, provider);
   const { provider: prov, modelId } = parseProvider(effectiveModel);
-  let record: RawOutput;
-  if (prov === "claude") {
-    // Per-agent dispatch: Bird uses the schema-enforced path; all others use --agent.
-    // effectiveModel is now always an explicit claude id (repo-sourced), so the
-    // --agent path passes --model rather than relying on the installed file.
-    if (agent === "bird") {
-      record = await runBirdAgentCall(scenarioId, prompt, timeoutMs, effectiveModel || undefined);
-    } else {
-      record = await runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs, effectiveModel || undefined);
+
+  // s20 error recovery: retry ONLY on classified-transient failures (rate limits,
+  // 5xx, timeouts, model-loading blips) with exponential backoff. permanent errors
+  // (a wrong/unparseable answer — the thing evals measure) and user_actionable ones
+  // (auth/quota) are returned on the first attempt, never masked. No cross-provider
+  // fallback here: it would corrupt the per-provider comparison (see error-recovery.ts).
+  const dispatch = (): Promise<RawOutput> => {
+    if (prov === "claude") {
+      // Per-agent dispatch: Bird uses the schema-enforced path; all others use --agent.
+      // effectiveModel is now always an explicit claude id (repo-sourced), so the
+      // --agent path passes --model rather than relying on the installed file.
+      return agent === "bird"
+        ? runBirdAgentCall(scenarioId, prompt, timeoutMs, effectiveModel || undefined)
+        : runSingleAgentCall(agent, scenarioId, prompt, adapter, timeoutMs, effectiveModel || undefined);
     }
-  } else {
-    record = await runProviderBackend(prov, agent, scenarioId, prompt, modelId, timeoutMs);
-  }
+    return runProviderBackend(prov, agent, scenarioId, prompt, modelId, timeoutMs);
+  };
+
+  const record = await withTransientRetry(dispatch, {
+    errorOf: (r) => (r as RawOutput).error,
+    onRetry: ({ attempt, delayMs, error }) =>
+      console.log(`  RETRY ${agent}/${scenarioId} [transient, attempt ${attempt}] in ${delayMs}ms: ${error}`),
+  });
+  // Tag any surviving error with its class so the report distinguishes an infra
+  // blip from a real capability miss without changing the record shape.
+  if (record.error) record.error = `[${classifyError(record.error)}] ${record.error}`;
 
   fs.writeFileSync(rawOutput, JSON.stringify(record, null, 2), "utf-8");
   console.log(`  Done: ${agent}/${scenarioId}${label} (${record.duration_ms}ms)`);

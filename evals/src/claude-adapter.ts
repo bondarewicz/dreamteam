@@ -16,12 +16,14 @@ export class BunClaudeAdapter implements ClaudeAdapter {
   async run(
     args: string[],
     stdin: string,
-    timeoutMs: number
+    timeoutMs: number,
+    cwd?: string
   ): Promise<{ stdout: string; exitCode: number }> {
     const proc = Bun.spawn(["claude", ...args], {
       stdin: new TextEncoder().encode(stdin),
       stdout: "pipe",
       stderr: "pipe",
+      ...(cwd ? { cwd } : {}),
     });
 
     const timeoutHandle = setTimeout(() => {

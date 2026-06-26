@@ -149,7 +149,14 @@ export interface ClaudeAdapter {
   run(
     args: string[],
     stdin: string,
-    timeoutMs: number
+    timeoutMs: number,
+    /**
+     * Working directory for the spawned CLI. Used to give scratch-writing agents
+     * (Shaq) an isolated, ephemeral cwd per run so the scenario's `.tmp/…` paths
+     * can never collide across runs or parallel trials. Omitted → inherits the
+     * harness cwd (repo root), which is correct for repo-reading analysis agents.
+     */
+    cwd?: string
   ): Promise<{ stdout: string; exitCode: number }>;
 }
 
