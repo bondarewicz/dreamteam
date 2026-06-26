@@ -9,12 +9,24 @@ Install once, use in every project. The agents are named after the 1992 USA Bask
 ## Install
 
 ```bash
-bun add -g @bondarewicz/dreamteam@beta     # beta channel (npm/pnpm work too)
+bun add -g @bondarewicz/dreamteam@latest    # stable (npm/pnpm work too); @beta for pre-releases
 dreamteam install                           # provision the agents into your harness
 dreamteam doctor                            # check which providers are reachable
 ```
 
-`dreamteam install` copies the agents + commands into Claude Code (`~/.claude/`), records a manifest in `~/.dreamteam/`, and merges hooks/MCP add-if-missing. Re-run after upgrades. Eval results and the web DB live in `~/.dreamteam/workspace/` (never the repo).
+`dreamteam install` copies the agents + commands into Claude Code (`~/.claude/`), records a manifest in `~/.dreamteam/`, and merges hooks/MCP add-if-missing. Eval results and the web DB live in `~/.dreamteam/workspace/` (never the repo).
+
+### Upgrading
+
+`dreamteam install` only re-syncs from the **currently installed** package — it does **not** fetch a newer version. To upgrade, use:
+
+```bash
+dreamteam upgrade            # update the global package to @latest, then re-sync ~/.claude
+dreamteam upgrade beta       # track the pre-release channel
+dreamteam upgrade 1.1.0      # pin an exact version
+```
+
+`upgrade` runs `bun add -g @bondarewicz/dreamteam@<tag>` then invokes the fresh binary's `install`, so your agents/commands/hooks pick up the new version in one step. (Equivalent manual form: `bun add -g @bondarewicz/dreamteam@latest && dreamteam install`.) Start a new Claude Code session afterward.
 
 ## Prerequisites
 
@@ -34,6 +46,7 @@ Dream Team is **Bun-only** and brings nothing of its own — each provider is a 
 
 ```text
 dreamteam install [--harness claude-code] [--dry-run]   provision agents/commands
+dreamteam upgrade [tag|version] [--dry-run]              update global package, then re-sync
 dreamteam uninstall                                      remove exactly what was installed
 dreamteam status                                         versions, manifest, drift
 dreamteam doctor                                         Claude / Ollama / Gemini / Codex reachability

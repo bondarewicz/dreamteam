@@ -39,6 +39,53 @@ async function cmdUninstall(): Promise<number> {
   return 0;
 }
 
+const PKG = "@bondarewicz/dreamteam";
+
+/**
+ * Upgrade the GLOBAL package, then re-sync assets — the step `install` can't do.
+ *
+ * `install` copies from assetsDir (= this binary's own package dir), so it can
+ * never pull a newer version than the binary you ran it from. `upgrade` updates
+ * the global package first, then invokes the FRESH binary's `install` so ~/.claude
+ * picks up the new agents/commands/hooks.
+ *
+ *   dreamteam upgrade            # → @latest
+ *   dreamteam upgrade beta       # a dist-tag
+ *   dreamteam upgrade 1.1.0      # an exact version
+ *   dreamteam upgrade --dry-run  # show what would run
+ */
+async function cmdUpgrade(args: string[]): Promise<number> {
+  const tag = flag(args, "--tag") ?? args.find((a) => !a.startsWith("-")) ?? "latest";
+  const spec = `${PKG}@${tag}`;
+  const before = readConfig()?.version ?? "unknown";
+
+  if (has(args, "--dry-run")) {
+    console.log(`Dry run — would run:\n  bun add -g ${spec}\n  dreamteam install`);
+    return 0;
+  }
+
+  console.log(`Upgrading ${PKG}: ${before} → ${spec}\n`);
+  // Bun-only project; the binary lives under ~/.bun. Update the global package.
+  const add = Bun.spawnSync(["bun", "add", "-g", spec], { stdout: "inherit", stderr: "inherit" });
+  if ((add.exitCode ?? 1) !== 0) {
+    console.error(`\n'bun add -g ${spec}' failed. Run it manually, then 'dreamteam install'.`);
+    return add.exitCode ?? 1;
+  }
+
+  // Re-sync via the FRESH binary (not this old process): the shim now points at
+  // the new package, so its install resolves assetsDir to the new version.
+  console.log(`\nRe-syncing agents/commands/scripts into ~/.claude …`);
+  const inst = Bun.spawnSync(["dreamteam", "install"], { stdout: "inherit", stderr: "inherit" });
+  if ((inst.exitCode ?? 1) !== 0) {
+    console.error(`\nPackage updated, but 'dreamteam install' failed — run it manually.`);
+    return inst.exitCode ?? 1;
+  }
+
+  const after = readConfig()?.version ?? "unknown";
+  console.log(`\n✓ Upgraded ${before} → ${after}. Start a new Claude Code session to pick up the changes.`);
+  return 0;
+}
+
 function cmdStatus(): number {
   const cfg = readConfig();
   if (!cfg) {
@@ -145,6 +192,7 @@ function usage(): void {
   console.log(`dreamteam — Dream Team CLI
 
   install [--harness ${knownHarnesses().join("|")}|all] [--dry-run]
+  upgrade [tag|version] [--dry-run]   update the global package, then re-sync
   uninstall
   status            installed files, versions, drift vs manifest
   repair            re-sync drifted/missing installed files from source
@@ -159,6 +207,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 let code = 0;
 switch (cmd) {
   case "install": code = await cmdInstall(rest); break;
+  case "upgrade": code = await cmdUpgrade(rest); break;
   case "uninstall": code = await cmdUninstall(); break;
   case "status": code = cmdStatus(); break;
   case "repair": code = await cmdRepair(); break;
