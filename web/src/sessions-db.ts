@@ -81,3 +81,82 @@ export function getEvalVerdictsForProject(project: string): Map<string, { verdic
   }
   return map;
 }
+
+/**
+ * FindingRow — a single warn/fail finding extracted from session_evals.
+ * finding_id is synthesised as `${session_id}:${question_id}` for stable
+ * H-5 dedup across re-scores of the same session.
+ */
+export type FindingRow = {
+  /** Synthesised: "${session_id}:${question_id}" — stable across re-scores (H-5). */
+  finding_id: string;
+  session_id: string;
+  question_id: string;
+  verdict: "warn" | "fail";
+  evidence: string;
+  /** ISO-8601; taken from the eval's judged_at timestamp. */
+  observed_at: string;
+};
+
+/**
+ * Read the most recent `limit` warn/fail findings for a project across all sessions.
+ * Reads the latest eval per session (ordered by judged_at DESC), then flattens
+ * findings_json, keeping only verdict="warn" or verdict="fail" rows.
+ *
+ * Read-only: does not touch the write path or seam rigidity.
+ *
+ * @param project  The project slug (same as used in saveSessionEval).
+ * @param limit    Maximum number of FindingRow results to return.
+ */
+export function getRecentFindings(project: string, limit: number): FindingRow[] {
+  ensure();
+
+  // Fetch the latest eval per session (dedup by session_id — the most recent judged_at wins).
+  // SCAN CAP: cap the outer SELECT to prevent unbounded scans as evals accumulate.
+  // Each session has at most ~14 findings; 50x safety factor above `limit` is generous
+  // while keeping the scan bounded regardless of how many historical evals exist.
+  const scanLimit = Math.max(limit * 50, 1000);
+  const rows = getDb().query(
+    `SELECT session_id, judged_at, findings_json
+     FROM session_evals
+     WHERE project = ?
+     ORDER BY judged_at DESC
+     LIMIT ?`,
+  ).all(project, scanLimit) as Array<{ session_id: string; judged_at: string; findings_json: string | null }>;
+
+  // Deduplicate by session_id (take first occurrence = latest judged_at).
+  const seen = new Set<string>();
+  const out: FindingRow[] = [];
+
+  for (const row of rows) {
+    if (seen.has(row.session_id)) continue;
+    seen.add(row.session_id);
+
+    if (!row.findings_json) continue;
+
+    let findings: Array<{ id: string; verdict: string; evidence: string }>;
+    try {
+      const parsed = JSON.parse(row.findings_json);
+      // Guard: findings_json must be an array; skip if corrupted or object shape.
+      if (!Array.isArray(parsed)) continue;
+      findings = parsed;
+    } catch {
+      continue;
+    }
+
+    for (const f of findings) {
+      if (f.verdict !== "warn" && f.verdict !== "fail") continue;
+      out.push({
+        finding_id: `${row.session_id}:${f.id}`,
+        session_id: row.session_id,
+        question_id: f.id,
+        verdict: f.verdict as "warn" | "fail",
+        evidence: f.evidence ?? "",
+        observed_at: row.judged_at,
+      });
+      if (out.length >= limit) return out;
+    }
+  }
+
+  return out;
+}

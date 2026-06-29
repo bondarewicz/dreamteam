@@ -111,6 +111,57 @@ export function writeConfig(cfg: DreamteamConfig): void {
   fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2), "utf-8");
 }
 
+/** v1 single-tenant constant. Turso phase: replace with real tenant resolution. */
+export const DEFAULT_TENANT = "local";
+
+/** v1 single-user constant. Turso phase: replace with real user resolution. */
+export const DEFAULT_USER = "local";
+
+/**
+ * Canonical project ID matching the Claude Code harness encoding for project dirs.
+ *
+ * Claude Code names each project's config dir `~/.claude/projects/<id>/` where `<id>`
+ * is the absolute cwd with EVERY non-alphanumeric character replaced by `-`, 1:1 (no
+ * collapsing of consecutive dashes, no lowercasing). Verified against real dirs:
+ *
+ *   /Users/lb/Github/Bondarewicz/dreamteam
+ *     → -Users-lb-Github-Bondarewicz-dreamteam
+ *
+ *   /Users/lb/Github/Bondarewicz/dreamteam/.claude-worktrees/tutorial-upgrades
+ *     → -Users-lb-Github-Bondarewicz-dreamteam--claude-worktrees-tutorial-upgrades
+ *     (/.  → two dashes: '/' → '-', '.' → '-'; /-  → '-' stays '-' so no collapse)
+ *
+ *   /Users/lb/.bun/install/global/node_modules/@bondarewicz/dreamteam
+ *     → -Users-lb--bun-install-global-node-modules--bondarewicz-dreamteam
+ *     (/_  → '-'; /@  → '--': '/' → '-', '@' → '-')
+ *
+ * This is an EXTERNAL contract — must exactly match Claude Code's encoding. Use this
+ * as both the harness memory-dir slug AND the DB scope key (single source of truth).
+ *
+ * @param cwd Absolute working dir to encode. Defaults to process.cwd().
+ */
+export function canonicalProjectId(cwd: string = process.cwd()): string {
+  return path.resolve(cwd).replace(/[^A-Za-z0-9]/g, "-");
+}
+
+/**
+ * Absolute path to the Claude Code harness memory dir for a given project.
+ * Equivalent to `<home>/.claude/projects/<projectId>/memory`.
+ *
+ * Use canonicalProjectId() for `projectId` to get the correct default harness dir.
+ */
+export function harnessMemoryDir(home: string, projectId: string): string {
+  return path.join(home, ".claude", "projects", projectId, "memory");
+}
+
+/**
+ * Dreamteam-owned projection target for `learn` (PRE-installer; NEVER ~/.claude).
+ * Switch-over to ~/.claude is the installer slice — see docs/spec-session-learning-loop.
+ */
+export function memoryProjectionDir(project: string): string {
+  return path.join(workspaceDir(), "memory", project);
+}
+
 /** Read the Dream Team version from the assets/repo package.json (fallback "0.0.0"). */
 export function resolveVersion(): string {
   try {
