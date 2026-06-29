@@ -291,7 +291,7 @@ Re-pinning Shaq to `gemini`/`ollama` is refused (Phase 3, gate pending). Re-pin 
 
 For focused, well-understood changes. 4 subagents, sequential, within this session.
 
-> **Design note:** Quick Fix intentionally uses sequential subagents with NO `team_name`. Inter-agent messaging is not needed here (agents run one at a time, not concurrently), so creating a team bus would add overhead with no benefit. Do NOT add `team_name` to Quick Fix agent calls.
+> **Design note:** Quick Fix intentionally uses sequential subagents — one at a time, not concurrent — so there is no shared bus and no inter-agent messaging, by design. Do NOT spawn Quick Fix agents with `run_in_background: true`; run them sequentially as plain subagents. (Full Team is the workflow that spawns concurrent teammates onto the session bus.)
 
 ### 1. Bird — Domain Analysis (lightweight)
 
@@ -721,39 +721,19 @@ Tip: Run /usage to check rate limit impact.
 
 For significant features requiring the full Dream Team working as parallel independent sessions.
 
-**IMPORTANT**: This requires the experimental agent teams feature. If it's not enabled, fall back to the Quick Fix subagent workflow and explain to the user.
+**IMPORTANT**: This requires the experimental agent teams feature — **Claude Code ≥ 2.1.178** with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` set in the environment or `settings.json` (`env` block). If the flag is unset, concurrent teammates cannot share a bus; fall back to the Quick Fix subagent workflow and explain to the user. You confirm the feature is live by spawning the first teammate and receiving its first message (see "Spawning teammates" below) — not by probing for any tool.
 
 ### Key Principle: PHASED SPAWNING
 
 **DO NOT spawn all 6 agents at once.** Agents that are idle will jump ahead and produce wasted work. Instead, spawn agents in phases — only when their inputs are ready.
 
-### Create the Agent Team (MANDATORY — do this before any agent is spawned)
+### Spawning teammates (no setup step — single implicit team)
 
-> **WARNING — Silent Degradation Mode:** If you spawn agents via bare parallel `Agent` tool calls WITHOUT a `team_name`, they run as ISOLATED subagents. They cannot send or receive messages from each other. There is NO error — the session proceeds silently as if collaboration is happening, but it is not. The entire "friction by design" value collapses. ALWAYS use `TeamCreate` first and pass `team_name` to every concurrent-phase spawn.
+> **Claude Code ≥ 2.1.178 model.** There is exactly **one implicit team per session**. There is NO `TeamCreate`/`TeamDelete` step, no team name to generate, and no `team_name` parameter to pass. You add a teammate to the shared bus simply by spawning it: `Agent({ name, subagent_type, description, run_in_background: true, prompt })`. **All four of `name`, `subagent_type`, `description`, and `run_in_background` are mandatory** — `name` makes it addressable via `SendMessage`, `subagent_type` loads the agent's persona + tools (omit it and you get a generic agent that does nothing), and `description` (a 3-5 word label) is **required by the Agent tool — a spawn missing it fails with `InputValidationError: The required parameter description is missing` and the agent never runs**. The harness places the teammate on the session bus automatically and tears every teammate down on session exit — cleanup is automatic.
 
-**Step 1: Generate a unique team name.**
+> **Confirm the bus is live (don't guess, don't probe for tools).** Spawn the first concurrent-phase teammate and wait for its first `SendMessage`. **Receipt of a message IS proof the bus is live and the agent joined.** If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is unset, the spawned agent runs as an isolated subagent and will never message you — if no agent ever messages, treat the feature as off, abandon the Full Team workflow, and fall back to Quick Fix with a note to the user that the flag is off.
 
-Use full epoch seconds for collision resistance:
-
-```bash
-TEAM_NAME="dream-team-$(date +%s)"
-# Example result: dream-team-1748477382
-```
-
-**Step 2: Call `TeamCreate` with the generated name.**
-
-```
-TeamCreate({ name: "<TEAM_NAME>" })
-```
-
-- If `TeamCreate` succeeds → record `TEAM_NAME` and proceed.
-- If `TeamCreate` fails with "team already exists" → this is likely a crashed-session leftover. Perform cleanup-before-create:
-  1. Call `TeamDelete({ name: "<TEAM_NAME>" })`.
-  2. If `TeamDelete` succeeds → retry `TeamCreate` with the ORIGINAL name.
-  3. If `TeamDelete` fails (a live session owns it) → append `-2` to the name and retry `TeamCreate`.
-  4. On a third failure → generate a fresh timestamp and retry once more.
-  5. After 3 total `TeamCreate` attempts without success → surface the error to the user and stop. Do NOT proceed without a valid team.
-- If `TeamCreate` fails for any other reason → surface the error to the user and stop. Do NOT proceed without a valid team.
+> **Legacy note (Claude Code < 2.1.178):** older versions used explicit `TeamCreate`/`TeamDelete` tools plus a `team_name` on every spawn. Those tools were **removed in 2.1.178** and `team_name` is now **deprecated and ignored**. Do not call `TeamCreate`/`TeamDelete` or pass `team_name`; if you are pinned to an older version, recover the legacy ceremony from git history.
 
 Use **delegate mode** so you stay focused on coordination and don't implement anything yourself.
 
@@ -806,12 +786,13 @@ the graph rather than hidden in a phase you skipped.
 
 #### Spawn Bird:
 
-Call the Agent tool with these parameters — ALL three are required for message bus participation:
+Call the Agent tool with ALL of `name`, `subagent_type`, `description`, and `run_in_background: true` — every one is required (`description` is a 3-5 word label and the spawn fails validation without it; `subagent_type` loads the agent persona):
 
 ```
 Agent({
   name: "bird",
-  team_name: "<TEAM_NAME>",
+  subagent_type: "bird",
+  description: "Domain analysis",
   run_in_background: true,
   prompt: "You are Larry Bird, the Domain Authority and Final Arbiter.
 Read your full agent definition at ~/.claude/agents/bird.md for detailed instructions.
@@ -834,12 +815,13 @@ CRITICAL: Respond with raw JSON only. First character { last character }. No mar
 
 #### Spawn MJ:
 
-Call the Agent tool with these parameters — ALL three are required for message bus participation:
+Call the Agent tool with ALL of `name`, `subagent_type`, `description`, and `run_in_background: true` — every one is required (`description` is a 3-5 word label and the spawn fails validation without it; `subagent_type` loads the agent persona):
 
 ```
 Agent({
   name: "mj",
-  team_name: "<TEAM_NAME>",
+  subagent_type: "mj",
+  description: "Architecture design",
   run_in_background: true,
   prompt: "You are Michael Jordan, the Strategic Systems Architect.
 Read your full agent definition at ~/.claude/agents/mj.md for detailed instructions.
@@ -871,7 +853,7 @@ After spawning Bird and MJ, wait for the FIRST MESSAGE from each agent as the ha
 
 - **Wait** for an incoming message from `bird` and an incoming message from `mj`.
 - If a message from a given agent does NOT arrive within ~30 seconds, surface an error to the user and do NOT proceed: "Agent [name] did not join the bus — harness issue detected. Do not continue."
-- Any `config.json` at `~/.claude/teams/<TEAM_NAME>/config.json` may be read as an OPTIONAL advisory diagnostic only — it is NOT the gate and its absence or stale content must not cause a false-fail or false-pass.
+- In the single-implicit-team model there is no per-team `config.json` to inspect. The first received message is the ONLY join gate — do not look for a team config file or treat its absence as a failure.
 
 **Only after receiving the first message from BOTH Bird and MJ, treat Phase 1 as started.**
 
@@ -897,7 +879,7 @@ Do not wait on a silent agent indefinitely. Run this liveness loop for every
    treat the agent as crashed: leave its task `blockedBy`-intact but mark its in-flight
    work reclaimable, send a `shutdown_request`, wait for (or time out) the completion
    notification, then **respawn it ONCE** with the identical task + brief. Re-use the
-   same `name`/`team_name` so the graph node is unchanged.
+   same `name` so the graph node is unchanged.
 4. **Escalate after one failed reclaim.** If the respawned agent also goes silent past
    the threshold, stop and surface to the user — do not burn the session looping. Two
    strikes is a real harness/provider fault, not a transient.
@@ -989,12 +971,13 @@ After Bird and MJ complete, spawn Magic to create a curated handoff brief for Sh
 
 #### Spawn Magic:
 
-Magic runs sequentially (after Bird and MJ), so `run_in_background` is not required here. However, pass `team_name` and `name` so Magic can use `SendMessage` to notify Coach K upon completion:
+Magic runs sequentially (after Bird and MJ), so `run_in_background` is not required here. Still pass `name` so Magic can use `SendMessage` to notify Coach K upon completion:
 
 ```
 Agent({
   name: "magic",
-  team_name: "<TEAM_NAME>",
+  subagent_type: "magic",
+  description: "Curate handoff brief",
   run_in_background: false,
   prompt: "You are Magic Johnson, the Context Synthesizer & Team Glue.
 Read your full agent definition at ~/.claude/agents/magic.md for detailed instructions.
@@ -1083,12 +1066,13 @@ Date: [today]
 
 #### Spawn Shaq:
 
-Shaq runs sequentially (after user approval). Pass `team_name` and `name` so Shaq can message Coach K with his plan and final output:
+Shaq runs sequentially (after user approval). Pass `name` so Shaq can message Coach K with his plan and final output:
 
 ```
 Agent({
   name: "shaq",
-  team_name: "<TEAM_NAME>",
+  subagent_type: "shaq",
+  description: "Implement feature",
   run_in_background: false,
   prompt: "You are Shaquille O'Neal, the Primary Code Executor.
 Read your full agent definition at ~/.claude/agents/shaq.md for detailed instructions.
@@ -1129,14 +1113,15 @@ Read the template at `$DRAFT_TEMPLATE` and use the Write tool to create the file
 
 ### Phase 4: Review (Kobe + Pippen + Drexler in parallel)
 
-**Only after Shaq completes**, spawn Kobe, Pippen, and Drexler simultaneously. All three MUST be spawned with `team_name`, `name`, and `run_in_background: true` — these are concurrent-phase agents and must participate in the message bus.
+**Only after Shaq completes**, spawn Kobe, Pippen, and Drexler simultaneously. All three MUST be spawned with `name`, `subagent_type`, `description`, and `run_in_background: true` — these are concurrent-phase agents and must participate in the message bus.
 
 #### Spawn Kobe:
 
 ```
 Agent({
   name: "kobe",
-  team_name: "<TEAM_NAME>",
+  subagent_type: "kobe",
+  description: "Quality review",
   run_in_background: true,
   prompt: "You are Kobe Bryant, the Relentless Quality & Risk Enforcer.
 Read your full agent definition at ~/.claude/agents/kobe.md for detailed instructions.
@@ -1175,7 +1160,8 @@ CRITICAL: Respond with raw JSON only. First character { last character }. No mar
 ```
 Agent({
   name: "pippen",
-  team_name: "<TEAM_NAME>",
+  subagent_type: "pippen",
+  description: "Stability review",
   run_in_background: true,
   prompt: "You are Scottie Pippen, the Stability, Integration & Defense specialist.
 Read your full agent definition at ~/.claude/agents/pippen.md for detailed instructions.
@@ -1212,7 +1198,8 @@ CRITICAL: Respond with raw JSON only. First character { last character }. No mar
 ```
 Agent({
   name: "drexler",
-  team_name: "<TEAM_NAME>",
+  subagent_type: "drexler",
+  description: "Scope review",
   run_in_background: true,
   prompt: "You are Clyde 'The Glide' Drexler, the Deletion-Bias Enforcer.
 Read your full agent definition at ~/.claude/agents/drexler.md for detailed instructions.
@@ -1367,7 +1354,8 @@ AskUserQuestion({
    ```
    Agent({
      name: "shaq",
-     team_name: "<TEAM_NAME>",
+     subagent_type: "shaq",
+     description: "Apply review fixes",
      run_in_background: false,
      prompt: "You are Shaquille O'Neal, the Primary Code Executor.
 
@@ -1384,11 +1372,12 @@ AskUserQuestion({
    })
    ```
 3. **Wait for Shaq to complete the fixes.** Write a draft eval for Shaq: read `$DRAFT_TEMPLATE`, use the Write tool, increment counter, filename `draft-$(date +%Y-%m-%d-%H%M)-${TOPIC}-${DRAFT_NUM}.md`, use `evals/shaq/drafts/`.
-4. **Re-launch Kobe, Pippen, and Drexler in parallel** to VERIFY their specific findings are resolved. Use `team_name`, `name`, and `run_in_background: true` — these are concurrent-phase agents:
+4. **Re-launch Kobe, Pippen, and Drexler in parallel** to VERIFY their specific findings are resolved. Use `name` and `run_in_background: true` — these are concurrent-phase agents:
    ```
    Agent({
      name: "[kobe | pippen | drexler]",
-     team_name: "<TEAM_NAME>",
+     subagent_type: "[kobe | pippen | drexler]",
+     description: "Verify fixes",
      run_in_background: true,
      prompt: "You are [Kobe/Pippen/Drexler], verifying that your findings have been correctly fixed.
 
@@ -1419,12 +1408,13 @@ Magic plays two roles in SDD:
 
 #### Spawn Magic:
 
-Magic runs sequentially (final phase). Pass `team_name` and `name` so Magic can message Coach K with the synthesis:
+Magic runs sequentially (final phase). Pass `name` so Magic can message Coach K with the synthesis:
 
 ```
 Agent({
   name: "magic",
-  team_name: "<TEAM_NAME>",
+  subagent_type: "magic",
+  description: "Synthesize outputs",
   run_in_background: false,
   prompt: "You are Magic Johnson, the Context Synthesizer & Team Glue.
 Read your full agent definition at ~/.claude/agents/magic.md for detailed instructions.
@@ -1551,26 +1541,18 @@ If the user changes requirements after an agent has started working:
 
 Only runs if `SESSION_WORKTREE` is set (non-empty). Skip this section if the user chose "Skip isolation" in STEP 0.
 
-### Full Team cleanup — shut down teammates and delete the team (MANDATORY if TEAM_NAME is set)
+### Full Team cleanup — shut down any still-running teammates (Claude Code ≥ 2.1.178)
 
-If this was a Full Team session (i.e., `TEAM_NAME` is set), perform agent shutdown and team teardown BEFORE the worktree cleanup:
+In the single-implicit-team model the harness tears the team down automatically on session exit — there is **no `TeamDelete` step**. Before the worktree cleanup, only make sure no teammate is still doing work that could race the cleanup:
 
-1. **Send shutdown to all teammates** — for each agent still running (Bird, MJ, Magic, Shaq, Kobe, Pippen, Drexler), send:
+1. **Send shutdown to any teammate still running** — for each agent that has not already reported completion (Bird, MJ, Magic, Shaq, Kobe, Pippen, Drexler), send:
    ```
    SendMessage({ to: "<agent-name>", message: { type: "shutdown_request" } })
    ```
 
-2. **Wait for each background agent's COMPLETION NOTIFICATION** from the harness before calling `TeamDelete`. The harness emits a notification when each background agent finishes or terminates — wait for all of them. Do NOT call `TeamDelete` while agents are still active; doing so can result in a "team has active members" failure and leave a zombie team.
+2. **Wait for each background agent's COMPLETION NOTIFICATION** from the harness. The harness emits a notification when each background agent finishes or terminates — wait for all in-flight ones before touching the worktree, so a still-writing agent cannot collide with branch cleanup.
 
-3. **Delete the team:**
-   ```
-   TeamDelete({ name: "<TEAM_NAME>" })
-   ```
-   - If `TeamDelete` succeeds → proceed to worktree cleanup.
-   - If `TeamDelete` fails with "active members" → wait ~10 seconds and retry once. If it fails again, log the error and proceed — do not block cleanup indefinitely.
-   - If `TeamDelete` fails for any other reason (e.g. team already gone) → log the error and proceed.
-
-4. **Clear `TEAM_NAME`** so it cannot be reused in a future session that might overlap.
+3. **No team deletion needed.** Once every teammate has reported completion, the implicit team is already gone (or will be on session exit). Proceed straight to worktree cleanup.
 
 Use **AskUserQuestion** (NEVER as free text):
 
@@ -1644,7 +1626,7 @@ After EVERY agent completes — in ALL workflows (Quick Fix, Full Team, PR Revie
 
 ## SPEC SIGN-OFF CHECKPOINT (MANDATORY — SDD)
 
-After Magic writes `docs/spec-${TOPIC}/spec.md`, **before** Memory Harvest and Final Output, present the synthesised spec to the human for sign-off. This closes the SDD loop — the spec is the contract, the human confirms what shipped matches what was agreed.
+After Magic writes `docs/spec-${TOPIC}/spec.md`, **before** Session Learning, Memory Harvest, and Final Output, present the synthesised spec to the human for sign-off. This closes the SDD loop — the spec is the contract, the human confirms what shipped matches what was agreed.
 
 ```
 AskUserQuestion({
@@ -1663,7 +1645,7 @@ AskUserQuestion({
 ```
 
 **Acting on the result:**
-- **Approve — matches intent**: Update `docs/spec-${TOPIC}/spec.md` Status to `Final — approved by <human>`. Proceed to Memory Harvest.
+- **Approve — matches intent**: Update `docs/spec-${TOPIC}/spec.md` Status to `Final — approved by <human>`. Proceed to Session Learning (and Memory Harvest — pre-cutover, both run).
 - **Approve with notes**: Update Status to `Final — approved with notes`. Proceed.
 - **Reject — scope drift**: Surface the gap to the human via free text, then decide jointly (fix the implementation, accept the drift, or revert). Do NOT proceed silently.
 - **Reject — spec inaccurate**: Re-spawn Magic with a focused re-synthesis prompt referencing the human's correction. Do not just edit the spec yourself — Magic owns synthesis.
@@ -1672,7 +1654,100 @@ The spec sign-off is the only place the human confirms "this is what we built". 
 
 ---
 
-## MEMORY HARVEST (OPTIONAL — ZERO ARTIFACTS BY DEFAULT)
+## SESSION LEARNING (DB LOOP) — PRE-CUTOVER SAFE
+
+> **Pre-cutover (Option B dual-safe):** This step writes to the Dream Team workspace
+> (`~/.dreamteam/workspace/memory/<project>/`) — it does NOT touch `~/.claude`.
+> `dreamteam learn` refuses `~/.claude` without `--installer-phase`, which is only set by the
+> slice-9 cutover script. Running this step today is safe and reversible. The deprecated
+> MEMORY HARVEST below remains the live file-based system until the cutover runs.
+
+After spec sign-off, before Final Output. Same trigger point as MEMORY HARVEST — end-of-session,
+context-fresh, one pass, skippable.
+
+**Goal:** persist behavioral signals from this session to the DB-backed projection:
+auto-inferred signals (evaluation findings → candidate instincts) handled automatically,
+human directives (non-obvious preferences established this session) captured with free-text
+edit + confirm. The CLI is the single behavioral gate — scrub, confidence, AC-8, projection
+determinism all live in `runLearn`. Do not re-author any of that logic here.
+
+### Step 1 — Run the analyzer + approve auto-inferred pending
+
+Invoke `dreamteam learn` in the project directory. It runs the full automated pipeline:
+ensure → analyze → **yes/no approval per auto-inferred pending instinct** → always regenerate projection.
+
+```bash
+dreamteam learn --project "$(basename "$(pwd)")"
+```
+
+If `dreamteam` is not on PATH (repo-source install, pre-npm):
+
+```bash
+bun "$(git rev-parse --show-toplevel)/bin/dreamteam.ts" learn --project "$(basename "$(pwd)")"
+```
+
+The CLI prompts `Approve instinct #id [domain]: "trigger" (conf X.XX)? [y/N]` per auto-inferred
+pending row. Answer `y` or `n` — no free text required here. After all approvals the projection
+regenerates and the CLI prints a summary. Do not re-implement anything from this summary in prose.
+
+### Step 2 — Surface directive candidates in-conversation (FREE TEXT — never one-tap select)
+
+After the CLI completes, you have what it does not: the live session transcript. Identify up to
+2–3 directive candidates:
+
+- **Non-obvious behavioral preferences** the user anchored — judgment calls they accepted or
+  requested that would generalize (e.g. "always use the Humble Object pattern for testability",
+  "never pre-filter before the authorship guard").
+- **Patterns that worked** — a tradeoff navigated cleanly, a routing choice the team validated.
+- Do NOT surface: corrections the user demanded (implicit), trivially obvious patterns, step-by-step
+  task descriptions (those are tasks, not instincts).
+
+For each candidate, present it as **free text — not AskUserQuestion**:
+
+```
+During this session I noticed: "<behavioral pattern observed>".
+
+Type your version of this directive, or press Enter to skip:
+```
+
+**CRITICAL — AskUserQuestion one-tap select is FORBIDDEN for directives.** One-tap cannot
+establish authorship: the authorship guard (`isHumanAuthored`) rejects text byte-identical to the
+suggestion. The user must type (even a small edit). Empty or unchanged → skip. Edited + non-empty →
+the typed line is the directive. This is structurally enforced at the CLI gate (BR-13a).
+
+After collecting typed directives, run `dreamteam learn` once more to refresh the projection:
+
+```bash
+dreamteam learn --project "$(basename "$(pwd)")"
+```
+
+> **v1 note (R3):** The CLI's directive surfacing in step 4 of `runLearn` calls `capture.surface('')`
+> with an empty transcript — it returns no suggestions and the second `dreamteam learn` invocation
+> only refreshes the projection from already-approved DB state. **Typed directive lines collected
+> in-conversation above are NOT persisted by the CLI in v1.** They surface for awareness only.
+> The reliable way to persist a directive in v1 is to run `dreamteam learn` interactively in a
+> terminal and type it at the free-text prompt when it appears. Full in-conversation pass-through
+> is wired in a later slice when the transcript source is plumbed.
+
+### Hard rules
+
+- **Skippable.** If no candidates surface, or the user types nothing, produce zero new directives.
+  Step 1 (`dreamteam learn`) still runs — the projection refresh and auto-inferred approval are
+  always valuable even with no directives this session.
+- **One pass.** Do not chase or re-prompt more than once per candidate.
+- **Free text only for directives.** No select, no multiSelect. User types → CLI decides.
+- **CLI is the gate.** All scrub / confidence / AC-8 / projection logic lives in `runLearn`.
+  Do not re-author rules here.
+- **No `--installer-phase`.** The cutover script (slice 9) sets this flag. Do not add it here.
+- **Checkpoint saving is unchanged and separate.** `docs/checkpoint-<topic>.md` per existing rules.
+
+---
+
+## MEMORY HARVEST [DEPRECATED — pre-cutover file-based system; removed at slice-9 go-live]
+
+> **Deprecation notice:** This section is the file-writing harvest being replaced by SESSION
+> LEARNING (DB LOOP) above. It remains in place pre-cutover — both steps run until slice 9 runs
+> and removes this block. Do not remove it manually; the cutover diff handles the deletion.
 
 After spec sign-off, before Final Output, run ONE harvest question.
 

@@ -13,6 +13,7 @@
 import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
+import { runClaudeCli } from "./llm-client.ts";
 import type { SessionDetail, SessionRecord } from "./sessions-source.ts";
 import { JUDGE_DEFENSE } from "../../scripts/prompt-defense.ts";
 
@@ -309,17 +310,11 @@ function normalizeVerdicts(parsed: any): QuestionVerdict[] {
   return ALL_QUESTION_IDS.map(id => byId.get(id)!);
 }
 
+// runClaude is now provided by llm-client.ts (runClaudeCli).
+// Local wrapper preserved for call-site compatibility (same arg shape).
 async function runClaude(prompt: string, model: string | undefined, timeoutMs: number): Promise<{ stdout: string; exitCode: number }> {
-  const args = ["-p"];
-  if (model) args.push("--model", model);
-  const proc = Bun.spawn(["claude", ...args], {
-    stdin: new TextEncoder().encode(prompt),
-    stdout: "pipe", stderr: "pipe",
-  });
-  const to = setTimeout(() => { try { proc.kill(); } catch { /* dead */ } }, timeoutMs);
-  const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-  clearTimeout(to);
-  return { stdout, exitCode: exitCode ?? 0 };
+  const { stdout, exitCode } = await runClaudeCli(prompt, { model, timeoutMs });
+  return { stdout, exitCode };
 }
 
 export type SessionEvalResult = {
