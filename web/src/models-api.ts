@@ -4,13 +4,12 @@
  * Canonical model id = the string stored in agent frontmatter (`model:`), passed to
  * the eval runner's --model, and routed on by provider prefix:
  *   - claude : bare id ("claude-opus-4-8") — back-compat, no prefix
- *   - others : "<provider>/<model>" ("ollama/qwen3.6", "gemini/gemini-2.5-flash", "codex/gpt-5.5")
+ *   - others : "<provider>/<model>" ("ollama/qwen3.6", "codex/gpt-5.5")
  *
- * Per-provider sourcing (only Ollama's CLI/API can enumerate; the gemini & codex CLIs
+ * Per-provider sourcing (only Ollama's CLI/API can enumerate; the codex CLI
  * cannot list models, and we keep them key-free → curated static):
  *   - claude : Anthropic /v1/models (DREAMTEAM_MODELS_API_KEY) → fallback static
  *   - ollama : live GET :11434/api/tags (no key)
- *   - gemini : curated static (CLI can't list; stays zero-config)
  *   - codex  : curated static (no keyless listing; gpt-5.5 verified on ChatGPT sub)
  *
  * Why DREAMTEAM_MODELS_API_KEY (not ANTHROPIC_API_KEY): the latter makes the `claude`
@@ -25,15 +24,15 @@ export const CLAUDE_CODE_ALIASES = ["opus", "sonnet", "haiku", "opusplan"] as co
 
 /** Offline safety net for Claude (API is source of truth at runtime). */
 const FALLBACK_MODEL_IDS = [
+  "claude-opus-5", "claude-fable-5", "claude-sonnet-5",
   "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-opus-4-5",
   "claude-sonnet-4-7", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5",
 ];
 
 /** Curated lists for providers whose CLI can't enumerate models (kept key-free). */
-const GEMINI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
 const CODEX_MODELS = ["gpt-5.5", "gpt-5.4-mini"]; // ChatGPT account: only these two accepted (others 400)
 
-export type Provider = "claude" | "ollama" | "gemini" | "codex";
+export type Provider = "claude" | "ollama" | "codex";
 
 export type ModelRecord = {
   /** Canonical id stored in frontmatter / passed to --model. */
@@ -88,8 +87,7 @@ export async function getAvailableModels(opts?: { forceRefresh?: boolean }): Pro
   const ollamaModels = await fetchOllamaModels();
   if (ollamaModels.length === 0) providerNotes.push("ollama: no models / not reachable on :11434");
 
-  // ── Gemini + Codex (curated static) ──────────────────────────────────────────
-  const geminiModels: ModelRecord[] = GEMINI_MODELS.map((m) => ({ id: `gemini/${m}`, displayName: m, provider: "gemini", createdAt: "" }));
+  // ── Codex (curated static) ───────────────────────────────────────────────────
   const codexModels: ModelRecord[] = CODEX_MODELS.map((m) => ({ id: `codex/${m}`, displayName: m, provider: "codex", createdAt: "" }));
 
   cache = {
@@ -97,7 +95,7 @@ export async function getAvailableModels(opts?: { forceRefresh?: boolean }): Pro
     source,
     error,
     providerNotes,
-    models: [...claudeModels, ...ollamaModels, ...geminiModels, ...codexModels],
+    models: [...claudeModels, ...ollamaModels, ...codexModels],
   };
   return cache;
 }

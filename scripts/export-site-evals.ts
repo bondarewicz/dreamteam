@@ -40,7 +40,7 @@ const banner = `
 const html = `<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dream Team — Eval Scoreboard</title>
-<meta name="description" content="Public eval scoreboard: every Dream Team agent graded across Claude, Codex, Gemini and Ollama by a pinned LLM judge. Real scores, not vibes.">
+<meta name="description" content="Public eval scoreboard: every Dream Team agent graded across Claude, Codex and Ollama by a pinned LLM judge. Real scores, not vibes.">
 <style>${THEME}</style>
 </head><body>
 <nav><a href="../">← Dream Team</a><a href="#" style="color:var(--text)">Eval Scoreboard</a><a href="${PKG_URL}" target="_blank" rel="noopener">npm</a></nav>

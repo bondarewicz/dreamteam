@@ -18,7 +18,7 @@ test("no frontmatter → preamble goes to the very top", () => {
 
 test("renderAgentForClaude includes the defense in the body + a flat claude model", () => {
   const r = renderAgentForClaude("---\nname: bird\nmodel:\n  tier: deep\n---\n\nbody\n");
-  expect(r.model).toBe("claude-opus-4-8");
+  expect(r.model).toBe("claude-opus-5");
   expect(r.content).toContain(PROMPT_DEFENSE);
   expect(r.content).toMatch(/^---\n/); // frontmatter preserved at top
 });

@@ -10,7 +10,7 @@ import path from "path";
 import fs from "fs";
 import { harnessMemoryDir } from "./paths.ts";
 
-export type ProviderId = "claude" | "ollama" | "gemini" | "codex";
+export type ProviderId = "claude" | "ollama" | "codex";
 
 export type ProviderCheck = {
   id: ProviderId;
@@ -74,19 +74,6 @@ export async function checkOllama(): Promise<ProviderCheck> {
   };
 }
 
-export async function checkGemini(): Promise<ProviderCheck> {
-  const v = await probeBin("gemini", ["--version"]);
-  const auth = !!process.env.GEMINI_API_KEY || fs.existsSync(path.join(HOME, ".gemini"));
-  return {
-    id: "gemini",
-    label: "Gemini CLI (gemini)",
-    ok: v.ok && auth,
-    detail: v.ok ? (auth ? v.detail : "installed, but no GEMINI_API_KEY / ~/.gemini auth") : "not on PATH",
-    role: "cross-provider evals on Gemini",
-    required: false,
-  };
-}
-
 export async function checkCodex(): Promise<ProviderCheck> {
   const v = await probeBin("codex", ["--version"]);
   const auth = fs.existsSync(path.join(HOME, ".codex")) || !!process.env.OPENAI_API_KEY || !!process.env.CODEX_API_KEY;
@@ -100,9 +87,9 @@ export async function checkCodex(): Promise<ProviderCheck> {
   };
 }
 
-/** All four probes, run concurrently. Stable order: claude, ollama, gemini, codex. */
+/** All three probes, run concurrently. Stable order: claude, ollama, codex. */
 export async function checkProviders(): Promise<ProviderCheck[]> {
-  return Promise.all([checkClaude(), checkOllama(), checkGemini(), checkCodex()]);
+  return Promise.all([checkClaude(), checkOllama(), checkCodex()]);
 }
 
 // ---------------------------------------------------------------------------

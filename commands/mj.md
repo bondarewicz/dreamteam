@@ -12,7 +12,7 @@ PROV="$([ -d "$DT" ] && bun "$DT/scripts/print-provider.ts" mj 2>/dev/null || ec
 ```
 
 - **`$PROV` = `claude`** (or unresolved) → spawn the **mj** subagent via the **Task tool** (`subagent_type="mj"`) with the mission below. Native, on Max. *(unchanged behavior)*
-- **`$PROV` = `ollama` | `gemini` | `codex`** → do NOT use Task. Delegate the turn to that provider's own CLI on its subscription:
+- **`$PROV` = `ollama` | `codex`** → do NOT use Task. Delegate the turn to that provider's own CLI on its subscription:
   ```bash
   BRIEF="$(mktemp)"; cat > "$BRIEF" <<'BRIEF_EOF'
   [Put the full mission here: the user request from $ARGUMENTS + the Output Requirements section below.]

@@ -1,14 +1,14 @@
 /**
  * model-tiers.ts — harness-neutral model specs (Phase 3B).
  *
- * An agent's `model:` frontmatter is a capability TIER (deep | fast) plus
+ * An agent's `model:` frontmatter is a capability TIER (deep | mid) plus
  * optional explicit per-provider PINS. The tier resolves to a concrete model
  * per provider via the table below; a pin overrides the tier for that provider.
  *
  *   model:
  *     tier: deep
  *     pin:
- *       claude: claude-opus-4-8
+ *       claude: claude-opus-5
  *       ollama: qwen3.6
  *
  * This decouples "how capable a model this role needs" from "which exact build
@@ -17,33 +17,34 @@
  * becomes the claude pin, with the tier inferred from the id).
  */
 
-export const PROVIDERS = ["claude", "ollama", "gemini", "codex"] as const;
+export const PROVIDERS = ["claude", "ollama", "codex"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
-export const TIERS = ["deep", "mid", "fast"] as const;
+export const TIERS = ["deep", "mid"] as const;
 export type Tier = (typeof TIERS)[number];
 
 /**
  * Tier → concrete model per provider. The one place model versions live.
  *   deep — strongest reasoning (domain, architecture, review)
  *   mid  — balanced (implementation, synthesis)
- *   fast — cheapest/quickest (mechanical, high-volume)
+ * Throwaway discovery subagents are not a tier: Coach K spawns those on an
+ * explicit cheap model (see commands/team.md), outside the roster's spec.
  * Non-Claude rows use the strongest models we've verified on each CLI; some
  * tiers collapse where a provider exposes fewer distinct models (pin to override).
  * Codex on a ChatGPT account exposes only gpt-5.5 + gpt-5.4-mini (others 400).
  */
 export const TIER_DEFAULTS: Record<Provider, Record<Tier, string>> = {
-  // claude: opus = frontier (deep), sonnet 4.6 = best speed+intelligence (mid),
-  //   haiku 4.5 = fastest near-frontier (fast). [platform.claude.com models]
-  claude: { deep: "claude-opus-4-8", mid: "claude-sonnet-4-6", fast: "claude-haiku-4-5" },
-  // ollama: maps to locally-pulled models — qwen3.6 (36B) for deep/mid, gemma4
-  //   (8B) for fast. Adjust to whatever you've `ollama pull`-ed (pin to override).
-  ollama: { deep: "qwen3.6", mid: "qwen3.6", fast: "gemma4" },
-  // gemini: 2.5-pro = strongest available here (3.x not on this account), 2.5-flash
-  //   = balanced, 2.5-flash-lite = fastest/cheapest in the 2.5 family. [ai.google.dev]
-  gemini: { deep: "gemini-2.5-pro", mid: "gemini-2.5-flash", fast: "gemini-2.5-flash-lite" },
+  // claude: opus 5 = flagship long-horizon agentic coding + high-recall code
+  //   review (deep), sonnet 5 = most agentic mid-tier — self-checks + better
+  //   error recovery (mid). Fable 5 is not a tier default: it is applied via
+  //   explicit pins on the seats that need it (Coach K orchestration, Kobe
+  //   bug-recall). [platform.claude.com models]
+  claude: { deep: "claude-opus-5", mid: "claude-sonnet-5" },
+  // ollama: maps to locally-pulled models. Adjust to whatever you've
+  //   `ollama pull`-ed (pin to override).
+  ollama: { deep: "qwen3.6", mid: "qwen3.6" },
   // codex (ChatGPT account): only gpt-5.5 + gpt-5.4-mini are accepted (others 400).
-  codex: { deep: "gpt-5.5", mid: "gpt-5.5", fast: "gpt-5.4-mini" },
+  codex: { deep: "gpt-5.5", mid: "gpt-5.5" },
 };
 
 export type ModelSpec = {
@@ -57,17 +58,16 @@ export type ModelSpec = {
   provider?: Provider;
 };
 
-/** Infer a tier from a bare Claude model id (opus → deep, sonnet → mid, haiku → fast). */
+/** Infer a tier from a bare Claude model id (opus → deep, everything else → mid). */
 export function inferTier(modelId: string): Tier {
   if (/opus/i.test(modelId)) return "deep";
-  if (/haiku/i.test(modelId)) return "fast";
-  return "mid"; // sonnet and anything unrecognized
+  return "mid"; // sonnet, haiku, and anything unrecognized
 }
 
 /**
  * Parse a frontmatter `model:` value into a ModelSpec. Accepts:
  *   - string  "claude-opus-4-8"  → { tier: inferred, pin: { claude: id } }
- *   - string  "deep" | "fast"    → { tier, pin: {} }
+ *   - string  "deep" | "mid"     → { tier, pin: {} }
  *   - object  { tier?, pin? }    → normalized ModelSpec
  * Unknown/missing → defaults to { tier: "deep", pin: {} }.
  */

@@ -217,7 +217,7 @@ the *throwaway discovery subagents YOU (Coach K) spawn* while orchestrating: "do
 `PaymentService` already exist?", "list every file that imports X", "which test runner
 does this repo use?". That work is mechanical retrieval, not reasoning.
 
-Spawn those at the **`fast` tier (Haiku)** — `Agent({ model: "claude-haiku-4-5", … })` or
+Spawn those on **Haiku** — `Agent({ model: "claude-haiku-4-5", … })` or
 the `Explore` subagent type. The cascade: start cheap for retrieval, and only escalate a
 *specific* question to a higher tier when Haiku's answer is genuinely ambiguous or the
 decision is costly to get wrong. Cost is dominated by input tokens multiplied across every
@@ -225,21 +225,31 @@ call, so keeping discovery on Haiku and reserving Opus for the named roles' judg
 free quality — the retrieval is identical, the bill is a fraction. Never put a *decision*
 (domain correctness, architecture, risk) on the cheap tier; never put *retrieval* on Opus.
 
+**When NOT to spawn one.** Delegation multiplies cost and wall-clock, so it has to earn its
+place. Spawn a discovery subagent only for a genuinely wide search — one that spans many
+files or naming conventions and would otherwise flood your context with results you don't
+need. Do NOT spawn one for work you can finish yourself in a handful of tool calls (a
+single Read, a known-path Grep, one Glob), and do NOT spawn one to verify or double-check
+your own conclusions — re-check it yourself. If one subagent can answer the question, use
+one rather than three, and prefer a single broader brief over several narrow ones. This
+paragraph governs only these throwaway discovery agents; dispatching the named roster
+(Bird, MJ, Shaq, Kobe, Pippen, Drexler, Magic) follows the workflow below, unchanged.
+
 ---
 
 ## STEP 2b: Provider Routing & Delegation (Hybrid — applies to every workflow)
 
-Each agent can run on a different provider (Claude/Codex/Gemini/Ollama) on its own
+Each agent can run on a different provider (Claude/Codex/Ollama) on its own
 native subscription — Coach K stays Claude/Max and orchestrates. **Before spawning ANY
 agent, decide native vs delegated** (full design: `docs/spec-hybrid-team/spec.md`).
 
 **Routing decision (per agent, before each spawn):**
 ```bash
 # Resolve the agent's effective provider via the ONE routing authority (no parallel table).
-bun "$DREAMTEAM_ROOT/scripts/print-provider.ts" <agent>   # prints "claude" or "ollama|gemini|codex"
+bun "$DREAMTEAM_ROOT/scripts/print-provider.ts" <agent>   # prints "claude" or "ollama|codex"
 ```
 If no helper is available, the rule is: read the agent's `model.provider` frontmatter
-field — unset/`claude` → **NATIVE**; `ollama|gemini|codex` → **DELEGATED**.
+field — unset/`claude` → **NATIVE**; `ollama|codex` → **DELEGATED**.
 
 - **NATIVE (provider = claude):** spawn the normal `Task`/`Agent` subagent exactly as today. Runs on Max. Plan mode, message bus, live repo — all intact. **This is unchanged `/team`.**
 - **DELEGATED (provider ≠ claude):** do NOT spawn a Claude subagent. Instead run the agent's turn via the dispatcher (below). Coach K + the orchestration (briefs, checkpoints, reviewer loop) stay native — only the agent's *execution* is delegated.
@@ -248,7 +258,7 @@ field — unset/`claude` → **NATIVE**; `ollama|gemini|codex` → **DELEGATED**
 
 **Delegation scope (current):**
 - **Analysis/synthesis roles** (Bird, MJ, Kobe, Pippen, Drexler, Magic) — single-shot delegation on any provider (Delegated Turn Protocol below).
-- **Shaq (implementation)** — **claude (native), or codex / gemini / ollama (two-phase, below)**. Coach K is never delegated.
+- **Shaq (implementation)** — **claude (native), or codex / ollama (two-phase, below)**. Coach K is never delegated.
 
 ### Delegated Turn Protocol (analysis/synthesis roles)
 
@@ -266,9 +276,9 @@ field — unset/`claude` → **NATIVE**; `ollama|gemini|codex` → **DELEGATED**
 4. **`ok:false` → FAIL LOUD.** Use **AskUserQuestion**: retry / skip this agent (partial team — record it) / re-pin to another subscription-or-local provider / abort. **Never** fall back to a metered API; never silently substitute Claude for a non-claude agent.
 5. The dispatcher already enforces BR-1 (scrubbed env + positive auth pre-flight), BR-4 (contract gate), BR-10 (sandbox). You do not re-implement these.
 
-### Delegated Implementation Protocol (Shaq on codex/gemini/ollama — two-phase, plan→approve→implement)
+### Delegated Implementation Protocol (Shaq on codex/ollama — two-phase, plan→approve→implement)
 
-When Shaq's `model.provider` is `codex`, `gemini`, or `ollama`, you MUST run the SAME plan-approve-before-write governance you run for native Claude Shaq — split across two dispatcher calls (`--phase plan` then `--phase implement --plan <file>`) with a human checkpoint between. The plan phase is write-incapable per provider — codex: `--sandbox read-only`; gemini: OS read-only cwd + no-write framing (its `--approval-mode plan` is NOT a hard gate headless); ollama: orchestrator tool-loop with only READ tools registered (it has no fs — it can only ask us to act, and we withhold write tools until approval). The dispatcher handles the per-provider mechanism; the protocol is identical:
+When Shaq's `model.provider` is `codex` or `ollama`, you MUST run the SAME plan-approve-before-write governance you run for native Claude Shaq — split across two dispatcher calls (`--phase plan` then `--phase implement --plan <file>`) with a human checkpoint between. The plan phase is write-incapable per provider — codex: `--sandbox read-only`; ollama: orchestrator tool-loop with only READ tools registered (it has no fs — it can only ask us to act, and we withhold write tools until approval). The dispatcher handles the per-provider mechanism; the protocol is identical:
 
 1. **Plan phase (read-only):**
    ```bash
@@ -283,7 +293,7 @@ When Shaq's `model.provider` is `codex`, `gemini`, or `ollama`, you MUST run the
    codex writes the files into the session sandbox (`.artifactsDir`); `.writtenFiles` lists them. The dispatcher verifies cited `files_changed` paths actually exist (no hallucinated writes).
 4. **Review + promote:** diff `.artifactsDir`/`.writtenFiles`, run them through the reviewer loop + checkpoint, and **promote into the worktree only on approval** (BR-10). Never auto-apply.
 
-Re-pinning Shaq to `gemini`/`ollama` is refused (Phase 3, gate pending). Re-pin to `claude` for native plan mode, or `codex` for the above.
+Re-pinning Shaq to `ollama` is refused (Phase 3, gate pending). Re-pin to `claude` for native plan mode, or `codex` for the above.
 
 ---
 
@@ -404,7 +414,8 @@ Launch Kobe and Drexler simultaneously with the Task tool.
 
 **Kobe** (`subagent_type="kobe"`):
 ```
-Review this implementation for critical risks. Max 3 findings.
+Review this implementation for critical risks. Report every risk you can evidence,
+ordered most-severe first — do not trim to a target count.
 Focus on edge cases, race conditions, and failure modes.
 Propose fixes for each finding.
 
@@ -1144,7 +1155,7 @@ IMPLEMENTATION SUMMARY (from Shaq):
 
 Review following your Output Schema:
 - Find edge cases, race conditions, and hidden assumptions
-- Max 3 critical findings
+- Report every critical you can evidence, most-severe first — do not trim to a count
 - Map findings back to Bird's acceptance criteria
 - Propose mitigation or fix for each finding
 - Include confidence assessment
@@ -1626,7 +1637,7 @@ After EVERY agent completes — in ALL workflows (Quick Fix, Full Team, PR Revie
 
 ## SPEC SIGN-OFF CHECKPOINT (MANDATORY — SDD)
 
-After Magic writes `docs/spec-${TOPIC}/spec.md`, **before** Session Learning, Memory Harvest, and Final Output, present the synthesised spec to the human for sign-off. This closes the SDD loop — the spec is the contract, the human confirms what shipped matches what was agreed.
+After Magic writes `docs/spec-${TOPIC}/spec.md`, **before** Session Learning and Final Output, present the synthesised spec to the human for sign-off. This closes the SDD loop — the spec is the contract, the human confirms what shipped matches what was agreed.
 
 ```
 AskUserQuestion({
@@ -1645,7 +1656,7 @@ AskUserQuestion({
 ```
 
 **Acting on the result:**
-- **Approve — matches intent**: Update `docs/spec-${TOPIC}/spec.md` Status to `Final — approved by <human>`. Proceed to Session Learning (and Memory Harvest — pre-cutover, both run).
+- **Approve — matches intent**: Update `docs/spec-${TOPIC}/spec.md` Status to `Final — approved by <human>`. Proceed to Session Learning.
 - **Approve with notes**: Update Status to `Final — approved with notes`. Proceed.
 - **Reject — scope drift**: Surface the gap to the human via free text, then decide jointly (fix the implementation, accept the drift, or revert). Do NOT proceed silently.
 - **Reject — spec inaccurate**: Re-spawn Magic with a focused re-synthesis prompt referencing the human's correction. Do not just edit the spec yourself — Magic owns synthesis.
@@ -1654,16 +1665,14 @@ The spec sign-off is the only place the human confirms "this is what we built". 
 
 ---
 
-## SESSION LEARNING (DB LOOP) — PRE-CUTOVER SAFE
+## SESSION LEARNING (DB LOOP)
 
-> **Pre-cutover (Option B dual-safe):** This step writes to the Dream Team workspace
-> (`~/.dreamteam/workspace/memory/<project>/`) — it does NOT touch `~/.claude`.
-> `dreamteam learn` refuses `~/.claude` without `--installer-phase`, which is only set by the
-> slice-9 cutover script. Running this step today is safe and reversible. The deprecated
-> MEMORY HARVEST below remains the live file-based system until the cutover runs.
+> **Post-cutover:** The DB-backed unified learning store is the live system (the file-based
+> memory harvest it replaced has been retired). `~/.claude/projects/<project>/memory/` is locked
+> read-only with the projection as its sole writer — do not write memory files there directly.
+> `dreamteam learn` persists behavioral signals through the CLI gate; it is safe to run per session.
 
-After spec sign-off, before Final Output. Same trigger point as MEMORY HARVEST — end-of-session,
-context-fresh, one pass, skippable.
+After spec sign-off, before Final Output — end-of-session, context-fresh, one pass, skippable.
 
 **Goal:** persist behavioral signals from this session to the DB-backed projection:
 auto-inferred signals (evaluation findings → candidate instincts) handled automatically,
@@ -1740,54 +1749,6 @@ dreamteam learn --project "$(basename "$(pwd)")"
   Do not re-author rules here.
 - **No `--installer-phase`.** The cutover script (slice 9) sets this flag. Do not add it here.
 - **Checkpoint saving is unchanged and separate.** `docs/checkpoint-<topic>.md` per existing rules.
-
----
-
-## MEMORY HARVEST [DEPRECATED — pre-cutover file-based system; removed at slice-9 go-live]
-
-> **Deprecation notice:** This section is the file-writing harvest being replaced by SESSION
-> LEARNING (DB LOOP) above. It remains in place pre-cutover — both steps run until slice 9 runs
-> and removes this block. Do not remove it manually; the cutover diff handles the deletion.
-
-After spec sign-off, before Final Output, run ONE harvest question.
-
-**Goal:** capture confirmation signals (non-obvious calls the user accepted) and reusable patterns from the session — without creating any file artifacts unless the user explicitly opts in. Replaces the prior retro flow, which produced documents nobody read.
-
-### How
-
-1. **Save checkpoint first** — if not already saved in Phase 2, save all agent outputs to `docs/checkpoint-<topic>.md`. This is the recovery record and is independent of harvest.
-2. **Identify up to 3 candidates from the session's routing trail.** Look for:
-   - **Confirmations** — judgment calls (Coach K's, an agent's, a routing pivot) the user accepted without pushback. The signal is *absence of correction* on a non-obvious choice that had alternatives.
-   - **Patterns** — something that worked unexpectedly well, or a tradeoff the team navigated cleanly, that would generalize to future sessions.
-   - Pivots the user explicitly demanded are corrections — already implicit in conversation. Do NOT re-surface them here.
-3. **Ask via AskUserQuestion (multiSelect):**
-
-   ```
-   AskUserQuestion({
-     questions: [{
-       question: "Capture any non-obvious calls from this session as memory?",
-       header: "Memory Harvest",
-       options: [
-         { label: "<short title>", description: "<one-line + why memory-worthy + which agent/decision>" },
-         // ... up to 3 candidates
-         { label: "None — skip", description: "Nothing memory-worthy this session" }
-       ],
-       multiSelect: true
-     }]
-   })
-   ```
-
-   If no candidates surface, present the question with "None" as the only real option — silence is a valid harvest result.
-4. **Act on the result:**
-   - User picks "None" (or only "None") → produce zero artifacts. Done.
-   - For each candidate selected → write a memory file to `~/.claude/projects/<project>/memory/` with frontmatter (`name`, `description`, `type: feedback | project`) and add a one-line index entry to `MEMORY.md`.
-
-### Hard rules
-
-- **No file artifacts unless the user explicitly selects.** This is the load-bearing constraint that distinguishes harvest from the removed retro flow.
-- **Skippable by design.** "None" is a first-class option, not a friction path.
-- **One question, one turn.** Do not chase, do not re-prompt, do not produce a markdown summary of the harvest.
-- **Checkpoint saving is unchanged and separate.** `docs/checkpoint-<topic>.md` continues to be saved per existing rules.
 
 ---
 

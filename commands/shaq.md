@@ -12,7 +12,7 @@ PROV="$([ -d "$DT" ] && bun "$DT/scripts/print-provider.ts" shaq 2>/dev/null || 
 ```
 
 - **`$PROV` = `claude`** (or unresolved) → spawn the **shaq** subagent via the **Task tool** (`subagent_type="shaq"`) with the mission below. Native, on Max. *(unchanged behavior)*
-- **`$PROV` = `codex` | `gemini` | `ollama`** → implementation is delegated; you MUST run the **two-phase plan → approve → implement** gate (the plan phase is write-incapable per provider, so it physically cannot write before you approve):
+- **`$PROV` = `codex` | `ollama`** → implementation is delegated; you MUST run the **two-phase plan → approve → implement** gate (the plan phase is write-incapable per provider, so it physically cannot write before you approve):
 
   1. **Plan (write-incapable):**
      ```bash

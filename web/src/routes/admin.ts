@@ -19,7 +19,7 @@ import { readConfig } from "../../../scripts/paths.ts";
 import { readModelSpec, setModelBlock } from "../../../scripts/frontmatter.ts";
 import { renderModelSpecYaml, PROVIDERS, TIERS, type ModelSpec, type Provider, type Tier } from "../../../scripts/model-tiers.ts";
 
-const KNOWN_PROVIDER_IDS: ProviderId[] = ["claude", "ollama", "gemini", "codex"];
+const KNOWN_PROVIDER_IDS: ProviderId[] = ["claude", "ollama", "codex"];
 
 function html(content: string, status = 200): Response {
   return new Response(content, {

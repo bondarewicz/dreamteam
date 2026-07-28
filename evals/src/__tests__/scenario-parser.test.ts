@@ -189,3 +189,69 @@ describe("Real scenario files", () => {
     }
   });
 });
+
+// ── regression: multi-line fields collapsed to one line ─────────────────────
+// The terminator used `$` under the `m` flag, which matches at EVERY line end,
+// so the lazy quantifier stopped after the first line. Every rubric reaching the
+// judge was one line long (scoring_rubric was literally "  pass:").
+describe("extractField — multi-line fields (regression)", () => {
+  const SAMPLE = [
+    "prompt: |",
+    "  do the thing",
+    "",
+    "expected_behavior: |",
+    "  - first bullet:",
+    "    1. nested item (invariant: true — note the inner colon)",
+    "    2. another nested item",
+    "  - second bullet",
+    "",
+    "scoring_rubric: |",
+    "  pass:",
+    "    - all rules found",
+    "    - no misclassifications",
+    "  partial:",
+    "    - some rules found",
+    "  fail:",
+    "    - nothing found",
+    "",
+    "graders: []",
+    "",
+  ].join("\n");
+
+  test("captures every line of a block scalar, not just the first", () => {
+    const eb = extractField("expected_behavior", SAMPLE);
+    expect(eb.split("\n").length).toBeGreaterThan(1);
+    expect(eb).toContain("first bullet");
+    expect(eb).toContain("second bullet");
+  });
+
+  test("indented keys (pass:/fail:) do not terminate the field", () => {
+    const sr = extractField("scoring_rubric", SAMPLE);
+    expect(sr).toContain("pass:");
+    expect(sr).toContain("partial:");
+    expect(sr).toContain("fail:");
+    expect(sr).toContain("nothing found");
+  });
+
+  test("stops at the next TOP-LEVEL key", () => {
+    expect(extractField("scoring_rubric", SAMPLE)).not.toContain("graders");
+    expect(extractField("expected_behavior", SAMPLE)).not.toContain("scoring_rubric");
+  });
+
+  test("a trailing field runs to end of input", () => {
+    const trailing = "foo: |\n  line one\n  line two\n";
+    expect(extractField("foo", trailing)).toBe("  line one\n  line two");
+  });
+
+  test("real scenario rubrics are substantive, not one-liners", () => {
+    const birdDir = path.join(EVALS_DIR, "bird");
+    if (!fs.existsSync(birdDir)) return;
+    const files = fs.readdirSync(birdDir).filter((f) => f.startsWith("scenario-") && f.endsWith(".md"));
+    for (const fname of files) {
+      const content = fs.readFileSync(path.join(birdDir, fname), "utf-8");
+      const rubric = extractField("scoring_rubric", content);
+      if (!rubric) continue; // scenario genuinely has no rubric
+      expect(rubric.length).toBeGreaterThan(40);
+    }
+  });
+});

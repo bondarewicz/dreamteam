@@ -1,5 +1,13 @@
 # Spec — Hybrid Multi-Provider `/team`
 
+> **SUPERSEDED IN PART (2026-07-28):** Gemini support has been removed from the
+> product. Google ended Gemini Code Assist for individuals on the `gemini` CLI
+> client ("this client is no longer supported… migrate to Antigravity"), which
+> broke the keyless `~/.gemini` subscription path this spec depends on. The
+> supported providers are now **Claude, Codex, and Ollama**. Gemini references
+> below are retained as the historical design record — they describe what was
+> decided in June 2026, not current behavior.
+
 **Tracker:** 2026-06-17 · hybrid-team · Sign-off pending
 **Authors:** Bird (domain) · MJ (architecture) · Pippen (operations) · Drexler (scope) · Kobe (quality/risk) · Magic (synthesis)
 **Status:** READY FOR SIGN-OFF — Phase 1. Shaq-on-any-provider gated Phase 2/3 (codex→gemini→ollama).

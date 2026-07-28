@@ -24,7 +24,7 @@ const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), 
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_MODEL = "claude-opus-4-8";
+const DEFAULT_MODEL = "claude-opus-5";
 
 // ---------------------------------------------------------------------------
 // Frontmatter parsing (model + tools from agent .md)

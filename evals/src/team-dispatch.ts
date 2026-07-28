@@ -46,8 +46,8 @@ export type TurnResult = {
 export const ANALYSIS_ROLES = new Set(["bird", "mj", "kobe", "pippen", "drexler", "magic"]);
 /** Implementation/verification roles — two-phase plan→approve→implement (BR-5). */
 export const IMPL_ROLES = new Set(["shaq"]);
-/** Providers where delegated implementation is ENABLED. codex + gemini (plan gate 3/3); ollama (constructive tool-loop gate). */
-export const IMPL_PROVIDERS = new Set(["codex", "gemini", "ollama"]);
+/** Providers where delegated implementation is ENABLED. codex (plan gate 3/3); ollama (constructive tool-loop gate). */
+export const IMPL_PROVIDERS = new Set(["codex", "ollama"]);
 
 /** S4 — interactive single-shot neutralizer for analysis roles (no tools, deliver inline, be honest about blind spots). */
 export const INTERACTIVE_SINGLE_SHOT_APPEND = [
@@ -65,11 +65,11 @@ function turnTimeoutMs(provider: string): number {
   const envProv = parseInt(process.env[`DT_TURN_TIMEOUT_MS_${provider.toUpperCase()}`] ?? "", 10);
   if (Number.isFinite(envProv)) return envProv;
   if (Number.isFinite(envAll)) return envAll;
-  return { codex: 240_000, gemini: 120_000, ollama: 300_000, claude: 0 }[provider] ?? 180_000;
+  return { codex: 240_000, ollama: 300_000, claude: 0 }[provider] ?? 180_000;
 }
 
 // ── BR-1/BR-2: financial invariant enforcement ──────────────────────────────
-const METERED_KEYS = ["OPENAI_API_KEY", "CODEX_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+const METERED_KEYS = ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 
 /** Strip metered keys from THIS process env so all child spawns inherit a clean env. Returns what was removed. */
 export function scrubMeteredEnv(): string[] {
@@ -91,10 +91,6 @@ export function assertSubscriptionAuth(provider: string): { ok: boolean; mode: T
       return fs.existsSync(path.join(HOME, ".codex", "auth.json")) || fs.existsSync(path.join(HOME, ".codex"))
         ? { ok: true, mode: "subscription" }
         : { ok: false, mode: "unknown", error: "codex: no ChatGPT login found (~/.codex). Run `codex login`. Refusing — would otherwise require a metered API key." };
-    case "gemini":
-      return fs.existsSync(path.join(HOME, ".gemini"))
-        ? { ok: true, mode: "subscription" }
-        : { ok: false, mode: "unknown", error: "gemini: no CLI login found (~/.gemini). Run `gemini` and sign in. Refusing — would otherwise require a metered GEMINI_API_KEY." };
     case "ollama":
       return { ok: true, mode: "local" };
     default:

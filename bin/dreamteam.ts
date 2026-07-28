@@ -5,7 +5,7 @@
  *   dreamteam install   [--harness claude-code|all] [--dry-run]
  *   dreamteam uninstall
  *   dreamteam status                 what's installed, versions, drift
- *   dreamteam doctor                 are Claude / Codex / Gemini / Ollama reachable?
+ *   dreamteam doctor                 are Claude / Codex / Ollama reachable?
  *   dreamteam list                   roster + commands
  *   dreamteam eval [...]             thin passthrough to evals/src/cli.ts
  *   dreamteam learn [...]            in-session learning loop step (analyze → approve → project)
@@ -669,7 +669,7 @@ async function cmdDoctor(rest: string[] = []): Promise<number> {
   console.log(requiredOk
     ? "\nClaude Code present — interactive /team and the judge will work."
     : "\nClaude Code missing — install it (interactive /team and the eval judge run on Claude).");
-  console.log("Optional providers (Ollama/Gemini/Codex) only need to pass if you eval on them.");
+  console.log("Optional providers (Ollama/Codex) only need to pass if you eval on them.");
 
   // Memory health check (Slice 9 / Option A).
   const project = flag(rest, "--project") ?? canonicalProjectId();

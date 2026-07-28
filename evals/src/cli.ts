@@ -12,7 +12,7 @@
  *                        Does NOT affect Coach K scoring calls — the judge stays on the default model
  *                        so 4.6 vs 4.7 runs are compared against a constant baseline.
  *   --dry-run            Show what would run without executing
- *   --timeout-per-phase  Timeout in seconds per scenario (default: 300)
+ *   --timeout-per-phase  Timeout in seconds per scenario (default: 600)
  */
 
 import path from "path";
@@ -84,9 +84,9 @@ function parseArgs(argv: string[]): PipelineOptions & { help: boolean } {
     process.exit(1);
   }
 
-  const validProviders = new Set(["", "claude", "ollama", "gemini", "codex"]);
+  const validProviders = new Set(["", "claude", "ollama", "codex"]);
   if (!validProviders.has(opts.provider)) {
-    console.error(`Error: --provider must be one of: claude|ollama|gemini|codex`);
+    console.error(`Error: --provider must be one of: claude|ollama|codex`);
     process.exit(1);
   }
   if (opts.provider && opts.model) {
@@ -106,10 +106,10 @@ function printHelp() {
   --phase PHASE         agents|graders|score|all (default: all)
   --trials N            Run each scenario N times (default: 1)
   --model ID            Exact model for agent runs (e.g. claude-opus-4-6, ollama/qwen3.6). Judge stays on default.
-  --provider NAME       Resolve each agent's tier to this provider's model (claude|ollama|gemini|codex).
+  --provider NAME       Resolve each agent's tier to this provider's model (claude|ollama|codex).
                         Mutually exclusive with --model. Default (neither): agent tier → claude.
   --dry-run             Show what would run without executing
-  --timeout-per-phase N Timeout in seconds per phase (default: 300/600)`);
+  --timeout-per-phase N Timeout in seconds per scenario (default: 600)`);
 }
 
 async function main() {

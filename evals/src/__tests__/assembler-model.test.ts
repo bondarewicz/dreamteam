@@ -19,8 +19,8 @@ test("meta.model records the exact --model when given", () => {
 
 test("meta.model records '<provider> (tier)' for a --provider run", () => {
   const tmp = emptyScored();
-  const r = assembleFinalResult(path.join(tmp, "scored"), "2026-01-01-0000", 0, 0, 1, ".", undefined, "gemini");
-  expect(r.meta.model).toBe("gemini (tier)");
+  const r = assembleFinalResult(path.join(tmp, "scored"), "2026-01-01-0000", 0, 0, 1, ".", undefined, "codex");
+  expect(r.meta.model).toBe("codex (tier)");
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 

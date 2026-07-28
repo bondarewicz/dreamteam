@@ -18,6 +18,16 @@ import { extractGraders } from "./scenario-parser.ts";
 import { runAllGraders } from "./graders.ts";
 import type { RawOutput } from "./types.ts";
 
+
+/**
+ * Per-scenario wall-clock budget. 600s, not 300s: Opus-5-class models narrate and
+ * work longer per turn, and at 300s runs were being killed mid `tool_use` after
+ * ~16k output tokens — the harness then recorded an EMPTY agent_output, which the
+ * judge scored as a hard `fail`. A timeout must not masquerade as a bad answer.
+ * Override with --timeout-per-phase.
+ */
+const DEFAULT_SCENARIO_TIMEOUT_MS = 600 * 1000;
+
 export interface PipelineResult {
   finalOutputPath: string;
   scenariosRun: number;
@@ -56,7 +66,7 @@ async function phaseAgents(
   }
 
   const timeoutMs =
-    options.timeoutPerPhase > 0 ? options.timeoutPerPhase * 1000 : 300 * 1000;
+    options.timeoutPerPhase > 0 ? options.timeoutPerPhase * 1000 : DEFAULT_SCENARIO_TIMEOUT_MS;
 
   // Build work items: (scenario, trial)
   const workItems: Array<{ scenario: DiscoveredScenario; trial: number }> = [];
@@ -168,7 +178,7 @@ async function phaseScore(
   fs.mkdirSync(scoredDir, { recursive: true });
 
   const timeoutMs =
-    options.timeoutPerPhase > 0 ? options.timeoutPerPhase * 1000 : 300 * 1000;
+    options.timeoutPerPhase > 0 ? options.timeoutPerPhase * 1000 : DEFAULT_SCENARIO_TIMEOUT_MS;
 
   const tasks = scenarios.map(({ scenarioFile, agent, scenarioId }) => async () => {
     await scoreScenarioAllTrials(
@@ -268,16 +278,12 @@ export async function runPipeline(
     options.scenarioFilter
   );
 
-  // Override with resume dir if provided
-  const runDatetime = options.resumeDir
-    ? path.basename(options.resumeDir)
-    : new Date().toISOString().replace(/T/, "-").replace(/:/, "").replace(/:.*$/, "").replace(/-/, "").slice(0, 13).replace(/(\d{4})(\d{2})(\d{2})-(\d{4})/, "$1-$2-$3-$4");
-
-  // Actually format as Python does: YYYY-MM-DD-HHMM
+  // Run id format: YYYY-MM-DD-HHMMSS. Seconds are included so two runs started
+  // in the same minute get distinct dirs instead of clobbering each other.
   const now = new Date();
   const formattedRunDatetime = options.resumeDir
     ? path.basename(options.resumeDir)
-    : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+    : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
 
   const rawDir = options.resumeDir
     ? options.resumeDir

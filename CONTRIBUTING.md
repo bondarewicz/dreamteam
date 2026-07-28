@@ -62,8 +62,8 @@ Agents are one markdown file each: `agents/<name>.md` — YAML frontmatter (conf
 name: <name>
 description: '<one line — when to use this agent>'
 model:
-  tier: deep            # deep | mid | fast (resolves to a model per provider)
-  provider: claude      # claude (default) | codex | gemini | ollama
+  tier: deep            # deep | mid (resolves to a model per provider)
+  provider: claude      # claude (default) | codex | ollama
   # pin:                # optional per-provider overrides
   #   ollama: qwen3.6
 color: green
@@ -84,7 +84,7 @@ maxTurns: 50
 
 ## Run an agent on another provider
 
-Set `model.provider` in the agent's frontmatter (`codex` | `gemini` | `ollama`) — that's it. Coach K delegates that agent to the provider's first-party CLI on **your subscription** (no proxy, no metered API). Implementation agents (Shaq) go through a plan → approve → implement gate per provider; each provider's write-incapable plan gate is proven by `bun scripts/plan-gate.ts <provider>` before it's enabled. See `docs/spec-hybrid-team/`.
+Set `model.provider` in the agent's frontmatter (`codex` | `ollama`) — that's it. Coach K delegates that agent to the provider's first-party CLI on **your subscription** (no proxy, no metered API). Implementation agents (Shaq) go through a plan → approve → implement gate per provider; each provider's write-incapable plan gate is proven by `bun scripts/plan-gate.ts <provider>` before it's enabled. See `docs/spec-hybrid-team/`.
 
 ---
 

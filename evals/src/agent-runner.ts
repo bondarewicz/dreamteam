@@ -172,7 +172,10 @@ export async function runSingleAgentCall(
     }
 
     const parsed = parseNdjson(stdout);
-    agentOutput = parsed.agentOutput;
+    // parseNdjson can yield undefined when the stream carries no assistant text
+    // (e.g. the turn was killed mid tool_use). Coerce here — a downstream
+    // `agentOutput.slice()` would throw and lose the whole run's raw output.
+    agentOutput = parsed.agentOutput ?? "";
     inputTokens = parsed.inputTokens;
     outputTokens = parsed.outputTokens;
     tokensUsed = parsed.tokensUsed;
@@ -246,7 +249,7 @@ async function runBirdAgentCall(
 
   if (result.ok) {
     // Serialize the structured output as JSON string — this is what graders parse
-    const agentOutput = JSON.stringify(result.data);
+    const agentOutput = JSON.stringify(result.data ?? null) ?? "";
     return {
       agent: "bird",
       scenario_id: scenarioId,

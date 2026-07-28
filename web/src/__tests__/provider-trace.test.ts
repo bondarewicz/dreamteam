@@ -30,8 +30,8 @@ test("a provider trace renders in the viewer (not the empty state)", () => {
 });
 
 test("error trace still renders (no crash, shows the error note)", () => {
-  const t = buildTrace({ provider: "gemini", model: "gemini-2.5-flash", userPrompt: "p", responseText: "", inputTokens: 0, outputTokens: 0, durationMs: 50, error: "gemini exit 1" });
+  const t = buildTrace({ provider: "codex", model: "gpt-5.5", userPrompt: "p", responseText: "", inputTokens: 0, outputTokens: 0, durationMs: 50, error: "codex exit 1" });
   const html = TraceViewerPage(resultWithTrace(t), "eval/run-x");
   expect(html).not.toContain("No trace data available");
-  expect(html).toContain("gemini exit 1");
+  expect(html).toContain("codex exit 1");
 });

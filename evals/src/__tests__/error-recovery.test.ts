@@ -19,7 +19,7 @@ describe("classifyError", () => {
 
   test("user_actionable: auth, missing CLI, quota — checked before transient", () => {
     for (const m of [
-      "gemini exit 1: 401 unauthorized",
+      "codex exit 1: 401 unauthorized",
       "command not found: codex",
       "invalid api key",
       "insufficient_quota: billing required",

@@ -12,13 +12,17 @@ import type { GraderDef, ScenarioMeta, ScenarioFields } from "./types.ts";
  * Stops at the next top-level field (no leading whitespace + identifier).
  */
 export function extractField(name: string, content: string): string {
-  const pattern = new RegExp(
-    "^" + escapeRegex(name) + ":\\s*\\|?\\s*\\n([\\s\\S]*?)(?=\\n[a-zA-Z_][a-zA-Z0-9_]*:\\s|\\Z)",
-    "m"
-  );
-  // Use a lookahead-based approach compatible with JS (no \Z)
+  // Terminate at the next TOP-LEVEL key (column 0) or the absolute end of input.
+  //
+  // `$` must NOT be used as the end-of-input alternative here: with the `m` flag it
+  // matches at every line ending, so the lazy `[\s\S]*?` stops at the end of the
+  // FIRST line and every multi-line field silently collapses to one line. Use
+  // `(?![\s\S])` — a true end-of-input assertion, unaffected by `m`.
+  //
+  // The header is matched with `[ \t]*` (not `\s*`), since `\s` includes newlines
+  // and would let the header swallow the first content line.
   const re = new RegExp(
-    "^" + escapeRegex(name) + ":\\s*\\|?\\s*\\n([\\s\\S]*?)(?=\\n[a-zA-Z_][a-zA-Z0-9_]*:|$)",
+    "^" + escapeRegex(name) + ":[ \\t]*\\|?[ \\t]*\\n([\\s\\S]*?)(?=\\n[a-zA-Z_][a-zA-Z0-9_]*:|(?![\\s\\S]))",
     "m"
   );
   const match = re.exec(content);

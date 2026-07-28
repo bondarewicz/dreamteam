@@ -1,7 +1,7 @@
 /**
  * error-recovery.ts — s20 error classification + transient retry for the eval harness.
  *
- * The harness shells out to four provider CLIs/APIs (claude, ollama, gemini, codex).
+ * The harness shells out to three provider CLIs/APIs (claude, ollama, codex).
  * Failures fall into three classes that demand different responses:
  *
  *   transient       — a rate limit (429), a 5xx, a socket/timeout, a model-loading
@@ -11,8 +11,8 @@
  *   permanent       — the model answered but the answer was wrong/unparseable. This
  *                     is the signal evals exist to measure; never retried, never masked.
  *
- * IMPORTANT — no cross-provider fallback here. Falling back to Claude when a Gemini
- * run errors would record a Claude result under a Gemini run and silently corrupt
+ * IMPORTANT — no cross-provider fallback here. Falling back to Claude when a Codex
+ * run errors would record a Claude result under a Codex run and silently corrupt
  * the per-provider comparison the harness exists to produce. Fallback-to-Claude is
  * an INTERACTIVE /team concern (see commands/team.md "Liveness & Fallback"), not a
  * measurement concern. Here we only retry true transients and otherwise tag the

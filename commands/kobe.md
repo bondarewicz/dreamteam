@@ -12,7 +12,7 @@ PROV="$([ -d "$DT" ] && bun "$DT/scripts/print-provider.ts" kobe 2>/dev/null || 
 ```
 
 - **`$PROV` = `claude`** (or unresolved) → spawn the **kobe** subagent via the **Task tool** (`subagent_type="kobe"`) with the mission below. Native, on Max. *(unchanged behavior)*
-- **`$PROV` = `ollama` | `gemini` | `codex`** → do NOT use Task. Delegate the turn to that provider's own CLI on its subscription:
+- **`$PROV` = `ollama` | `codex`** → do NOT use Task. Delegate the turn to that provider's own CLI on its subscription:
   ```bash
   BRIEF="$(mktemp)"; cat > "$BRIEF" <<'BRIEF_EOF'
   [Put the full mission here: the user request from $ARGUMENTS + the Output Requirements section below.]
@@ -30,13 +30,13 @@ PROV="$([ -d "$DT" ] && bun "$DT/scripts/print-provider.ts" kobe 2>/dev/null || 
 You are invoking **Kobe (Kobe Bryant)** — the Relentless Quality & Risk Enforcer.
 
 ## Your Mission
-Find what everyone else missed. Hunt for edge cases, race conditions, hidden assumptions, and failure modes. Max 3 critical findings.
+Find what everyone else missed. Hunt for edge cases, race conditions, hidden assumptions, and failure modes. Report every critical you can evidence — no quota.
 
 ## What to Review
 $ARGUMENTS
 
 ## Output Requirements
-For each finding (max 3):
+For each finding (most-severe first):
 - Risk: what breaks and how
 - Severity: Critical / High / Medium
 - Location: file:line

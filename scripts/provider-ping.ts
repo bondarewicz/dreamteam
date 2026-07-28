@@ -11,7 +11,7 @@
  * and schema, which a connectivity check doesn't need.
  *
  * Cost: Claude uses `haiku` + a one-word prompt (negligible Max usage, but real).
- * Ollama/Gemini/Codex are local / free-tier / subscription.
+ * Ollama/Codex are local / subscription.
  */
 import path from "path";
 import os from "os";
@@ -83,28 +83,6 @@ async function pingOllama(model: string | undefined, timeoutMs: number): Promise
   }
 }
 
-async function pingGemini(model: string, timeoutMs: number): Promise<PingResult> {
-  const start = Date.now();
-  const sysFile = path.join(os.tmpdir(), `dt-ping-gemini-${start}.system.md`);
-  try {
-    fs.writeFileSync(sysFile, "You are a connectivity check. Reply with exactly one word: READY. Do not use tools.");
-    const proc = Bun.spawn(["gemini", "-p", PING_PROMPT, "-m", model, "-o", "json", "--approval-mode", "plan"], { env: { ...process.env, GEMINI_SYSTEM_MD: sysFile }, stdout: "pipe", stderr: "pipe" });
-    const t = setTimeout(() => { try { proc.kill(); } catch { /* dead */ } }, timeoutMs);
-    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    clearTimeout(t);
-    let env: Record<string, unknown> = {};
-    const brace = out.search(/[{[]/);
-    if (brace !== -1) { try { env = JSON.parse(out.slice(brace)); } catch { /* leave empty */ } }
-    const response = (typeof env.response === "string" ? env.response : "").trim();
-    const tokens = (env.stats as any)?.models?.[model]?.tokens?.total;
-    return { provider: "gemini", ok: code === 0 && ok(response), model, latencyMs: Date.now() - start, response: snip(response), tokens: typeof tokens === "number" ? tokens : undefined, error: code !== 0 ? `gemini exit ${code}` : (response ? (ok(response) ? undefined : "unexpected response") : "empty response") };
-  } catch (e) {
-    return { provider: "gemini", ok: false, model, latencyMs: Date.now() - start, response: "", error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    try { fs.rmSync(sysFile, { force: true }); } catch { /* ignore */ }
-  }
-}
-
 async function pingCodex(model: string, timeoutMs: number): Promise<PingResult> {
   const start = Date.now();
   const outFile = path.join(os.tmpdir(), `dt-ping-codex-${start}.out`);
@@ -127,7 +105,6 @@ async function pingCodex(model: string, timeoutMs: number): Promise<PingResult> 
 export const PING_DEFAULTS: Record<ProviderId, string> = {
   claude: "haiku", // cheapest; keeps Max cost negligible
   ollama: "",      // resolved to first pulled model at call time
-  gemini: "gemini-2.5-flash",
   codex: "gpt-5.5",
 };
 
@@ -137,7 +114,6 @@ export async function pingProvider(id: ProviderId, model?: string, timeoutMs = 4
   switch (id) {
     case "claude": return pingClaude(m, timeoutMs);
     case "ollama": return pingOllama(m || undefined, timeoutMs);
-    case "gemini": return pingGemini(m, timeoutMs);
     case "codex": return pingCodex(m, timeoutMs);
   }
 }

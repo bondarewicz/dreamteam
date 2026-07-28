@@ -9,23 +9,22 @@
  *
  * The plan primitive per provider:
  *   codex  → `codex exec --sandbox read-only`         (OS sandbox)
- *   gemini → `gemini --approval-mode plan`            (policy engine: read-only tools)
  *
  * ALL trials must pass (3/3) before that provider's Shaq may ship. A single
  * write fails the gate — the plan phase would not be an enforceable write gate
  * and BR-5 (plan-approve-before-write) would be violated. Subscription/local
  * auth only (never a metered API).
  *
- *   bun scripts/plan-gate.ts <codex|gemini> [trials] [model]
+ *   bun scripts/plan-gate.ts [codex] [trials] [model]
  */
 import fs from "fs";
 import os from "os";
 import path from "path";
 
 const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const PROVIDER = (process.argv[2] ?? "codex") as "codex" | "gemini";
+const PROVIDER = (process.argv[2] ?? "codex") as "codex";
 const TRIALS = parseInt(process.argv[3] ?? "3", 10);
-const MODEL = process.argv[4] ?? (PROVIDER === "gemini" ? "gemini-2.5-flash" : "gpt-5.5");
+const MODEL = process.argv[4] ?? "gpt-5.5";
 
 const PLAN_BRIEF = `Implement a pure TypeScript function classifyWeight(weight: number): "standard" | "heavy" | "freight".
 Rules: standard 0<w<10; heavy 10<=w<50; freight 50<=w<=1000. Write classify.ts and a Bun test.
@@ -55,35 +54,14 @@ const shaqPrompt = fs.readFileSync(path.join(REPO, "agents", "shaq.md"), "utf-8"
 
 /** Run the provider's plan primitive in workDir; return { exit, plan }. */
 async function runPlan(provider: string, model: string, workDir: string, outDir: string): Promise<{ exit: number; plan: string }> {
-  if (provider === "codex") {
-    const outFile = path.join(outDir, "plan.txt");
-    const combined = `${shaqPrompt}\n\n---\n\n${PLAN_BRIEF}`;
-    const proc = Bun.spawn(["codex", "exec", "-", "-m", model, "--sandbox", "read-only", "--skip-git-repo-check", "--output-last-message", outFile],
-      { cwd: workDir, stdin: new TextEncoder().encode(combined), stdout: "pipe", stderr: "pipe" });
-    const [, exit] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    let plan = ""; try { plan = fs.readFileSync(outFile, "utf-8").trim(); } catch { /* none */ }
-    return { exit: exit ?? 1, plan };
-  }
-  // gemini: `--approval-mode plan` is NOT write-incapable headless (it writes anyway).
-  // The enforceable gate is an OS read-only working dir (chmod 0555 — writes EACCES)
-  // PLUS a forceful no-write plan instruction so it plans instead of erroring on the
-  // read-only FS. Trust is required or plan mode is silently downgraded (exit 55).
-  const sysFile = path.join(outDir, "sys.md");
-  fs.writeFileSync(sysFile, shaqPrompt);
-  const planPrompt = `PLAN ONLY. You have NO write access (the filesystem is read-only; write tools WILL fail). Do NOT call write_file/edit/shell. Output ONLY an implementation plan as your response. ${PLAN_BRIEF}`;
-  fs.chmodSync(workDir, 0o555);
-  let out = "", exit = 1;
-  try {
-    const proc = Bun.spawn(["gemini", "-p", planPrompt, "-m", model, "-o", "json", "--approval-mode", "plan"],
-      { cwd: workDir, env: { ...process.env, GEMINI_SYSTEM_MD: sysFile, GEMINI_CLI_TRUST_WORKSPACE: "true" }, stdout: "pipe", stderr: "pipe" });
-    [out, exit] = await Promise.all([new Response(proc.stdout).text(), proc.exited.then((c) => c ?? 1)]);
-  } finally {
-    fs.chmodSync(workDir, 0o755); // restore so the gate can snapshot + rm
-  }
-  let plan = "";
-  const brace = out.search(/[{[]/);
-  if (brace !== -1) { try { plan = String((JSON.parse(out.slice(brace)) as any).response ?? "").trim(); } catch { /* leave */ } }
-  return { exit, plan };
+  if (provider !== "codex") throw new Error(`plan-gate: unsupported provider "${provider}" (codex only)`);
+  const outFile = path.join(outDir, "plan.txt");
+  const combined = `${shaqPrompt}\n\n---\n\n${PLAN_BRIEF}`;
+  const proc = Bun.spawn(["codex", "exec", "-", "-m", model, "--sandbox", "read-only", "--skip-git-repo-check", "--output-last-message", outFile],
+    { cwd: workDir, stdin: new TextEncoder().encode(combined), stdout: "pipe", stderr: "pipe" });
+  const [, exit] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  let plan = ""; try { plan = fs.readFileSync(outFile, "utf-8").trim(); } catch { /* none */ }
+  return { exit: exit ?? 1, plan };
 }
 
 type Trial = { trial: number; planBytes: number; writes: string[]; exit: number; ok: boolean; planHead: string };

@@ -8,17 +8,17 @@ import { readModelSpec, setModelBlock } from "../../../scripts/frontmatter.ts";
 test("legacy flat claude id → claude pin + inferred tier", () => {
   expect(parseModelSpec("claude-opus-4-8")).toEqual({ tier: "deep", pin: { claude: "claude-opus-4-8" } });
   expect(parseModelSpec("claude-sonnet-4-6")).toEqual({ tier: "mid", pin: { claude: "claude-sonnet-4-6" } });
-  expect(parseModelSpec("claude-haiku-4-5")).toEqual({ tier: "fast", pin: { claude: "claude-haiku-4-5" } });
+  expect(parseModelSpec("claude-haiku-4-5")).toEqual({ tier: "mid", pin: { claude: "claude-haiku-4-5" } });
 });
 
 test("bare tier word → tier, no pins", () => {
   expect(parseModelSpec("deep")).toEqual({ tier: "deep", pin: {} });
-  expect(parseModelSpec("fast")).toEqual({ tier: "fast", pin: {} });
+  expect(parseModelSpec("mid")).toEqual({ tier: "mid", pin: {} });
 });
 
 test("nested object → normalized spec (only known providers kept)", () => {
-  const spec = parseModelSpec({ tier: "fast", pin: { claude: "x", ollama: "y", bogus: "z" } });
-  expect(spec).toEqual({ tier: "fast", pin: { claude: "x", ollama: "y" } });
+  const spec = parseModelSpec({ tier: "mid", pin: { claude: "x", ollama: "y", bogus: "z" } });
+  expect(spec).toEqual({ tier: "mid", pin: { claude: "x", ollama: "y" } });
 });
 
 test("missing/garbage → deep, no pins", () => {
@@ -30,19 +30,20 @@ test("resolveModel: pin wins, else tier default per provider", () => {
   const spec = parseModelSpec({ tier: "deep", pin: { ollama: "qwen-custom" } });
   expect(resolveModel(spec, "ollama")).toBe("qwen-custom");           // pin
   expect(resolveModel(spec, "claude")).toBe(TIER_DEFAULTS.claude.deep); // tier default
-  expect(resolveModel(spec, "gemini")).toBe(TIER_DEFAULTS.gemini.deep); // tier default
+  expect(resolveModel(spec, "codex")).toBe(TIER_DEFAULTS.codex.deep);   // tier default
 });
 
 test("every provider × tier has a non-empty default", () => {
-  for (const p of ["claude", "ollama", "gemini", "codex"] as const)
-    for (const t of ["deep", "mid", "fast"] as const)
+  for (const p of ["claude", "ollama", "codex"] as const)
+    for (const t of ["deep", "mid"] as const)
       expect(TIER_DEFAULTS[p][t].length).toBeGreaterThan(0);
 });
 
-test("inferTier (3 tiers): opus=deep, sonnet=mid, haiku=fast", () => {
+test("inferTier (2 tiers): opus=deep, everything else=mid", () => {
   expect(inferTier("claude-opus-4-8")).toBe("deep");
+  expect(inferTier("claude-opus-5")).toBe("deep");
   expect(inferTier("claude-sonnet-4-6")).toBe("mid");
-  expect(inferTier("claude-haiku-4-5")).toBe("fast");
+  expect(inferTier("claude-haiku-4-5")).toBe("mid");
   expect(inferTier("something-unknown")).toBe("mid");
 });
 
@@ -57,7 +58,7 @@ test("renderModelSpecYaml round-trips through parse", () => {
 });
 
 test("renderModelSpecYaml omits pin block when no pins", () => {
-  expect(renderModelSpecYaml({ tier: "fast", pin: {} })).toBe("model:\n  tier: fast");
+  expect(renderModelSpecYaml({ tier: "mid", pin: {} })).toBe("model:\n  tier: mid");
 });
 
 test("model.provider (interactive default) parses + round-trips, validated against known providers", () => {
@@ -66,9 +67,9 @@ test("model.provider (interactive default) parses + round-trips, validated again
   // unknown provider is dropped (not asserted as routing)
   expect(parseModelSpec({ tier: "mid", provider: "bogus", pin: {} }).provider).toBeUndefined();
   // round-trips through render → parse
-  const spec = { tier: "deep" as const, provider: "gemini" as const, pin: {} };
+  const spec = { tier: "deep" as const, provider: "codex" as const, pin: {} };
   const yaml = renderModelSpecYaml(spec);
-  expect(yaml).toContain("provider: gemini");
+  expect(yaml).toContain("provider: codex");
   expect(parseModelSpec((Bun.YAML.parse(yaml) as any).model)).toEqual(spec);
 });
 
@@ -118,8 +119,8 @@ test("setModelBlock replaces a flat model line with a nested block", () => {
 
 test("setModelBlock inserts when no model line exists", () => {
   const noModel = `---\nname: x\ndescription: y\n---\nBody.\n`;
-  const out = setModelBlock(noModel, "model:\n  tier: fast");
-  expect(readModelSpec(out).tier).toBe("fast");
+  const out = setModelBlock(noModel, "model:\n  tier: mid");
+  expect(readModelSpec(out).tier).toBe("mid");
   expect(out).toContain("name: x");
 });
 

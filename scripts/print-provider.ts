@@ -2,7 +2,7 @@
 /**
  * print-provider.ts — print the provider an agent resolves to (the routing
  * authority Coach K consults before each spawn in hybrid /team). Prints one of:
- * claude | ollama | gemini | codex. Reads the agent's `model.provider` spec via
+ * claude | ollama | codex. Reads the agent's `model.provider` spec via
  * the SAME resolveEffectiveModel the eval path uses (no parallel routing table).
  *
  *   bun scripts/print-provider.ts <agent>   →  claude   (run native)

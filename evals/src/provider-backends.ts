@@ -7,7 +7,6 @@
  * interface directly (no opencode):
  *
  *   ollama/<m>  → POST :11434/api/chat  (native structured output: format=<schema>)
- *   gemini/<m>  → gemini -p … -o json   (CLI; soft schema → instruction + Zod downstream)
  *   codex/<m>   → codex exec … --output-schema --output-last-message  (native schema)
  *
  * Each returns a RawOutput record identical in shape to the claude path, so the
@@ -25,7 +24,7 @@ const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), 
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
 const OLLAMA_URL = process.env.OLLAMA_HOST?.trim() || "http://localhost:11434";
 
-export const KNOWN_PROVIDERS = ["claude", "ollama", "gemini", "codex"] as const;
+export const KNOWN_PROVIDERS = ["claude", "ollama", "codex"] as const;
 export type Provider = (typeof KNOWN_PROVIDERS)[number];
 
 /**
@@ -49,7 +48,7 @@ export function agentSystemPrompt(agent: string): string {
 }
 
 /**
- * Single-shot eval append for ollama/gemini. Agent prompts (e.g. shaq) MANDATE
+ * Single-shot eval append for ollama/codex. Agent prompts (e.g. shaq) MANDATE
  * EnterPlanMode + tool use + approval before writing code; with no tools and no
  * approval loop, the model obeys that, "can't enter plan mode", and escalates
  * instead of delivering. This neutralizes those directives (the claude path does
@@ -161,7 +160,6 @@ export async function runProviderBackend(
 ): Promise<RawOutput> {
   switch (provider) {
     case "ollama": return runOllama(agent, scenarioId, prompt, modelId, timeoutMs);
-    case "gemini": return runGemini(agent, scenarioId, prompt, modelId, timeoutMs, opts);
     case "codex": return runCodex(agent, scenarioId, prompt, modelId, timeoutMs, opts);
     default: throw new Error(`runProviderBackend called for claude — handle in agent-runner.ts`);
   }
@@ -206,64 +204,6 @@ export async function runOllama(agent: string, scenarioId: string, prompt: strin
     const durationMs = Date.now() - start;
     return record(agent, scenarioId, "", { durationMs, error,
       trace: buildTrace({ provider: "ollama", model: modelId, userPrompt: prompt, responseText: "", inputTokens: 0, outputTokens: 0, durationMs, error }) });
-  }
-}
-
-// ── Gemini: CLI headless (soft schema → instruction; Zod re-validates downstream) ──
-export async function runGemini(agent: string, scenarioId: string, prompt: string, modelId: string, timeoutMs: number, opts?: BackendOpts): Promise<RawOutput> {
-  const start = Date.now();
-  const schema = jsonSchemaFor(agent);
-  const impl = opts?.sandbox === "workspace-write";   // implement phase: gemini writes files
-  const readOnly = opts?.sandbox === "read-only" && !!opts?.workDir; // plan phase: OS read-only cwd
-  // Implement turns must use tools to write; analysis/plan turns are single-shot.
-  let system = impl ? agentSystemPrompt(agent) : `${agentSystemPrompt(agent)}\n\n${SINGLE_SHOT_APPEND}`;
-  if (schema && !impl) system += `\n\nIMPORTANT: Do not narrate, summarize, or use tools. Your FINAL response must be ONLY a single JSON object that conforms to this JSON Schema — no prose, no markdown fences, nothing before or after the JSON:\n${JSON.stringify(schema)}`;
-  // `--approval-mode plan` is NOT write-incapable headless; the plan gate is an OS read-only
-  // cwd + a no-write instruction. Implement uses a writable cwd + auto_edit.
-  const userPrompt = readOnly
-    ? `PLAN ONLY. You have NO write access (filesystem is read-only; write tools WILL fail). Do NOT call write_file/edit/shell. Output ONLY the plan as your response.\n\n${prompt}`
-    : prompt;
-  const approvalMode = impl ? "auto_edit" : "plan";
-  const cwd = opts?.workDir ?? process.cwd();
-  const sysFile = path.join(os.tmpdir(), `dt-gemini-${scenarioId.replace(/[^a-z0-9]/gi, "_")}-${start}.system.md`);
-  let chmodded = false;
-  try {
-    if (opts?.workDir) fs.mkdirSync(opts.workDir, { recursive: true });
-    fs.writeFileSync(sysFile, system);
-    if (readOnly) { fs.chmodSync(opts!.workDir!, 0o555); chmodded = true; } // hard write gate (EACCES)
-    const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), GEMINI_SYSTEM_MD: sysFile };
-    if (opts?.workDir) childEnv.GEMINI_CLI_TRUST_WORKSPACE = "true"; // else plan mode is silently downgraded (exit 55)
-    const proc = Bun.spawn(["gemini", "-p", userPrompt, "-m", modelId, "-o", "json", "--approval-mode", approvalMode], {
-      cwd, env: childEnv, stdout: "pipe", stderr: "pipe",
-    });
-    const t = setTimeout(() => { try { proc.kill(); } catch { /* dead */ } }, timeoutMs);
-    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    clearTimeout(t);
-    if (chmodded) { try { fs.chmodSync(opts!.workDir!, 0o755); } catch { /* ignore */ } chmodded = false; }
-    // Parse the ENVELOPE by first brace only — do NOT run fence stripping here: the
-    // gemini envelope is clean JSON, but its `.response` value may itself contain a
-    // ```json fence, which fence-aware extraction would wrongly grab instead.
-    let env: Record<string, unknown> = {};
-    const brace = out.search(/[{[]/);
-    if (brace !== -1) { try { env = JSON.parse(out.slice(brace)); } catch { /* leave empty */ } }
-    const resp = typeof env.response === "string" ? env.response : "";
-    const content = schema ? extractJsonText(resp) : resp;
-    const tokens = (env.stats as any)?.models?.[modelId]?.tokens?.total ?? 0;
-    const outTok = typeof tokens === "number" ? tokens : 0;
-    const err = code !== 0 ? `gemini exit ${code}` : (resp ? undefined : "gemini: empty response");
-    const durationMs = Date.now() - start;
-    return record(agent, scenarioId, content, {
-      outputTokens: outTok, durationMs, error: err,
-      trace: buildTrace({ provider: "gemini", model: modelId, userPrompt: prompt, responseText: content, inputTokens: 0, outputTokens: outTok, durationMs, error: err }),
-    });
-  } catch (e) {
-    const error = `gemini: ${e instanceof Error ? e.message : String(e)}`;
-    const durationMs = Date.now() - start;
-    return record(agent, scenarioId, "", { durationMs, error,
-      trace: buildTrace({ provider: "gemini", model: modelId, userPrompt: prompt, responseText: "", inputTokens: 0, outputTokens: 0, durationMs, error }) });
-  } finally {
-    if (chmodded) { try { fs.chmodSync(opts!.workDir!, 0o755); } catch { /* ignore */ } }
-    try { fs.rmSync(sysFile, { force: true }); } catch { /* ignore */ }
   }
 }
 

@@ -25,11 +25,10 @@ export type FlashMessage = {
 const PROVIDER_LABELS: Record<Provider, string> = {
   claude: "Claude (Max — claude -p)",
   ollama: "Ollama (local)",
-  gemini: "Gemini (gemini CLI)",
   codex: "Codex (ChatGPT — codex exec)",
 };
-const PROVIDER_ORDER: Provider[] = ["claude", "ollama", "gemini", "codex"];
-const SHORT_LABEL: Record<Provider, string> = { claude: "Claude", ollama: "Ollama", gemini: "Gemini", codex: "Codex" };
+const PROVIDER_ORDER: Provider[] = ["claude", "ollama", "codex"];
+const SHORT_LABEL: Record<Provider, string> = { claude: "Claude", ollama: "Ollama", codex: "Codex" };
 
 /** Tier selector for one agent. */
 function tierSelect(agent: string, current: Tier): string {
@@ -83,7 +82,7 @@ function renderModelsSource(modelsResult: ModelsResult): string {
   const claudeLine = modelsResult.source === "api" ? "Claude: live from Anthropic API" : `Claude: static fallback (${esc(modelsResult.error ?? "no DREAMTEAM_MODELS_API_KEY")})`;
   const notes = modelsResult.providerNotes.length ? `<div style="margin-top:4px">⚠ ${modelsResult.providerNotes.map(esc).join(" · ")}</div>` : "";
   const cls = modelsResult.source === "api" ? "source-ok" : "source-warn";
-  return `<div class="source-banner ${cls}"><strong>${modelsResult.models.length} models</strong> across providers (${esc(byProvider)}) — fetched ${ageLabel}. <div style="margin-top:4px">${claudeLine}. Ollama: live from <code>:11434</code>. Gemini &amp; Codex: curated.</div>${notes}</div>`;
+  return `<div class="source-banner ${cls}"><strong>${modelsResult.models.length} models</strong> across providers (${esc(byProvider)}) — fetched ${ageLabel}. <div style="margin-top:4px">${claudeLine}. Ollama: live from <code>:11434</code>. Codex: curated.</div>${notes}</div>`;
 }
 
 export function AdminModelsPage(rows: AgentModelRow[], modelsResult: ModelsResult, flash?: FlashMessage): string {

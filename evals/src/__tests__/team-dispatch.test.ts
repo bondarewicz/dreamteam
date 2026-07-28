@@ -4,9 +4,9 @@ import {
   ANALYSIS_ROLES, IMPL_ROLES, IMPL_PROVIDERS, INTERACTIVE_SINGLE_SHOT_APPEND, runDelegatedTurn,
 } from "../team-dispatch.ts";
 
-test("IMPL_PROVIDERS: codex + gemini + ollama all enabled", () => {
+test("IMPL_PROVIDERS: codex + ollama enabled", () => {
   expect(IMPL_PROVIDERS.has("codex")).toBe(true);
-  expect(IMPL_PROVIDERS.has("gemini")).toBe(true);
+  expect(IMPL_PROVIDERS.has("gemini")).toBe(false);
   expect(IMPL_PROVIDERS.has("ollama")).toBe(true);
   expect(IMPL_PROVIDERS.has("claude")).toBe(false);
 });
@@ -66,11 +66,11 @@ test("validateContract: nested confidence.level form also capped", () => {
 test("scrubMeteredEnv strips metered keys + base_url, reports them", () => {
   const saved = { ...process.env };
   process.env.OPENAI_API_KEY = "sk-x";
-  process.env.GEMINI_API_KEY = "g-x";
+  process.env.CODEX_API_KEY = "c-x";
   process.env.ANTHROPIC_BASE_URL = "http://proxy:4000";
   const removed = scrubMeteredEnv();
   expect(removed).toContain("OPENAI_API_KEY");
-  expect(removed).toContain("GEMINI_API_KEY");
+  expect(removed).toContain("CODEX_API_KEY");
   expect(removed).toContain("ANTHROPIC_BASE_URL");
   expect(process.env.OPENAI_API_KEY).toBeUndefined();
   expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();

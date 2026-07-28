@@ -35,5 +35,5 @@ Defenses in the repo:
 
 ## What's out of scope
 
-- The behavior of third-party model providers (Claude/Codex/Gemini/Ollama) themselves.
+- The behavior of third-party model providers (Claude/Codex/Ollama) themselves.
 - MCP servers you connect — their security is governed by those servers.
